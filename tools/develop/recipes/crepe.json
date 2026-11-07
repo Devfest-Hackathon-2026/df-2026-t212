@@ -1,0 +1,120 @@
+{
+  "image": "samples/crepe.jpg",
+  "why": "Subject is the two crepes. Keep the strawberries and the golden crepe. Strawberry is H~27 at high chroma; crepe is H 52-70; skin sits between them (H 35-42, lighter). Keep each band narrow so skin falls in the gap, gate strawberry by chroma and lightness, and limit the area to the two cones.",
+  "colors": [
+    {
+      "at": [
+        0.26,
+        0.55
+      ],
+      "width": 8,
+      "softness": 10,
+      "chroma_min": 0.12,
+      "lightness": [
+        0.25,
+        0.76
+      ]
+    },
+    {
+      "at": [
+        0.35,
+        0.73
+      ],
+      "width": 8,
+      "softness": 10,
+      "chroma_min": 0.07
+    }
+  ],
+  "mono": {
+    "contrast": 0.1
+  },
+  "area": {
+    "polygons": [
+      [
+        [
+          0.21,
+          0.4
+        ],
+        [
+          0.35,
+          0.385
+        ],
+        [
+          0.45,
+          0.43
+        ],
+        [
+          0.545,
+          0.5
+        ],
+        [
+          0.545,
+          0.57
+        ],
+        [
+          0.46,
+          0.66
+        ],
+        [
+          0.38,
+          0.74
+        ],
+        [
+          0.32,
+          0.775
+        ],
+        [
+          0.25,
+          0.76
+        ],
+        [
+          0.215,
+          0.66
+        ],
+        [
+          0.2,
+          0.5
+        ]
+      ],
+      [
+        [
+          0.52,
+          0.29
+        ],
+        [
+          0.6,
+          0.245
+        ],
+        [
+          0.68,
+          0.26
+        ],
+        [
+          0.72,
+          0.33
+        ],
+        [
+          0.715,
+          0.47
+        ],
+        [
+          0.66,
+          0.53
+        ],
+        [
+          0.56,
+          0.585
+        ],
+        [
+          0.5,
+          0.53
+        ],
+        [
+          0.48,
+          0.4
+        ]
+      ]
+    ],
+    "edge": 0.015
+  }
+}

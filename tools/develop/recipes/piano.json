@@ -1,0 +1,65 @@
+{
+  "image": "samples/piano.jpg",
+  "why": "Subject is the painted piano. Its painting is blue with pink and peach flowers, so keep both. Blues run ultramarine to lavender (H 266-300); the barrier rope is a cyan-leaning blue (H~247), so center the blue band past the rope. Pinks run H 4-42 at low chroma; the wood floor sits just past them (H 46-49), so the pink band fades out by H 46. Area is limited to the piano and its chair to drop the faintly blue sky and city. Round 2: the wood floor under the piano (H 44-48) still showed orange, so narrow the pink band to end by H 43; the peach flowers (H 36-42) fade a little instead. Round 3: narrowing lost the cool pinks (H~4) on the upper panels, so shift the band to H 0-36 with a short fade on both sides. Round 4: shaded floor between the legs (L 0.39-0.45) still picked up pink; the painted pinks are lighter (L 0.5+), so gate pink by lightness.",
+  "colors": [
+    {
+      "hex": "#3e477a",
+      "width": 16,
+      "softness": 12
+    },
+    {
+      "hex": "#a8807f",
+      "width": 18,
+      "softness": 6,
+      "chroma_min": 0.025,
+      "lightness": [
+        0.52,
+        0.95
+      ]
+    }
+  ],
+  "mono": {
+    "contrast": 0.1
+  },
+  "area": {
+    "polygon": [
+      [
+        0.22,
+        0.43
+      ],
+      [
+        0.85,
+        0.43
+      ],
+      [
+        0.85,
+        0.93
+      ],
+      [
+        0.68,
+        0.965
+      ],
+      [
+        0.45,
+        0.965
+      ],
+      [
+        0.31,
+        1.0
+      ],
+      [
+        0.15,
+        1.0
+      ],
+      [
+        0.12,
+        0.62
+      ],
+      [
+        0.2,
+        0.6
+      ]
+    ],
+    "edge": 0.025
+  }
+}

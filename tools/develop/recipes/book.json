@@ -1,0 +1,38 @@
+{
+  "image": "samples/book.jpg",
+  "why": "Subject is the book. Its red (H~26) sits close to the wooden chair and sideboard (H~45), so keep a narrow band around the cover. Round 2: the shaded sideboard drifts into the band (H~30-35) and shows as orange blotches, so limit the area to the book with a soft edge. Round 3: the first area still caught the sideboard above the cover's top-left corner; fit it to the cover.",
+  "colors": [
+    {
+      "at": [
+        0.55,
+        0.55
+      ]
+    }
+  ],
+  "width": 8,
+  "softness": 10,
+  "mono": {
+    "contrast": 0.1
+  },
+  "area": {
+    "polygon": [
+      [
+        0.428,
+        0.296
+      ],
+      [
+        0.758,
+        0.282
+      ],
+      [
+        0.758,
+        0.745
+      ],
+      [
+        0.42,
+        0.692
+      ]
+    ],
+    "edge": 0.012
+  }
+}
