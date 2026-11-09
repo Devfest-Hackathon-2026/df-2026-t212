@@ -761,6 +761,13 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       // The options drop from the button that calls them,
                       // over the corner of the view.
                       Positioned(top: top - 6, right: 8, child: _optionsMenu()),
+                      // The colors in view drop from the + they would fill.
+                      Positioned(
+                        top: top - 4,
+                        left: 0,
+                        right: 0,
+                        child: Center(child: _inView()),
+                      ),
                       // The hand is at the shutter: Width and Edge sit there,
                       // in the room between the view and the shutter, or
                       // over the view's edge where the screen leaves none.
@@ -993,44 +1000,21 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// it opens the colors in view.
   Widget _dock() {
     final c = _cur;
-    final show = _feed != null && !_panel;
+    final show = _feed != null;
     final side = _sideways;
-    void openPanel() {
-      Haptics.light();
-      setState(() {
-        _panel = true;
-        _options = false;
-      });
-    }
-
     final Widget body;
     if (c == null) {
-      final palette = GestureDetector(
-        onTap: openPanel,
-        child: const Glass(
-          dark: true,
-          radius: 20,
-          child: SizedBox(width: 40, height: 40, child: Icon(Icons.palette_outlined, size: 19, color: _ink)),
-        ),
-      );
-      // Until a color is kept, upright, the way to keep one beside it.
+      // Until a color is kept, upright, how to keep one.
       body = !_chosen && !side
-          ? Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                palette,
-                const SizedBox(width: 12),
-                Text('Hold the view on a color to keep it', style: Txt.small.copyWith(color: _dim)),
-              ],
-            )
-          : palette;
+          ? Text('Hold the view on a color to keep it', style: Txt.small.copyWith(color: _dim))
+          : const SizedBox.shrink();
     } else {
       final parts = [
-        _reachCell('width', 'Width', c.width, 16, (v) => c.width = v, openPanel, side),
+        _reachCell('width', 'Width', c.width, 16, (v) => c.width = v, side),
         side
             ? Container(height: 1, width: 28, color: const Color(0x33FFFFFF))
             : Container(width: 1, height: 24, color: const Color(0x33FFFFFF)),
-        _reachCell('edge', 'Edge', c.softness, 20, (v) => c.softness = v, openPanel, side),
+        _reachCell('edge', 'Edge', c.softness, 20, (v) => c.softness = v, side),
       ];
       body = Glass(
         dark: true,
@@ -1079,15 +1063,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// exactly with the finger, then springs onto the number it lands on.
   /// Upright the scale runs across; sideways, along the room by the
   /// shutter, up and down for the person.
-  Widget _reachCell(
-    String key,
-    String label,
-    double value,
-    double def,
-    void Function(double) set,
-    VoidCallback tap,
-    bool vertical,
-  ) {
+  Widget _reachCell(String key, String label, double value, double def, void Function(double) set, bool vertical) {
     final on = _dial == key;
     final number = Text('${value.round()}', textAlign: TextAlign.right, style: _figures);
     final name = Text(vertical ? label : '$label ', style: Txt.small.copyWith(color: _ink, fontSize: 12.5));
@@ -1107,7 +1083,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     void slide(double by) => _slideReach(-by / _CellTicks.step, value, def, set);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: tap,
       onLongPress: () => _resetReach(set, def),
       onHorizontalDragStart: vertical ? null : (_) => _openDial(key, value),
       onHorizontalDragUpdate: vertical ? null : (d) => slide(d.delta.dx),
@@ -1503,46 +1478,11 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       },
                     ),
                   ),
-                _onPersonsBottom(size, (width) => SizedBox(width: width, child: _reachPanel())),
               ],
             ),
           ),
         );
       },
-    );
-  }
-
-  /// Lays [child] along the edge that is at the bottom for the person, the
-  /// way they hold the phone, turned to read upright. [child] gets the
-  /// width of that edge.
-  Widget _onPersonsBottom(Size view, Widget Function(double width) child) {
-    final q = _quarter;
-    // Sideways, toward the end by the shutter, where the hand is.
-    final align = switch (q) {
-      -1 => Alignment.bottomRight,
-      1 => Alignment.bottomLeft,
-      2 => Alignment.topCenter,
-      _ => Alignment.bottomCenter,
-    };
-    final width = q.isOdd ? math.min(view.height, 340.0) : view.width;
-    return Positioned.fill(
-      child: AnimatedSwitcher(
-        // As the system camera: the old goes at once, the new comes in on
-        // its edge.
-        duration: const Duration(milliseconds: 280),
-        reverseDuration: const Duration(milliseconds: 140),
-        switchInCurve: Motion.settle,
-        switchOutCurve: Curves.easeInCubic,
-        transitionBuilder: (c, a) => FadeTransition(
-          opacity: a,
-          child: ScaleTransition(scale: Tween(begin: 0.94, end: 1.0).animate(a), child: c),
-        ),
-        child: Align(
-          key: ValueKey(q),
-          alignment: align,
-          child: RotatedBox(quarterTurns: q == -1 ? 3 : q, child: child(width)),
-        ),
-      ),
     );
   }
 
@@ -1639,41 +1579,36 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// Laid over the lower view: how far the color reaches, and the colors in
-  /// view to keep instead.
-  Widget _reachPanel() {
-    final c = _cur;
-    final open = _panel;
+  /// While the empty slot at the top is the one being filled, the colors in
+  /// view hang under it, to tap instead of holding the view.
+  Widget _inView() {
+    final open = _feed != null && _addSlot >= 0 && _active == _addSlot && !_options;
     return IgnorePointer(
       ignoring: !open,
-      child: AnimatedSlide(
-        offset: open ? Offset.zero : const Offset(0, 0.15),
-        duration: const Duration(milliseconds: 320),
-        curve: Motion.settle,
-        child: AnimatedOpacity(
-          curve: Motion.settle,
-          opacity: open ? 1 : 0,
-          duration: const Duration(milliseconds: 220),
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Glass(
-              dark: true,
-              radius: 20,
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (c != null) ...[
-                    _darkSlider('Width', c.width, 16, (v) => c.width = v),
-                    _darkSlider('Edge', c.softness, 20, (v) => c.softness = v),
-                    const SizedBox(height: 6),
-                  ],
-                  Text('In view', style: Txt.mono.copyWith(color: _dim)),
-                  const SizedBox(height: 8),
-                  SizedBox(height: 44, child: _swatchRow(46, 32)),
-                ],
-              ),
+      child: AnimatedOpacity(
+        opacity: open ? 1 : 0,
+        duration: Duration(milliseconds: open ? 220 : 140),
+        curve: open ? Motion.settle : Curves.easeInCubic,
+        child: AnimatedScale(
+          scale: open ? 1 : 0.9,
+          alignment: Alignment.topCenter,
+          duration: Duration(milliseconds: open ? 300 : 160),
+          curve: open ? Motion.settle : Curves.easeInCubic,
+          child: Glass(
+            dark: true,
+            radius: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: SizedBox(
+              height: 46,
+              child: _candidates.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Align(
+                        widthFactor: 1,
+                        child: Text('No strong colors', style: Txt.small.copyWith(color: _dim)),
+                      ),
+                    )
+                  : _swatchRow(44, 30),
             ),
           ),
         ),
@@ -1737,38 +1672,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       ),
                     ),
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _darkSlider(String label, double value, double def, void Function(double) set) {
-    return SizedBox(
-      height: 36,
-      child: Row(
-        children: [
-          SizedBox(
-            width: 52,
-            child: Text(label, style: Txt.small.copyWith(color: _ink)),
-          ),
-          Expanded(
-            child: _DarkSlider(
-              value: value / 60,
-              def: def / 60,
-              onChanged: (t) {
-                setState(() => set(t * 60));
-                _look();
-              },
-            ),
-          ),
-          SizedBox(
-            width: 30,
-            child: Text(
-              '${value.round()}',
-              textAlign: TextAlign.right,
-              style: Txt.mono.copyWith(color: _dim),
-            ),
-          ),
         ],
       ),
     );
@@ -2516,60 +2419,6 @@ class _BiasPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_BiasPainter o) => o.t != t;
-}
-
-/// A slider for the dark panel: a hairline track and a soft pill thumb.
-class _DarkSlider extends StatelessWidget {
-  const _DarkSlider({required this.value, required this.def, required this.onChanged});
-  final double value, def;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, box) {
-        final w = box.maxWidth;
-        void set(double dx) {
-          final t = (dx / w).clamp(0.0, 1.0);
-          if ((value - def).sign != (t - def).sign) Haptics.snap();
-          onChanged(t);
-        }
-
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onHorizontalDragUpdate: (d) => set(d.localPosition.dx),
-          onTapUp: (d) => set(d.localPosition.dx),
-          child: CustomPaint(size: Size(w, 36), painter: _DarkSliderPainter(value.clamp(0, 1), def)),
-        );
-      },
-    );
-  }
-}
-
-class _DarkSliderPainter extends CustomPainter {
-  _DarkSliderPainter(this.t, this.def);
-  final double t, def;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final y = size.height / 2;
-    const r = 9.0;
-    final x = r + (size.width - 2 * r) * t;
-    final track = Paint()
-      ..color = const Color(0x33FFFFFF)
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(r, y), Offset(size.width - r, y), track);
-    canvas.drawLine(Offset(r, y), Offset(x, y), track..color = const Color(0xCCF2F2F0));
-    canvas.drawCircle(Offset(r + (size.width - 2 * r) * def, y), 1.6, Paint()..color = const Color(0x88FFFFFF));
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(x, y), width: 26, height: 20), const Radius.circular(10)),
-      Paint()..color = const Color(0xFFE6E6E4),
-    );
-  }
-
-  @override
-  bool shouldRepaint(_DarkSliderPainter o) => o.t != t;
 }
 
 /// The empty dot a new color goes into.
