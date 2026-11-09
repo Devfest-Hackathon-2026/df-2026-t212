@@ -302,7 +302,9 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     if lens.isSmoothAutoFocusSupported { lens.isSmoothAutoFocusEnabled = false }
     lens.isSubjectAreaChangeMonitoringEnabled = true
     lens.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
-    if lens.isVirtualDevice {
+    // Only where the phone can change lenses by itself: the front TrueDepth
+    // camera is virtual too, but refuses this and throws.
+    if lens.isVirtualDevice, lens.activePrimaryConstituentDeviceSwitchingBehavior != .unsupported {
       // Let the phone change lenses as the system camera does, close up too.
       lens.setPrimaryConstituentDeviceSwitchingBehavior(.auto, restrictedSwitchingBehaviorConditions: [])
     }
