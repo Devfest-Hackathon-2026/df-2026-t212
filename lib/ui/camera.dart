@@ -257,8 +257,8 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         // Upright is 90; on its side, 0 or 180. The controls turn back.
         final t = switch ((args as num).round()) {
           // The top to the left: the controls turn back to the right.
-          0 => -0.25,
-          180 => 0.25,
+          0 => 0.25,
+          180 => -0.25,
           270 => 0.5,
           _ => 0.0,
         };
@@ -272,8 +272,14 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     final f = _feed;
     if (f == null || !f.live) return;
     final v = z.clamp(f.minZoom, f.maxZoom);
-    // A tick on passing a lens, as the system camera's wheel.
-    if (f.stops.any((s) => (s - _zoom) * (s - v) < 0 || (v == s && _zoom != s))) Haptics.tick();
+    // On the wheel every mark is felt, a lens firmer; off it, only the
+    // lenses.
+    int mark(double z) => z < 3 ? (z * 10 + 1e-6).floor() : 30 + ((z - 3) * 2 + 1e-6).floor();
+    if (f.stops.any((s) => (s - _zoom) * (s - v) < 0 || (v == s && _zoom != s))) {
+      _dial == 'zoom' ? Haptics.snap() : Haptics.tick();
+    } else if (_dial == 'zoom' && mark(v) != mark(_zoom)) {
+      Haptics.tick();
+    }
     setState(() => _zoom = v);
     LiveCamera.zoom(v, ramp: ramp);
   }
@@ -1801,9 +1807,9 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
 
   void _hideSoon() {
     _close?.cancel();
-    _close = Timer(const Duration(milliseconds: 1500), () {
+    _close = Timer(const Duration(milliseconds: 650), () {
       if (!mounted) return;
-      _open.animateBack(0, duration: const Duration(milliseconds: 260), curve: Motion.settle);
+      _open.animateBack(0, duration: const Duration(milliseconds: 220), curve: Motion.settle);
       widget.onOpen(false);
     });
   }
@@ -1851,9 +1857,41 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
               animation: _open,
               builder: (context, _) {
                 final open = _open.value > 0.02;
+                final t = _open.value;
                 return Stack(
                   children: [
+                    // Frosted under the numbers, so they read over any
+                    // scene: the buttons' capsule, then the wheel.
+                    if (t < 1)
+                      Positioned.fill(
+                        key: const ValueKey('capsule'),
+                        child: IgnorePointer(
+                          child: ClipPath(
+                            clipper: _PathClip(
+                              Path()..addRRect(RRect.fromRectAndRadius(g.capsule, const Radius.circular(22))),
+                            ),
+                            child: BackdropFilter(
+                              filter: ui.ImageFilter.blur(sigmaX: 14 * (1 - t), sigmaY: 14 * (1 - t)),
+                              child: const SizedBox.expand(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (t > 0)
+                      Positioned.fill(
+                        key: const ValueKey('disc'),
+                        child: IgnorePointer(
+                          child: ClipPath(
+                            clipper: _PathClip(g.disc(t)),
+                            child: BackdropFilter(
+                              filter: ui.ImageFilter.blur(sigmaX: 18 * t, sigmaY: 18 * t),
+                              child: const SizedBox.expand(),
+                            ),
+                          ),
+                        ),
+                      ),
                     Positioned.fill(
+                      key: const ValueKey('paint'),
                       child: IgnorePointer(
                         child: TweenAnimationBuilder<double>(
                           tween: Tween(end: widget.turns),
@@ -1879,6 +1917,9 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
                       ),
                     ),
                     Positioned.fromRect(
+                      // Keyed, so the touch that opens the wheel keeps
+                      // turning it as the layers above come and go.
+                      key: const ValueKey('touch'),
                       rect: open ? Offset.zero & size : buttons,
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
@@ -1967,6 +2008,16 @@ class _WheelGeometry {
 
   Rect get capsule => Rect.fromCenter(center: button((n - 1) / 2), width: n * step + 6, height: 44);
 
+  /// How big the wheel has grown as it opens, about the buttons.
+  static double grow(double t) => 0.7 + 0.3 * t;
+
+  /// The disc's outline, [t] of the way open.
+  Path disc(double t) {
+    final pivot = button((n - 1) / 2);
+    final c = pivot + (center - pivot) * grow(t);
+    return Path()..addOval(Rect.fromCircle(center: c, radius: r * grow(t)));
+  }
+
   /// The numbers on the wheel: the lenses and the furthest.
   List<double> labels(List<double> stops, double max) => [
     ...stops,
@@ -2027,7 +2078,7 @@ class _ZoomWheelPainter extends CustomPainter {
       final a = 1 - t;
       canvas.drawRRect(
         RRect.fromRectAndRadius(g.capsule, const Radius.circular(22)),
-        Paint()..color = Color.fromRGBO(20, 20, 20, 0.5 * a),
+        Paint()..color = Color.fromRGBO(20, 20, 20, 0.32 * a),
       );
       canvas.drawCircle(g.button(current), 18, Paint()..color = Color.fromRGBO(255, 255, 255, 0.16 * a));
     }
@@ -2040,22 +2091,24 @@ class _ZoomWheelPainter extends CustomPainter {
       canvas.translate(pivot.dx, pivot.dy);
       canvas.scale(grow);
       canvas.translate(-pivot.dx, -pivot.dy);
-      canvas.drawCircle(g.center, g.r, Paint()..color = Color.fromRGBO(14, 14, 14, 0.7 * t));
+      canvas.drawCircle(g.center, g.r, Paint()..color = Color.fromRGBO(14, 14, 14, 0.45 * t));
 
-      // Ticks along the rim, longer at the lenses; denser as they go
-      // out, and fading toward the sides.
+      // Ticks along the rim in three weights: the lenses long and bright,
+      // the halves (whole numbers past 3) middling, the rest short and
+      // faint, so the eye finds its place at once.
       final tick = Paint()..strokeCap = StrokeCap.round;
       for (var v = (min * 10).ceil() / 10; v <= max + 1e-6; v += v < 3 - 1e-6 ? 0.1 : 0.5) {
         final q = (v * 100).round() / 100;
         final a = g.angle(zoom, q);
         if (a.abs() > 1.45) continue;
         final lens = stops.any((s) => (s - q).abs() < 0.01) || (q - max).abs() < 0.01;
+        final mid = q < 3 ? ((q * 2) - (q * 2).roundToDouble()).abs() < 0.01 : (q - q.roundToDouble()).abs() < 0.01;
         final fade = (1 - math.pow(a.abs() / 1.45, 3)).clamp(0.0, 1.0);
-        final len = lens ? 10.0 : 6.0;
+        final (len, alpha, width) = lens ? (15.0, 1.0, 2.0) : (mid ? (10.0, 0.7, 1.4) : (5.0, 0.32, 1.0));
         tick
-          ..color = ink.withValues(alpha: (lens ? 0.9 : 0.4) * fade * t)
-          ..strokeWidth = lens ? 1.4 : 1;
-        canvas.drawLine(g.onRim(a, 4), g.onRim(a, 4 + len), tick);
+          ..color = ink.withValues(alpha: alpha * fade * t)
+          ..strokeWidth = width;
+        canvas.drawLine(g.onRim(a, 3), g.onRim(a, 3 + len), tick);
       }
       // The fixed mark.
       final mark = Path()
@@ -2109,6 +2162,17 @@ class _ZoomWheelPainter extends CustomPainter {
   @override
   bool shouldRepaint(_ZoomWheelPainter o) =>
       o.t != t || o.zoom != zoom || o.turns != turns || o.current != current || o.max != max;
+}
+
+class _PathClip extends CustomClipper<Path> {
+  _PathClip(this.path);
+  final Path path;
+
+  @override
+  Path getClip(Size size) => Path.combine(PathOperation.intersect, path, Path()..addRect(Offset.zero & size));
+
+  @override
+  bool shouldReclip(_PathClip old) => true;
 }
 
 /// Thirds, as the system camera's grid.

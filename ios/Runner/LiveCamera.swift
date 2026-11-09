@@ -580,7 +580,8 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       if abs(g.y) > abs(g.x) + 0.25 {
         next = g.y < 0 ? 90 : 270
       } else if abs(g.x) > abs(g.y) + 0.25 {
-        next = g.x > 0 ? 0 : 180
+        // Gravity toward the right edge: the top points right.
+        next = g.x > 0 ? 180 : 0
       } else {
         return
       }
