@@ -761,10 +761,9 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       // The options drop from the button that calls them,
                       // over the corner of the view.
                       Positioned(top: top - 6, right: 8, child: _optionsMenu()),
-                      // Held sideways, the hand is at the shutter: Width and
-                      // Edge come there, into the room between the view and
-                      // the shutter, or over the view's edge where the
-                      // screen leaves none.
+                      // The hand is at the shutter: Width and Edge sit there,
+                      // in the room between the view and the shutter, or
+                      // over the view's edge where the screen leaves none.
                       Positioned(
                         left: 0,
                         right: 0,
@@ -942,16 +941,16 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
+  /// Only what went wrong; the first-use hint sits with Width/Edge.
   Widget _hint() {
-    final show = _feed != null && !_chosen && !_sideways;
     return Center(
       key: const ValueKey('hint'),
       child: AnimatedOpacity(
         curve: Motion.settle,
-        opacity: show || _error != null ? 1 : 0,
+        opacity: _error != null ? 1 : 0,
         duration: const Duration(milliseconds: 300),
         child: Text(
-          _error ?? 'Hold the view on a color to keep it',
+          _error ?? '',
           textAlign: TextAlign.center,
           style: Txt.small.copyWith(color: _dim),
         ),
@@ -986,12 +985,16 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// Held sideways: Width and Edge by the shutter, where the thumb is,
-  /// laid upright along the room between the view and the shutter. Each is
-  /// slid along that room; the scale runs beside it as it slides.
+  /// Width and Edge by the shutter, where the thumb is, in the room
+  /// between the view and the shutter: side by side when the phone is
+  /// upright, one over the other when it is sideways, upright for the
+  /// person either way. Each half is a dial: slid, its own scale turns
+  /// inside it under the finger; held, it goes back to the default; tapped,
+  /// it opens the colors in view.
   Widget _dock() {
     final c = _cur;
-    final show = _sideways && _feed != null && !_panel;
+    final show = _feed != null && !_panel;
+    final side = _sideways;
     void openPanel() {
       Haptics.light();
       setState(() {
@@ -1000,67 +1003,42 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
       });
     }
 
-    const part = 54.0, rail = 15.0, glass = 54.0;
-    Widget body;
+    final Widget body;
     if (c == null) {
-      body = GestureDetector(
+      final palette = GestureDetector(
         onTap: openPanel,
         child: const Glass(
           dark: true,
-          radius: 22,
-          child: SizedBox(width: 44, height: 44, child: Icon(Icons.palette_outlined, size: 20, color: _ink)),
+          radius: 20,
+          child: SizedBox(width: 40, height: 40, child: Icon(Icons.palette_outlined, size: 19, color: _ink)),
         ),
       );
+      // Until a color is kept, upright, the way to keep one beside it.
+      body = !_chosen && !side
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                palette,
+                const SizedBox(width: 12),
+                Text('Hold the view on a color to keep it', style: Txt.small.copyWith(color: _dim)),
+              ],
+            )
+          : palette;
     } else {
-      final open = _dial == 'width' || _dial == 'edge';
-      if (open) _dialShown = _dial!;
-      final def = _dialShown == 'width' ? 16.0 : 20.0;
-      // The middle of the half being slid, down from the top.
-      final at = _dialShown == 'width' ? part / 2 : part * 1.5 + 1;
-      body = SizedBox(
-        width: glass + rail * 2,
-        height: part * 2 + 1,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Positioned(
-              left: 0,
-              right: 0,
-              top: -150,
-              bottom: -150,
-              child: IgnorePointer(
-                child: AnimatedOpacity(
-                  opacity: open ? 1 : 0,
-                  duration: Duration(milliseconds: open ? 160 : 120),
-                  curve: open ? Motion.settle : Curves.easeInCubic,
-                  child: AnimatedBuilder(
-                    animation: _dialPos,
-                    builder: (context, _) => CustomPaint(
-                      painter: _RailPainter(value: _dialPos.value, at: at + 150, inset: rail, def: def),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              left: rail,
-              right: rail,
-              top: 0,
-              bottom: 0,
-              child: Glass(
-                dark: true,
-                radius: 18,
-                child: Column(
-                  children: [
-                    Expanded(child: _dockPart('width', 'Width', c.width, 16, (v) => c.width = v, openPanel)),
-                    Container(height: 1, width: 26, color: const Color(0x33FFFFFF)),
-                    Expanded(child: _dockPart('edge', 'Edge', c.softness, 20, (v) => c.softness = v, openPanel)),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
+      final w = side ? 82.0 : 106.0;
+      final parts = [
+        _reachCell('width', 'Width', c.width, 16, (v) => c.width = v, openPanel, w),
+        side
+            ? Container(height: 1, width: 28, color: const Color(0x33FFFFFF))
+            : Container(width: 1, height: 24, color: const Color(0x33FFFFFF)),
+        _reachCell('edge', 'Edge', c.softness, 20, (v) => c.softness = v, openPanel, w),
+      ];
+      body = Glass(
+        dark: true,
+        radius: 18,
+        child: side
+            ? Column(mainAxisSize: MainAxisSize.min, children: parts)
+            : Row(mainAxisSize: MainAxisSize.min, children: parts),
       );
     }
     return IgnorePointer(
@@ -1072,18 +1050,23 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         child: Center(
           child: FittedBox(
             fit: BoxFit.scaleDown,
-            child: RotatedBox(
-              quarterTurns: _quarter == -1 ? 3 : 1,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 260),
-                reverseDuration: const Duration(milliseconds: 120),
-                switchInCurve: Motion.settle,
-                switchOutCurve: Curves.easeInCubic,
-                transitionBuilder: (child, a) => FadeTransition(
-                  opacity: a,
-                  child: ScaleTransition(scale: Tween(begin: 0.85, end: 1.0).animate(a), child: child),
-                ),
-                child: KeyedSubtree(key: ValueKey(c == null), child: body),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 280),
+              reverseDuration: const Duration(milliseconds: 120),
+              switchInCurve: Motion.settle,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, a) => FadeTransition(
+                opacity: a,
+                child: ScaleTransition(scale: Tween(begin: 0.9, end: 1.0).animate(a), child: child),
+              ),
+              child: RotatedBox(
+                key: ValueKey((c == null, _quarter, !_chosen)),
+                quarterTurns: switch (_quarter) {
+                  -1 => 3,
+                  1 => 1,
+                  _ => 0,
+                },
+                child: body,
               ),
             ),
           ),
@@ -1092,33 +1075,71 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// One half of the sideways Width/Edge: its name over its number, slid
-  /// up and down the way the person holds the phone.
-  Widget _dockPart(String key, String label, double value, double def, void Function(double) set, VoidCallback tap) {
+  /// One half of Width/Edge, [w] wide. Slid, its name and number rise and
+  /// a scale shows beneath them, moving exactly with the finger, then
+  /// springs onto the number it lands on.
+  Widget _reachCell(
+    String key,
+    String label,
+    double value,
+    double def,
+    void Function(double) set,
+    VoidCallback tap,
+    double w,
+  ) {
     final on = _dial == key;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: tap,
       onLongPress: () => _resetReach(set, def),
-      // Up brings larger values in, the scale moving with the finger.
-      onVerticalDragStart: (_) => _openDial(key, value),
-      onVerticalDragUpdate: (d) => _slideReach(-d.delta.dy / 6, value, def, set),
-      onVerticalDragEnd: (_) => _closeDial(),
-      onVerticalDragCancel: _closeDial,
+      onHorizontalDragStart: (_) => _openDial(key, value),
+      // The scale moves with the finger: left brings larger values in.
+      onHorizontalDragUpdate: (d) => _slideReach(-d.delta.dx / _CellTicks.step, value, def, set),
+      onHorizontalDragEnd: (_) => _closeDial(),
+      onHorizontalDragCancel: _closeDial,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
+        duration: const Duration(milliseconds: 220),
         curve: Motion.settle,
-        width: double.infinity,
+        width: w,
+        height: 50,
         decoration: BoxDecoration(
-          color: on ? const Color(0x24FFFFFF) : Colors.transparent,
+          color: on ? const Color(0x1FFFFFFF) : Colors.transparent,
           borderRadius: BorderRadius.circular(18),
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Stack(
           children: [
-            Text(label, style: Txt.small.copyWith(color: _dim, fontSize: 10.5)),
-            const SizedBox(height: 1),
-            Text('${value.round()}', style: _figures.copyWith(fontSize: 15)),
+            AnimatedAlign(
+              alignment: on ? const Alignment(0, -0.62) : Alignment.center,
+              duration: const Duration(milliseconds: 260),
+              curve: Motion.settle,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('$label ', style: Txt.small.copyWith(color: _ink, fontSize: 12.5)),
+                  SizedBox(
+                    width: 15,
+                    child: Text('${value.round()}', textAlign: TextAlign.right, style: _figures),
+                  ),
+                ],
+              ),
+            ),
+            Positioned(
+              left: 6,
+              right: 6,
+              bottom: 6,
+              height: 13,
+              child: AnimatedOpacity(
+                opacity: on ? 1 : 0,
+                duration: Duration(milliseconds: on ? 200 : 140),
+                curve: on ? Motion.settle : Curves.easeInCubic,
+                child: AnimatedBuilder(
+                  animation: _dialPos,
+                  builder: (context, _) => CustomPaint(
+                    painter: _CellTicks(value: _dialPos.value, def: def),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1477,24 +1498,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       },
                     ),
                   ),
-                _onPersonsBottom(size, (width) {
-                  final lift = _quarter == 0 && (_feed?.stops.length ?? 0) > 1 ? 60.0 : 14.0;
-                  // The scale floats over the pill; the pill never moves.
-                  return Stack(
-                    clipBehavior: Clip.none,
-                    alignment: Alignment.bottomCenter,
-                    children: [
-                      Padding(
-                        padding: EdgeInsets.only(bottom: lift),
-                        child: _reachPill(),
-                      ),
-                      Positioned(
-                        bottom: lift + 44,
-                        child: IgnorePointer(child: _reachDial()),
-                      ),
-                    ],
-                  );
-                }),
                 _onPersonsBottom(size, (width) => SizedBox(width: width, child: _reachPanel())),
               ],
             ),
@@ -1625,150 +1628,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
             radius: 12,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             child: Text('AE/AF Lock', style: Txt.mono.copyWith(color: _ink, fontSize: 11)),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// How far the chosen color reaches, at a glance. Each half is a dial:
-  /// slide it to change, hold it to go back to the default; a tap opens the
-  /// colors in view.
-  Widget _reachPill() {
-    final c = _cur;
-    final hidden = _feed == null || _panel || _dial == 'zoom' || _sideways;
-    void openPanel() {
-      Haptics.light();
-      setState(() {
-        _panel = true;
-        _options = false;
-      });
-    }
-
-    return IgnorePointer(
-      ignoring: hidden,
-      child: AnimatedOpacity(
-        curve: Motion.settle,
-        opacity: hidden ? 0 : 1,
-        duration: const Duration(milliseconds: 220),
-        child: Glass(
-          dark: true,
-          radius: 16,
-          child: c == null
-              ? GestureDetector(
-                  onTap: openPanel,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    child: Text('Colors in view', style: Txt.small.copyWith(color: _ink, fontSize: 12.5)),
-                  ),
-                )
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _pillPart('width', 'Width', c.width, 16, (v) => c.width = v, openPanel),
-                    Container(width: 1, height: 14, color: const Color(0x33FFFFFF)),
-                    _pillPart('edge', 'Edge', c.softness, 20, (v) => c.softness = v, openPanel),
-                  ],
-                ),
-        ),
-      ),
-    );
-  }
-
-  Widget _pillPart(String key, String label, double value, double def, void Function(double) set, VoidCallback tap) {
-    final on = _dial == key;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: tap,
-      onLongPress: () => _resetReach(set, def),
-      onHorizontalDragStart: (_) => _openDial(key, value),
-      // The scale moves with the finger: left brings larger values in.
-      onHorizontalDragUpdate: (d) => _slideReach(-d.delta.dx / 6, value, def, set),
-      onHorizontalDragEnd: (_) => _closeDial(),
-      onHorizontalDragCancel: _closeDial,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        curve: Motion.settle,
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
-        decoration: BoxDecoration(
-          color: on ? const Color(0x24FFFFFF) : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('$label ', style: Txt.small.copyWith(color: _ink, fontSize: 12.5)),
-            SizedBox(
-              width: 15,
-              child: Text('${value.round()}', textAlign: TextAlign.right, style: _figures),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// The scale above the pill while one of its halves is slid.
-  String _dialShown = 'width';
-
-  Widget _reachDial() {
-    final c = _cur;
-    final open = c != null && !_sideways && (_dial == 'width' || _dial == 'edge');
-    if (open) _dialShown = _dial!;
-    if (c == null) return const SizedBox.shrink();
-    // Kept while it fades, so it fades with what it last showed.
-    final key = _dialShown;
-    final value = key == 'width' ? c.width : c.softness;
-    // Rises out of the half being slid, and goes back into it.
-    final from = key == 'width' ? const Alignment(-0.45, 1) : const Alignment(0.45, 1);
-    return AnimatedOpacity(
-      opacity: open ? 1 : 0,
-      duration: Duration(milliseconds: open ? 140 : 110),
-      curve: open ? Motion.settle : Curves.easeInCubic,
-      child: AnimatedScale(
-        scale: open ? 1 : 0.86,
-        alignment: from,
-        duration: Duration(milliseconds: open ? 300 : 140),
-        curve: open ? Motion.settle : Curves.easeInCubic,
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Glass(
-            dark: true,
-            radius: 16,
-            padding: const EdgeInsets.fromLTRB(0, 6, 0, 4),
-            child: SizedBox(
-              width: 250,
-              height: 46,
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${key == 'width' ? 'Width' : 'Edge'} ',
-                        style: Txt.small.copyWith(color: _ink, fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                      SizedBox(
-                        width: 15,
-                        child: Text(
-                          '${value.round()}',
-                          style: _figures.copyWith(fontSize: 12, fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ),
-                  Expanded(
-                    child: AnimatedBuilder(
-                      animation: _dialPos,
-                      builder: (context, _) => CustomPaint(
-                        size: Size.infinite,
-                        painter: _ScalePainter(value: _dialPos.value, min: 0, max: 60, def: key == 'width' ? 16 : 20),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ),
         ),
       ),
@@ -2104,83 +1963,50 @@ class _LoupePainter extends CustomPainter {
 
 /// A dial's scale under a fixed mark: a tick a unit, longer every five,
 /// a dot at the default.
-class _ScalePainter extends CustomPainter {
-  _ScalePainter({required this.value, required this.min, required this.max, required this.def});
-  final double value, min, max, def;
-  static const step = 6.0;
+class _CellTicks extends CustomPainter {
+  _CellTicks({required this.value, required this.def});
+  final double value, def;
+
+  /// One step of the value is this far on the scale, and as far under the
+  /// finger, so the scale moves exactly with it.
+  static const step = 5.0;
 
   @override
   void paint(Canvas canvas, Size size) {
     final mid = size.width / 2;
     final p = Paint()..strokeCap = StrokeCap.round;
-    for (var v = min; v <= max; v++) {
+    for (var v = 0.0; v <= 60; v++) {
       final x = mid + (v - value) * step;
       if (x < 0 || x > size.width) continue;
       // Fades toward the ends, as a drum turning away.
-      final fade = 1 - ((x - mid).abs() / mid).clamp(0.0, 1.0);
+      final t = ((x - mid).abs() / mid).clamp(0.0, 1.0);
+      final fade = 1 - t * t;
       final major = v % 5 == 0;
       p
-        ..color = Color.fromRGBO(242, 242, 240, (major ? 0.75 : 0.35) * fade)
-        ..strokeWidth = major ? 1.4 : 1;
-      final h = major ? 12.0 : 7.0;
-      canvas.drawLine(Offset(x, size.height - 4 - h), Offset(x, size.height - 4), p);
+        ..color = Color.fromRGBO(242, 242, 240, (major ? 0.7 : 0.32) * fade)
+        ..strokeWidth = major ? 1.3 : 1;
+      final h = major ? 7.0 : 4.0;
+      canvas.drawLine(Offset(x, size.height - h), Offset(x, size.height), p);
       if (v == def) {
-        canvas.drawCircle(Offset(x, size.height - 22), 1.8, Paint()..color = Color.fromRGBO(242, 242, 240, 0.8 * fade));
+        canvas.drawCircle(
+          Offset(x, size.height - 10.5),
+          1.4,
+          Paint()..color = Color.fromRGBO(242, 242, 240, 0.75 * fade),
+        );
       }
     }
     canvas.drawLine(
-      Offset(mid, size.height - 20),
-      Offset(mid, size.height - 2),
+      Offset(mid, 0),
+      Offset(mid, size.height),
       Paint()
         ..color = const Color(0xFFF2F2F0)
-        ..strokeWidth = 2
+        ..strokeWidth = 1.8
         ..strokeCap = StrokeCap.round,
     );
   }
 
   @override
-  bool shouldRepaint(_ScalePainter o) => o.value != value;
-}
-
-/// The sideways scale: ticks running up and down on both sides of the
-/// Width/Edge glass, [inset] wide, with the mark at [at] down from the top.
-class _RailPainter extends CustomPainter {
-  _RailPainter({required this.value, required this.at, required this.inset, required this.def});
-  final double value, at, inset, def;
-  static const step = 6.0, reach = 120.0;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()..strokeCap = StrokeCap.round;
-    // Up brings larger values in, so they lie below the mark.
-    for (var v = 0.0; v <= 60; v++) {
-      final y = at + (v - value) * step;
-      final off = (y - at).abs();
-      if (off > reach) continue;
-      final fade = 1 - math.pow(off / reach, 2).toDouble();
-      final major = v % 5 == 0;
-      p
-        ..color = Color.fromRGBO(242, 242, 240, (major ? 0.75 : 0.35) * fade)
-        ..strokeWidth = major ? 1.4 : 1;
-      final len = major ? 9.0 : 5.0;
-      canvas.drawLine(Offset(inset - 3 - len, y), Offset(inset - 3, y), p);
-      canvas.drawLine(Offset(size.width - inset + 3, y), Offset(size.width - inset + 3 + len, y), p);
-      if (v == def) {
-        final dot = Paint()..color = Color.fromRGBO(242, 242, 240, 0.8 * fade);
-        canvas.drawCircle(Offset(inset - 3 - len - 4, y), 1.6, dot);
-        canvas.drawCircle(Offset(size.width - inset + 3 + len + 4, y), 1.6, dot);
-      }
-    }
-    final mark = Paint()
-      ..color = const Color(0xFFF2F2F0)
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(0, at), Offset(inset - 2, at), mark);
-    canvas.drawLine(Offset(size.width - inset + 2, at), Offset(size.width, at), mark);
-  }
-
-  @override
-  bool shouldRepaint(_RailPainter o) => o.value != value || o.at != at;
+  bool shouldRepaint(_CellTicks o) => o.value != value || o.def != def;
 }
 
 /// The lenses as the system camera shows them, .5 1 2 3, and the same
