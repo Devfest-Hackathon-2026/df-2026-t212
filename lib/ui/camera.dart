@@ -109,6 +109,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// Quarter turns of the controls: 0 upright, -1 and 1 on its side, 2
   /// upside down.
   int get _quarter => (_turns * 4).round();
+  bool get _sideways => _quarter.isOdd;
 
   // One finger on the view: from the focus box it moves the exposure;
   // elsewhere, up opens the options and down pulls the camera away.
@@ -746,6 +747,17 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       // The options drop from the button that calls them,
                       // over the corner of the view.
                       Positioned(top: top - 6, right: 8, child: _optionsMenu()),
+                      // Held sideways, the hand is at the shutter: the colors
+                      // and options come there, into the room between the
+                      // view and the shutter, or over the view's edge where
+                      // the screen leaves none.
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: bottom,
+                        height: math.max(box.maxHeight - top - h - bottom, 68),
+                        child: _dock(),
+                      ),
                       if (at != null)
                         _loupeWidget(view + Offset(at.dx * h * aspect, at.dy * h), width: box.maxWidth, ceiling: 0),
                       _flight(),
@@ -796,13 +808,22 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                   _ => Icons.flash_auto_rounded,
                 }, _cycleFlash),
               const SizedBox(width: 8),
-              _round(_options ? Icons.close_rounded : Icons.tune_rounded, () {
-                Haptics.tick();
-                setState(() {
-                  _options = !_options;
-                  _panel = false;
-                });
-              }),
+              // Sideways, the options sit by the shutter instead.
+              IgnorePointer(
+                ignoring: _sideways,
+                child: AnimatedOpacity(
+                  opacity: _sideways ? 0 : 1,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Motion.settle,
+                  child: _round(_options ? Icons.close_rounded : Icons.tune_rounded, () {
+                    Haptics.tick();
+                    setState(() {
+                      _options = !_options;
+                      _panel = false;
+                    });
+                  }),
+                ),
+              ),
             ],
           ),
         ),
@@ -917,7 +938,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   }
 
   Widget _hint() {
-    final show = _feed != null && !_chosen;
+    final show = _feed != null && !_chosen && !_sideways;
     return Center(
       key: const ValueKey('hint'),
       child: AnimatedOpacity(
@@ -937,22 +958,69 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// photo size, each showing its state in itself, with no words. They
   /// grow out of the button at the top right and fold back into it.
   Widget _optionsMenu() {
+    final open = _options && !_sideways;
     return IgnorePointer(
-      ignoring: !_options,
+      ignoring: !open,
       child: AnimatedOpacity(
-        opacity: _options ? 1 : 0,
-        duration: Duration(milliseconds: _options ? 200 : 140),
+        opacity: open ? 1 : 0,
+        duration: Duration(milliseconds: open ? 200 : 140),
         curve: Motion.settle,
         child: AnimatedScale(
-          scale: _options ? 1 : 0.6,
+          scale: open ? 1 : 0.6,
           alignment: Alignment.topRight,
-          duration: Duration(milliseconds: _options ? 280 : 180),
-          curve: _options ? Motion.settle : Curves.easeInCubic,
+          duration: Duration(milliseconds: open ? 280 : 180),
+          curve: open ? Motion.settle : Curves.easeInCubic,
           child: Glass(
             dark: true,
             radius: 24,
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(mainAxisSize: MainAxisSize.min, children: _optionItems()),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Held sideways: the options and the colors in view in one bar by the
+  /// shutter. Each swatch is round and each icon turns upright, so the bar
+  /// reads the same whichever way the phone is held.
+  Widget _dock() {
+    final show = _sideways && _feed != null;
+    return IgnorePointer(
+      ignoring: !show,
+      child: AnimatedOpacity(
+        opacity: show ? 1 : 0,
+        duration: Duration(milliseconds: show ? 280 : 140),
+        curve: show ? Motion.settle : Curves.easeInCubic,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Glass(
+                dark: true,
+                radius: 26,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: SizedBox(
+                  height: 52,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ..._optionItems(),
+                      if (_candidates.isNotEmpty) ...[
+                        Container(
+                          width: 1,
+                          height: 22,
+                          margin: const EdgeInsets.symmetric(horizontal: 6),
+                          color: const Color(0x33FFFFFF),
+                        ),
+                        _swatchRow(42, 30),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -1309,13 +1377,14 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// width of that edge.
   Widget _onPersonsBottom(Size view, Widget Function(double width) child) {
     final q = _quarter;
+    // Sideways, toward the end by the shutter, where the hand is.
     final align = switch (q) {
-      -1 => Alignment.centerRight,
-      1 => Alignment.centerLeft,
+      -1 => Alignment.bottomRight,
+      1 => Alignment.bottomLeft,
       2 => Alignment.topCenter,
       _ => Alignment.bottomCenter,
     };
-    final width = q.isOdd ? view.height : view.width;
+    final width = q.isOdd ? math.min(view.height, 340.0) : view.width;
     return Positioned.fill(
       child: AnimatedSwitcher(
         // As the system camera: the old goes at once, the new comes in on
@@ -1427,7 +1496,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// colors in view.
   Widget _reachPill() {
     final c = _cur;
-    final hidden = _feed == null || _panel || _dial == 'zoom';
+    final hidden = _feed == null || _panel || _dial == 'zoom' || (_sideways && c == null);
     void openPanel() {
       Haptics.light();
       setState(() {
@@ -1579,63 +1648,67 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                     _darkSlider('Edge', c.softness, 20, (v) => c.softness = v),
                     const SizedBox(height: 6),
                   ],
-                  Text('In view', style: Txt.mono.copyWith(color: _dim)),
-                  const SizedBox(height: 8),
-                  Listener(
-                    // While a finger is on the row, nothing leaves it.
-                    onPointerDown: (_) => _touching = true,
-                    onPointerUp: (_) => _letGo(),
-                    onPointerCancel: (_) => _letGo(),
-                    child: SizedBox(
-                      height: 44,
-                      child: Row(
-                        children: [
-                          for (final c in _candidates)
-                            GestureDetector(
-                              key: ValueKey(c.id),
-                              behavior: HitTestBehavior.opaque,
-                              onTap: c.leaving ? null : () => _pick(c.color.copy()),
-                              // The whole 44-point square answers, not only
-                              // the swatch in it. A leaving one shrinks away
-                              // and the ones after it close up smoothly.
-                              child: TweenAnimationBuilder<double>(
-                                tween: Tween(begin: 0, end: c.leaving ? 0 : 1),
-                                duration: Duration(milliseconds: c.leaving ? 260 : 320),
-                                curve: Motion.settle,
-                                onEnd: c.leaving ? () => _gone(c) : null,
-                                builder: (context, t, child) => SizedBox(
-                                  width: 46 * t,
-                                  height: 44,
-                                  child: OverflowBox(
-                                    maxWidth: 46,
-                                    child: Center(
-                                      child: Transform.scale(scale: t, child: child),
-                                    ),
-                                  ),
-                                ),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 400),
-                                  curve: Motion.settle,
-                                  width: 32,
-                                  height: 32,
-                                  decoration: BoxDecoration(
-                                    color: colorOf(c.color),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          if (_candidates.isEmpty) Text('No strong colors.', style: Txt.small.copyWith(color: _dim)),
-                        ],
-                      ),
-                    ),
-                  ),
+                  // Held sideways, the colors in view sit by the shutter instead.
+                  if (!_sideways) ...[
+                    Text('In view', style: Txt.mono.copyWith(color: _dim)),
+                    const SizedBox(height: 8),
+                    SizedBox(height: 44, child: _swatchRow(46, 32)),
+                  ],
                 ],
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// The colors in view in a row, each [slot] wide and answering over all
+  /// of it, not only the swatch.
+  Widget _swatchRow(double slot, double dot) {
+    return Listener(
+      // While a finger is on the row, nothing leaves it.
+      onPointerDown: (_) => _touching = true,
+      onPointerUp: (_) => _letGo(),
+      onPointerCancel: (_) => _letGo(),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final c in _candidates)
+            GestureDetector(
+              key: ValueKey(c.id),
+              behavior: HitTestBehavior.opaque,
+              onTap: c.leaving ? null : () => _pick(c.color.copy()),
+              // A leaving one shrinks away and the ones after it close up.
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: c.leaving ? 0 : 1),
+                duration: Duration(milliseconds: c.leaving ? 260 : 320),
+                curve: Motion.settle,
+                onEnd: c.leaving ? () => _gone(c) : null,
+                builder: (context, t, child) => SizedBox(
+                  width: slot * t,
+                  child: OverflowBox(
+                    maxWidth: slot,
+                    child: Center(
+                      child: Transform.scale(scale: t, child: child),
+                    ),
+                  ),
+                ),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 400),
+                  curve: Motion.settle,
+                  width: dot,
+                  height: dot,
+                  decoration: BoxDecoration(
+                    color: colorOf(c.color),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
+                  ),
+                ),
+              ),
+            ),
+          if (_candidates.isEmpty && !_sideways) Text('No strong colors.', style: Txt.small.copyWith(color: _dim)),
+        ],
       ),
     );
   }
