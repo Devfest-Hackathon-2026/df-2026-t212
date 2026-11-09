@@ -1010,18 +1010,18 @@
       "zoom"
      ],
      15.5,
-     8,
+     6.5,
      18,
-     9.5
+     7.5
     ],
     "text-transform": "uppercase",
     "text-letter-spacing": 0.22,
     "text-max-width": 12,
-    "text-padding": 24,
+    "text-padding": 30,
     "text-allow-overlap": false
    },
    "paint": {
-    "text-color": "#B4B4B1",
+    "text-color": "#BFBFBC",
     "text-halo-color": "#F2F2F0",
     "text-halo-width": 1.4,
     "text-halo-blur": 0.5
@@ -1096,18 +1096,18 @@
       "zoom"
      ],
      11,
-     8.5,
+     7,
      15,
-     10
+     8
     ],
     "text-transform": "uppercase",
     "text-letter-spacing": 0.28,
     "text-max-width": 12,
-    "text-padding": 20,
+    "text-padding": 26,
     "text-allow-overlap": false
    },
    "paint": {
-    "text-color": "#A2A29F",
+    "text-color": "#B0B0AE",
     "text-halo-color": "#F2F2F0",
     "text-halo-width": 1.4,
     "text-halo-blur": 0.5
@@ -1156,18 +1156,18 @@
       "zoom"
      ],
      8,
-     9,
+     7,
      13,
-     11
+     9
     ],
     "text-transform": "uppercase",
     "text-letter-spacing": 0.35,
     "text-max-width": 12,
-    "text-padding": 12,
+    "text-padding": 18,
     "text-allow-overlap": false
    },
    "paint": {
-    "text-color": "#8E8E8B",
+    "text-color": "#A0A09D",
     "text-halo-color": "#F2F2F0",
     "text-halo-width": 1.4,
     "text-halo-blur": 0.5
@@ -1216,18 +1216,18 @@
       "zoom"
      ],
      4,
+     8,
      10,
-     10,
-     13
+     10.5
     ],
     "text-transform": "uppercase",
     "text-letter-spacing": 0.38,
     "text-max-width": 12,
-    "text-padding": 12,
+    "text-padding": 18,
     "text-allow-overlap": false
    },
    "paint": {
-    "text-color": "#7A7A77",
+    "text-color": "#90908D",
     "text-halo-color": "#F2F2F0",
     "text-halo-width": 1.4,
     "text-halo-blur": 0.5
@@ -1267,15 +1267,15 @@
     "text-font": [
      "Noto Sans Regular"
     ],
-    "text-size": 10,
+    "text-size": 8,
     "text-transform": "uppercase",
     "text-letter-spacing": 0.4,
     "text-max-width": 12,
-    "text-padding": 12,
+    "text-padding": 18,
     "text-allow-overlap": false
    },
    "paint": {
-    "text-color": "#9A9A97",
+    "text-color": "#AAAAA7",
     "text-halo-color": "#F2F2F0",
     "text-halo-width": 1.4,
     "text-halo-blur": 0.5
@@ -1324,18 +1324,18 @@
       "zoom"
      ],
      1,
-     9,
+     7,
      5,
-     12
+     9.5
     ],
     "text-transform": "uppercase",
     "text-letter-spacing": 0.5,
     "text-max-width": 12,
-    "text-padding": 12,
+    "text-padding": 18,
     "text-allow-overlap": false
    },
    "paint": {
-    "text-color": "#8A8A87",
+    "text-color": "#9D9D9A",
     "text-halo-color": "#F2F2F0",
     "text-halo-width": 1.4,
     "text-halo-blur": 0.5
