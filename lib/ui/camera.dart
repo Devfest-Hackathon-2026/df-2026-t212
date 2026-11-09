@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -132,6 +133,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   double _dialAcc = 0;
   Timer? _dialHide;
 
+  /// Where the Width/Edge scale stands: with the finger, unrounded, while
+  /// it slides, then sprung onto the whole number it lands on.
+  late final AnimationController _dialPos = AnimationController.unbounded(vsync: this);
+
   // The photo just taken: its frame flies to the corner in black and white
   // and develops there.
   ui.Image? _shotOrig, _shotDev;
@@ -165,6 +170,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     _focusFade?.cancel();
     _countdown?.cancel();
     _dialHide?.cancel();
+    _dialPos.dispose();
     _pullBack.dispose();
     _fly.dispose();
     _develop.dispose();
@@ -755,10 +761,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       // The options drop from the button that calls them,
                       // over the corner of the view.
                       Positioned(top: top - 6, right: 8, child: _optionsMenu()),
-                      // Held sideways, the hand is at the shutter: the colors
-                      // and options come there, into the room between the
-                      // view and the shutter, or over the view's edge where
-                      // the screen leaves none.
+                      // Held sideways, the hand is at the shutter: Width and
+                      // Edge come there, into the room between the view and
+                      // the shutter, or over the view's edge where the
+                      // screen leaves none.
                       Positioned(
                         left: 0,
                         right: 0,
@@ -816,22 +822,13 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                   _ => Icons.flash_auto_rounded,
                 }, _cycleFlash),
               const SizedBox(width: 8),
-              // Sideways, the options sit by the shutter instead.
-              IgnorePointer(
-                ignoring: _sideways,
-                child: AnimatedOpacity(
-                  opacity: _sideways ? 0 : 1,
-                  duration: const Duration(milliseconds: 220),
-                  curve: Motion.settle,
-                  child: _round(_options ? Icons.close_rounded : Icons.tune_rounded, () {
-                    Haptics.tick();
-                    setState(() {
-                      _options = !_options;
-                      _panel = false;
-                    });
-                  }),
-                ),
-              ),
+              _round(_options ? Icons.close_rounded : Icons.tune_rounded, () {
+                Haptics.tick();
+                setState(() {
+                  _options = !_options;
+                  _panel = false;
+                });
+              }),
             ],
           ),
         ),
@@ -966,7 +963,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// photo size, each showing its state in itself, with no words. They
   /// grow out of the button at the top right and fold back into it.
   Widget _optionsMenu() {
-    final open = _options && !_sideways;
+    final open = _options;
     return IgnorePointer(
       ignoring: !open,
       child: AnimatedOpacity(
@@ -989,11 +986,83 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// Held sideways: the options and the colors in view in one bar by the
-  /// shutter. Each swatch is round and each icon turns upright, so the bar
-  /// reads the same whichever way the phone is held.
+  /// Held sideways: Width and Edge by the shutter, where the thumb is,
+  /// laid upright along the room between the view and the shutter. Each is
+  /// slid along that room; the scale runs beside it as it slides.
   Widget _dock() {
-    final show = _sideways && _feed != null;
+    final c = _cur;
+    final show = _sideways && _feed != null && !_panel;
+    void openPanel() {
+      Haptics.light();
+      setState(() {
+        _panel = true;
+        _options = false;
+      });
+    }
+
+    const part = 54.0, rail = 15.0, glass = 54.0;
+    Widget body;
+    if (c == null) {
+      body = GestureDetector(
+        onTap: openPanel,
+        child: const Glass(
+          dark: true,
+          radius: 22,
+          child: SizedBox(width: 44, height: 44, child: Icon(Icons.palette_outlined, size: 20, color: _ink)),
+        ),
+      );
+    } else {
+      final open = _dial == 'width' || _dial == 'edge';
+      if (open) _dialShown = _dial!;
+      final def = _dialShown == 'width' ? 16.0 : 20.0;
+      // The middle of the half being slid, down from the top.
+      final at = _dialShown == 'width' ? part / 2 : part * 1.5 + 1;
+      body = SizedBox(
+        width: glass + rail * 2,
+        height: part * 2 + 1,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 0,
+              right: 0,
+              top: -150,
+              bottom: -150,
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: open ? 1 : 0,
+                  duration: Duration(milliseconds: open ? 160 : 120),
+                  curve: open ? Motion.settle : Curves.easeInCubic,
+                  child: AnimatedBuilder(
+                    animation: _dialPos,
+                    builder: (context, _) => CustomPaint(
+                      painter: _RailPainter(value: _dialPos.value, at: at + 150, inset: rail, def: def),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: rail,
+              right: rail,
+              top: 0,
+              bottom: 0,
+              child: Glass(
+                dark: true,
+                radius: 18,
+                child: Column(
+                  children: [
+                    Expanded(child: _dockPart('width', 'Width', c.width, 16, (v) => c.width = v, openPanel)),
+                    Container(height: 1, width: 26, color: const Color(0x33FFFFFF)),
+                    Expanded(child: _dockPart('edge', 'Edge', c.softness, 20, (v) => c.softness = v, openPanel)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return IgnorePointer(
       ignoring: !show,
       child: AnimatedOpacity(
@@ -1001,38 +1070,89 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         duration: Duration(milliseconds: show ? 280 : 140),
         curve: show ? Motion.settle : Curves.easeInCubic,
         child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Glass(
-                dark: true,
-                radius: 26,
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: SizedBox(
-                  height: 52,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ..._optionItems(),
-                      if (_candidates.isNotEmpty) ...[
-                        Container(
-                          width: 1,
-                          height: 22,
-                          margin: const EdgeInsets.symmetric(horizontal: 6),
-                          color: const Color(0x33FFFFFF),
-                        ),
-                        _swatchRow(42, 30),
-                      ],
-                    ],
-                  ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: RotatedBox(
+              quarterTurns: _quarter == -1 ? 3 : 1,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 260),
+                reverseDuration: const Duration(milliseconds: 120),
+                switchInCurve: Motion.settle,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, a) => FadeTransition(
+                  opacity: a,
+                  child: ScaleTransition(scale: Tween(begin: 0.85, end: 1.0).animate(a), child: child),
                 ),
+                child: KeyedSubtree(key: ValueKey(c == null), child: body),
               ),
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// One half of the sideways Width/Edge: its name over its number, slid
+  /// up and down the way the person holds the phone.
+  Widget _dockPart(String key, String label, double value, double def, void Function(double) set, VoidCallback tap) {
+    final on = _dial == key;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: tap,
+      onLongPress: () => _resetReach(set, def),
+      // Up brings larger values in, the scale moving with the finger.
+      onVerticalDragStart: (_) => _openDial(key, value),
+      onVerticalDragUpdate: (d) => _slideReach(-d.delta.dy / 6, value, def, set),
+      onVerticalDragEnd: (_) => _closeDial(),
+      onVerticalDragCancel: _closeDial,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Motion.settle,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: on ? const Color(0x24FFFFFF) : Colors.transparent,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(label, style: Txt.small.copyWith(color: _dim, fontSize: 10.5)),
+            const SizedBox(height: 1),
+            Text('${value.round()}', style: _figures.copyWith(fontSize: 15)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Numbers that keep their width as they change, so nothing beside them
+  /// moves.
+  static final _figures = Txt.small.copyWith(
+    color: _ink,
+    fontSize: 12.5,
+    fontFeatures: const [ui.FontFeature.tabularFigures()],
+  );
+
+  /// Moves Width or Edge by [by] steps from where the slide has got to.
+  void _slideReach(double by, double value, double def, void Function(double) set) {
+    _dialAcc = (_dialAcc + by).clamp(-2.0, 62.0);
+    _dialPos.value = _dialAcc.clamp(0.0, 60.0);
+    final next = _dialAcc.clamp(0.0, 60.0).roundToDouble();
+    if (next == value) return;
+    if (next == def) {
+      Haptics.snap();
+    } else {
+      Haptics.tick();
+    }
+    setState(() => set(next));
+    _look();
+  }
+
+  void _resetReach(void Function(double) set, double def) {
+    Haptics.firm();
+    setState(() => set(def));
+    _dialPos.animateWith(SpringSimulation(Springs.snappy, _dialPos.value, def, 0));
+    _look();
   }
 
   List<Widget> _optionItems() {
@@ -1423,12 +1543,20 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     _dialHide?.cancel();
     if (_dial != key) Haptics.light();
     _dialAcc = from;
+    _dialPos.stop();
+    _dialPos.value = from;
     setState(() => _dial = key);
   }
 
   /// Lets the dial go a moment after the finger leaves.
   void _closeDial() {
     _dialHide?.cancel();
+    // The scale springs onto the number it shows.
+    final c = _cur;
+    if (c != null && (_dial == 'width' || _dial == 'edge')) {
+      final to = _dial == 'width' ? c.width : c.softness;
+      _dialPos.animateWith(SpringSimulation(Springs.snappy, _dialPos.value, to, 0));
+    }
     _dialHide = Timer(const Duration(milliseconds: 300), () {
       if (mounted) setState(() => _dial = null);
     });
@@ -1508,7 +1636,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// colors in view.
   Widget _reachPill() {
     final c = _cur;
-    final hidden = _feed == null || _panel || _dial == 'zoom' || (_sideways && c == null);
+    final hidden = _feed == null || _panel || _dial == 'zoom' || _sideways;
     void openPanel() {
       Haptics.light();
       setState(() {
@@ -1549,34 +1677,15 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
 
   Widget _pillPart(String key, String label, double value, double def, void Function(double) set, VoidCallback tap) {
     final on = _dial == key;
-    void to(double v) {
-      final next = v.clamp(0.0, 60.0).roundToDouble();
-      if (next == value) return;
-      if (next == def) {
-        Haptics.snap();
-      } else {
-        Haptics.tick();
-      }
-      setState(() => set(next));
-      _look();
-    }
-
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: tap,
-      onLongPress: () {
-        // Back to where it started.
-        Haptics.firm();
-        setState(() => set(def));
-        _look();
-      },
+      onLongPress: () => _resetReach(set, def),
       onHorizontalDragStart: (_) => _openDial(key, value),
-      onHorizontalDragUpdate: (d) {
-        // The scale moves with the finger: left brings larger values in.
-        _dialAcc -= d.delta.dx / 6;
-        to(_dialAcc);
-      },
+      // The scale moves with the finger: left brings larger values in.
+      onHorizontalDragUpdate: (d) => _slideReach(-d.delta.dx / 6, value, def, set),
       onHorizontalDragEnd: (_) => _closeDial(),
+      onHorizontalDragCancel: _closeDial,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         curve: Motion.settle,
@@ -1585,7 +1694,16 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
           color: on ? const Color(0x24FFFFFF) : Colors.transparent,
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Text('$label ${value.round()}', style: Txt.small.copyWith(color: _ink, fontSize: 12.5)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$label ', style: Txt.small.copyWith(color: _ink, fontSize: 12.5)),
+            SizedBox(
+              width: 15,
+              child: Text('${value.round()}', textAlign: TextAlign.right, style: _figures),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1595,21 +1713,23 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
 
   Widget _reachDial() {
     final c = _cur;
-    final open = c != null && (_dial == 'width' || _dial == 'edge');
+    final open = c != null && !_sideways && (_dial == 'width' || _dial == 'edge');
     if (open) _dialShown = _dial!;
     if (c == null) return const SizedBox.shrink();
     // Kept while it fades, so it fades with what it last showed.
     final key = _dialShown;
     final value = key == 'width' ? c.width : c.softness;
+    // Rises out of the half being slid, and goes back into it.
+    final from = key == 'width' ? const Alignment(-0.45, 1) : const Alignment(0.45, 1);
     return AnimatedOpacity(
       opacity: open ? 1 : 0,
-      duration: Duration(milliseconds: open ? 160 : 180),
-      curve: Motion.settle,
+      duration: Duration(milliseconds: open ? 140 : 110),
+      curve: open ? Motion.settle : Curves.easeInCubic,
       child: AnimatedScale(
-        scale: open ? 1 : 0.94,
-        alignment: Alignment.bottomCenter,
-        duration: const Duration(milliseconds: 220),
-        curve: Motion.settle,
+        scale: open ? 1 : 0.86,
+        alignment: from,
+        duration: Duration(milliseconds: open ? 300 : 140),
+        curve: open ? Motion.settle : Curves.easeInCubic,
         child: Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Glass(
@@ -1621,14 +1741,29 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
               height: 46,
               child: Column(
                 children: [
-                  Text(
-                    '${key == 'width' ? 'Width' : 'Edge'} ${value.round()}',
-                    style: Txt.small.copyWith(color: _ink, fontSize: 12, fontWeight: FontWeight.w600),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${key == 'width' ? 'Width' : 'Edge'} ',
+                        style: Txt.small.copyWith(color: _ink, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      SizedBox(
+                        width: 15,
+                        child: Text(
+                          '${value.round()}',
+                          style: _figures.copyWith(fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
                   ),
                   Expanded(
-                    child: CustomPaint(
-                      size: Size.infinite,
-                      painter: _ScalePainter(value: value, min: 0, max: 60, def: key == 'width' ? 16 : 20),
+                    child: AnimatedBuilder(
+                      animation: _dialPos,
+                      builder: (context, _) => CustomPaint(
+                        size: Size.infinite,
+                        painter: _ScalePainter(value: _dialPos.value, min: 0, max: 60, def: key == 'width' ? 16 : 20),
+                      ),
                     ),
                   ),
                 ],
@@ -1670,12 +1805,9 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                     _darkSlider('Edge', c.softness, 20, (v) => c.softness = v),
                     const SizedBox(height: 6),
                   ],
-                  // Held sideways, the colors in view sit by the shutter instead.
-                  if (!_sideways) ...[
-                    Text('In view', style: Txt.mono.copyWith(color: _dim)),
-                    const SizedBox(height: 8),
-                    SizedBox(height: 44, child: _swatchRow(46, 32)),
-                  ],
+                  Text('In view', style: Txt.mono.copyWith(color: _dim)),
+                  const SizedBox(height: 8),
+                  SizedBox(height: 44, child: _swatchRow(46, 32)),
                 ],
               ),
             ),
@@ -1688,7 +1820,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// The colors in view in a row, each [slot] wide and answering over all
   /// of it, not only the swatch.
   Widget _swatchRow(double slot, double dot) {
-    if (_candidates.isEmpty && !_sideways) {
+    if (_candidates.isEmpty) {
       return SizedBox(
         height: 44,
         child: Align(
@@ -2008,6 +2140,47 @@ class _ScalePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ScalePainter o) => o.value != value;
+}
+
+/// The sideways scale: ticks running up and down on both sides of the
+/// Width/Edge glass, [inset] wide, with the mark at [at] down from the top.
+class _RailPainter extends CustomPainter {
+  _RailPainter({required this.value, required this.at, required this.inset, required this.def});
+  final double value, at, inset, def;
+  static const step = 6.0, reach = 120.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()..strokeCap = StrokeCap.round;
+    // Up brings larger values in, so they lie below the mark.
+    for (var v = 0.0; v <= 60; v++) {
+      final y = at + (v - value) * step;
+      final off = (y - at).abs();
+      if (off > reach) continue;
+      final fade = 1 - math.pow(off / reach, 2).toDouble();
+      final major = v % 5 == 0;
+      p
+        ..color = Color.fromRGBO(242, 242, 240, (major ? 0.75 : 0.35) * fade)
+        ..strokeWidth = major ? 1.4 : 1;
+      final len = major ? 9.0 : 5.0;
+      canvas.drawLine(Offset(inset - 3 - len, y), Offset(inset - 3, y), p);
+      canvas.drawLine(Offset(size.width - inset + 3, y), Offset(size.width - inset + 3 + len, y), p);
+      if (v == def) {
+        final dot = Paint()..color = Color.fromRGBO(242, 242, 240, 0.8 * fade);
+        canvas.drawCircle(Offset(inset - 3 - len - 4, y), 1.6, dot);
+        canvas.drawCircle(Offset(size.width - inset + 3 + len + 4, y), 1.6, dot);
+      }
+    }
+    final mark = Paint()
+      ..color = const Color(0xFFF2F2F0)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(0, at), Offset(inset - 2, at), mark);
+    canvas.drawLine(Offset(size.width - inset + 2, at), Offset(size.width, at), mark);
+  }
+
+  @override
+  bool shouldRepaint(_RailPainter o) => o.value != value || o.at != at;
 }
 
 /// The lenses as the system camera shows them, .5 1 2 3, and the same
