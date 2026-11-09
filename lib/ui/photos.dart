@@ -153,7 +153,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
               onLongPressMoveUpdate: (d) => _sweep.move(d.globalPosition),
               onLongPressEnd: (_) => _sweep.end(),
               onLongPressCancel: _sweep.end,
-              child: _fadeUnderHeader(pad, CustomScrollView(
+              child: CustomScrollView(
                 controller: _scroll,
                 slivers: [
                   SliverToBoxAdapter(child: SizedBox(height: pad.top + _headerExtent)),
@@ -168,7 +168,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                   if (list.isNotEmpty) SliverToBoxAdapter(child: _more()),
                   SliverToBoxAdapter(child: SizedBox(height: pad.bottom + (hasDevelopment ? 156 : 96))),
                 ],
-              )),
+              ),
             ),
             _topBar(pad),
             if (!_selecting)
@@ -180,26 +180,6 @@ class _PhotosScreenState extends State<PhotosScreen> {
               ),
             if (_selecting) _selectionBar(pad),
           ],
-        );
-      },
-    );
-  }
-
-  /// Fade the moving content itself, leaving the header and its actions crisp.
-  Widget _fadeUnderHeader(EdgeInsets pad, Widget child) {
-    return ValueListenableBuilder<double>(
-      valueListenable: _offset,
-      child: child,
-      builder: (context, offset, content) {
-        final strength = (offset / 24).clamp(0.0, 1.0);
-        return ShaderMask(
-          blendMode: BlendMode.dstIn,
-          shaderCallback: (rect) => LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Colors.black.withValues(alpha: 1 - strength), Colors.black],
-          ).createShader(Rect.fromLTWH(rect.left, rect.top + pad.top + _headerExtent - 12, rect.width, 32)),
-          child: content,
         );
       },
     );
