@@ -1342,7 +1342,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       stops: feed.stops,
                       turns: _turns,
                       hidden: _panel,
-                      pinching: _pinching,
                       onZoom: _setZoom,
                       onOpen: (open) {
                         if (open && _dial == null) setState(() => _dial = 'zoom');
@@ -1989,13 +1988,12 @@ class _ZoomWheel extends StatefulWidget {
     required this.stops,
     required this.turns,
     required this.hidden,
-    required this.pinching,
     required this.onZoom,
     required this.onOpen,
   });
   final double zoom, min, max, turns;
   final List<double> stops;
-  final bool hidden, pinching;
+  final bool hidden;
   final void Function(double zoom, {bool ramp}) onZoom;
   final void Function(bool open) onOpen;
 
@@ -2011,8 +2009,6 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
   @override
   void didUpdateWidget(_ZoomWheel old) {
     super.didUpdateWidget(old);
-    if (widget.pinching && !old.pinching) _show();
-    if (!widget.pinching && old.pinching) _hideSoon();
   }
 
   @override
@@ -2043,7 +2039,7 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
 
   void _drag(double dx, Size s) {
     final g = _WheelGeometry(s, widget.stops.length);
-    _acc = (_acc - dx / g.r / _WheelGeometry.k).clamp(_WheelGeometry.p(widget.min), _WheelGeometry.p(widget.max));
+    _acc = (_acc - dx / g.r / g.k).clamp(_WheelGeometry.p(widget.min), _WheelGeometry.p(widget.max));
     widget.onZoom(_WheelGeometry.unp(_acc));
   }
 
@@ -2157,7 +2153,7 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
                         },
                         onLongPressMoveUpdate: (d) {
                           _close?.cancel();
-                          final v = _acc - d.offsetFromOrigin.dx / g.r / _WheelGeometry.k;
+                          final v = _acc - d.offsetFromOrigin.dx / g.r / g.k;
                           widget.onZoom(
                             _WheelGeometry.unp(v.clamp(_WheelGeometry.p(widget.min), _WheelGeometry.p(widget.max))),
                           );
@@ -2197,8 +2193,9 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
 /// Where everything on the zoom wheel sits.
 class _WheelGeometry {
   _WheelGeometry(this.size, this.n)
-    : r = size.width * 0.52,
-      center = Offset(size.width / 2, size.height + size.width * 0.12);
+    : r = size.width * 0.85,
+      // A shallow arc, its top a little above the buttons, as the system's.
+      center = Offset(size.width / 2, size.height - 88 + size.width * 0.85);
   final Size size;
   final int n;
 
@@ -2206,8 +2203,8 @@ class _WheelGeometry {
   final double r;
   final Offset center;
 
-  /// Radians of the wheel per unit of [p].
-  static const k = 0.85;
+  /// Radians of the wheel per unit of [p]: about 180 points of rim each.
+  double get k => 180 / r;
   static const step = 40.0;
 
   /// The wheel's scale: even in the log up to 3x, then drawn closer, as
@@ -2327,10 +2324,11 @@ class _ZoomWheelPainter extends CustomPainter {
       for (var v = (min * 10).ceil() / 10; v <= max + 1e-6; v += v < 3 - 1e-6 ? 0.1 : 0.5) {
         final q = (v * 100).round() / 100;
         final a = g.angle(zoom, q);
-        if (a.abs() > 1.45) continue;
+        final along = a.abs() * g.r;
+        if (along > 260) continue;
         final lens = stops.any((s) => (s - q).abs() < 0.01) || (q - max).abs() < 0.01;
         final mid = q < 3 ? ((q * 2) - (q * 2).roundToDouble()).abs() < 0.01 : (q - q.roundToDouble()).abs() < 0.01;
-        final fade = (1 - math.pow(a.abs() / 1.45, 3)).clamp(0.0, 1.0);
+        final fade = (1 - math.pow(along / 260, 3)).clamp(0.0, 1.0);
         final (len, alpha, width) = lens ? (15.0, 1.0, 2.0) : (mid ? (10.0, 0.7, 1.4) : (5.0, 0.32, 1.0));
         tick
           ..color = ink.withValues(alpha: alpha * fade * t)
@@ -2358,8 +2356,9 @@ class _ZoomWheelPainter extends CustomPainter {
       final a = g.angle(zoom, v);
       final onWheel = scaled(g.label(zoom, v));
       // Near the top, the present factor takes the place.
-      final near = (1 - (a.abs() / 0.22)).clamp(0.0, 1.0);
-      final fade = (1 - math.pow(a.abs() / 1.4, 3)).clamp(0.0, 1.0) * (1 - near);
+      final along = a.abs() * g.r;
+      final near = (1 - (along - 30) / 30).clamp(0.0, 1.0);
+      final fade = (1 - math.pow(along / 240, 3)).clamp(0.0, 1.0) * (1 - near);
       if (i < n) {
         final cur = (i - current).abs() < 0.5;
         final at = Offset.lerp(g.button(i.toDouble()), onWheel, t)!;
