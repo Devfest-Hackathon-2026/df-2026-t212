@@ -1,3 +1,4 @@
+import 'widgets/agent_work_status.dart';
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:math' as math;
@@ -17,6 +18,7 @@ import 'edit_preview.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 import 'widgets/controls.dart';
+import 'widgets/photo_zoom.dart';
 
 class EditRoute extends PageRouteBuilder<void> {
   EditRoute(PhotoItem item)
@@ -64,7 +66,28 @@ class _EditScreenState extends State<EditScreen> {
   _Tool _tool = _Tool.accent;
 
   /// Selected slot. Equal to the number of colors: the empty "add" slot.
-  int _active = 0;
+  int _keptActive = 0, _excludedActive = 0;
+  bool _excluding = false;
+  int get _active => _excluding ? _excludedActive : _keptActive;
+  set _active(int value) {
+    if (_excluding) {
+      _excludedActive = value;
+    } else {
+      _keptActive = value;
+    }
+  }
+  List<KeptColor> get _colors => _excluding ? _r.excludedColors : _r.colors;
+  bool get _showColorModes => _tool == _Tool.accent && (_advanced || _excluding || _r.excludedColors.isNotEmpty);
+
+  void _setExcluding(bool value) {
+    Haptics.tick();
+    setState(() {
+      _excluding = value;
+      _active = _active.clamp(0, _addSlot);
+      _from = null;
+      _offer = null;
+    });
+  }
 
   /// The color selected before the add slot was: a new color starts from
   /// its Width and Edge, as in the camera.
@@ -95,7 +118,10 @@ class _EditScreenState extends State<EditScreen> {
   bool _sizing = false; // the Brush slider is held: show the tip
   bool _finding = false; // looking for the outline under a tap
   Stroke? _live; // the stroke being laid down
-  Area? _beforeStroke;
+  Recipe? _beforeStroke;
+  final Set<int> _photoPointers = {};
+  // Remains true until the next touch sequence, even after one finger lifts.
+  bool _multiTouch = false;
   Offset? _tip; // normalized, while painting
   Matrix4? _pinchFrom;
   Offset? _pinchAt;
@@ -109,6 +135,7 @@ class _EditScreenState extends State<EditScreen> {
   bool _asking = false;
   final List<Mark> _marks = [];
   final _askText = TextEditingController();
+  final _askFocus = FocusNode();
   String? _note; // what the agent changed, until the next change
   ({Offset at, KeptColor color})? _offer; // a pick that landed outside the area
   bool _byHand = false;
@@ -119,6 +146,7 @@ class _EditScreenState extends State<EditScreen> {
     if (_it.state == Develop.pending) Store.instance.hold(_it);
     final run = Store.instance.runFor(_it);
     if (run != null) _attach(run);
+    _askFocus.addListener(_askFocusChanged);
     _load();
   }
 
@@ -129,6 +157,7 @@ class _EditScreenState extends State<EditScreen> {
     _worker?.dispose();
     _zoom.dispose();
     _askText.dispose();
+    _askFocus.dispose();
     Store.instance.release(_it);
     super.dispose();
   }
@@ -223,13 +252,12 @@ class _EditScreenState extends State<EditScreen> {
   double get _zoomScale => _zoom.value.getMaxScaleOnAxis();
 
   void _strokeStart(Offset n) {
-    _beforeStroke = _r.area?.copy();
-    _push(_r.copy());
+    _beforeStroke = _r.copy();
     final st = Stroke(points: [[n.dx, n.dy]], radius: _brush / _zoomScale, erase: _erase);
     _live = st;
     _tip = n;
     _change(() {
-      final a = _r.area?.copy() ?? Area(edge: 0.015);
+      final a = _r.area?.copy() ?? Area(edge: Area.defaultEdgeFor(_sourceShort));
       a.strokes = [...a.strokes, st];
       _r.area = a;
     }, record: false);
@@ -254,13 +282,31 @@ class _EditScreenState extends State<EditScreen> {
     if (drop) {
       // A second finger came down: it was the start of a pinch, not paint.
       _change(() {
-        _r.area = _beforeStroke;
-        if (_undo.isNotEmpty) _undo.removeLast();
+        _r.area = _beforeStroke?.area;
       }, record: false);
     } else {
+      if (_beforeStroke != null) _push(_beforeStroke!);
       Haptics.tick();
     }
+    _beforeStroke = null;
     setState(() => _tip = null);
+  }
+
+  void _photoDown(PointerDownEvent event) {
+    if (_photoPointers.isEmpty) _multiTouch = false;
+    _photoPointers.add(event.pointer);
+    if (_photoPointers.length > 1) {
+      _multiTouch = true;
+      _strokeEnd(drop: true);
+    }
+  }
+
+  void _photoUp(PointerEvent event) => _photoPointers.remove(event.pointer);
+
+  void _photoCancel(PointerCancelEvent event) {
+    _multiTouch = true;
+    _photoUp(event);
+    _strokeEnd(drop: true);
   }
 
   Offset _inView(Offset global) => (_viewKey.currentContext!.findRenderObject() as RenderBox).globalToLocal(global);
@@ -275,7 +321,7 @@ class _EditScreenState extends State<EditScreen> {
     final box = _viewKey.currentContext?.size;
     if (from == null || f0 == null || box == null) return;
     final s0 = from.getMaxScaleOnAxis();
-    final k = (s0 * scale).clamp(1.0, 8.0) / s0;
+    final k = (s0 * scale).clamp(1.0, PhotoZoomController.maxScale) / s0;
     final f = _inView(focal);
     final m = Matrix4.translationValues(f.dx, f.dy, 0)
       ..multiply(Matrix4.diagonal3Values(k, k, 1))
@@ -328,7 +374,7 @@ class _EditScreenState extends State<EditScreen> {
     }
     Haptics.light();
     _change(() {
-      final b = _r.area?.copy() ?? Area(edge: 0.015);
+      final b = _r.area?.copy() ?? Area(edge: Area.defaultEdgeFor(_sourceShort));
       b.polygons = [...b.polygons, ...polys];
       _r.area = b;
     });
@@ -394,9 +440,9 @@ class _EditScreenState extends State<EditScreen> {
 
   // ------------------------------------------------------------ edits
 
-  int get _addSlot => math.min(_r.colors.length, Recipe.maxColors - 1);
-  bool get _adding => _active >= _r.colors.length;
-  KeptColor? get _cur => _adding ? null : _r.colors[_active];
+  int get _addSlot => math.min(_colors.length, Recipe.maxColors - 1);
+  bool get _adding => _active >= _colors.length;
+  KeptColor? get _cur => _adding ? null : _colors[_active];
 
   void _change(void Function() f, {bool record = true}) {
     _takeOver();
@@ -415,17 +461,17 @@ class _EditScreenState extends State<EditScreen> {
     Haptics.light();
     _change(() {
       if (_adding) {
-        final like = _r.colors.isEmpty ? null : _r.colors[math.min(_from ?? _r.colors.length - 1, _r.colors.length - 1)];
-        _r.colors.add(
+        final like = _colors.isEmpty ? null : _colors[math.min(_from ?? _colors.length - 1, _colors.length - 1)];
+        _colors.add(
           c
-            ..width = like?.width ?? 16
-            ..softness = like?.softness ?? 20,
+            ..width = like?.width ?? (_excluding ? Recipe.defaultExcludeWidth : 16)
+            ..softness = like?.softness ?? (_excluding ? Recipe.defaultExcludeSoftness : 20),
         );
-        _active = _r.colors.length - 1;
+        _active = _colors.length - 1;
         _from = null;
       } else {
-        final old = _r.colors[_active];
-        _r.colors[_active] = c
+        final old = _colors[_active];
+        _colors[_active] = c
           ..width = old.width
           ..softness = old.softness
           ..chromaMin = old.chromaMin;
@@ -445,7 +491,7 @@ class _EditScreenState extends State<EditScreen> {
     }
     _pick(c);
     // Color only stays inside the area: a pick outside it changes nothing.
-    if (_outsideArea(n)) setState(() => _offer = (at: n, color: c));
+    if (!_excluding && _outsideArea(n)) setState(() => _offer = (at: n, color: c));
   }
 
   bool _outsideArea(Offset n) {
@@ -541,7 +587,7 @@ class _EditScreenState extends State<EditScreen> {
   void _remove(int i) {
     Haptics.light();
     _change(() {
-      _r.colors.removeAt(i);
+      _colors.removeAt(i);
       _active = math.min(i, _addSlot);
       _from = null;
     });
@@ -562,10 +608,20 @@ class _EditScreenState extends State<EditScreen> {
   }
 
   void _setTool(_Tool t) {
-    setState(() => _tool = t);
+    setState(() {
+      _tool = t;
+      if (t != _Tool.accent) _excluding = false;
+      _from = null;
+    });
   }
 
   void _done() {
+    final run = _run;
+    if (run != null && !run.cancelled) {
+      Store.instance.continueEditing(_it, run);
+      Navigator.pop(context);
+      return;
+    }
     _takeOver();
     Store.instance.setEdit(_it, _r..why = _byHand ? 'Edited by hand.' : _r.why);
     Navigator.pop(context);
@@ -578,62 +634,46 @@ class _EditScreenState extends State<EditScreen> {
     final pad = MediaQuery.paddingOf(context);
     final running = _run != null;
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
-    // Measured with the keyboard down only, so the photo does not move when it comes up.
-    if (_asking && keyboard == 0) WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _measureAsk() : null);
     return Scaffold(
       backgroundColor: Neutral.bg,
-      // The keyboard slides the Ask panel up over the photo; the photo stays put.
-      resizeToAvoidBottomInset: false,
-      body: Stack(
+      // Keep the whole photo above the composer and keyboard.
+      resizeToAvoidBottomInset: true,
+      body: Column(
         children: [
-          Column(
+          SizedBox(height: pad.top),
+          Row(
             children: [
-              SizedBox(height: pad.top),
-              Row(
-                children: [
-                  TextAction('Cancel', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
-                  _HistoryButton(redo: false, onTap: _undo.isEmpty ? null : _stepBack),
-                  _HistoryButton(redo: true, onTap: _redo.isEmpty ? null : _stepForward),
-                  const Spacer(),
-                  if (running) ...[
-                    const CupertinoActivityIndicator(radius: 8, color: Neutral.primary),
-                    TextAction('Stop', onTap: () => setState(_takeOver)),
-                  ] else
-                    TextAction('Auto', onTap: _auto),
-                  TextAction('Done', onTap: _done),
-                  const SizedBox(width: 6),
-                ],
-              ),
-              // While asking, the photo takes the whole screen below the bar.
-              Expanded(child: _photo()),
-              // While asking, room for the Ask panel, so the whole photo shows until the keyboard comes up.
-              if (_asking)
-                SizedBox(height: _askHeight + MediaQuery.viewPaddingOf(context).bottom + 20)
-              else ...[
-                _viewBar(),
-                _panel(pad),
-              ],
+              TextAction('Cancel', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
+              _HistoryButton(redo: false, onTap: _undo.isEmpty ? null : _stepBack),
+              _HistoryButton(redo: true, onTap: _redo.isEmpty ? null : _stepForward),
+              const Spacer(),
+              if (running) ...[
+                const CupertinoActivityIndicator(radius: 8, color: Neutral.primary),
+                TextAction('Stop', onTap: () => setState(_takeOver)),
+              ] else
+                TextAction('Auto', onTap: _auto),
+              TextAction('Done', onTap: _done),
+              const SizedBox(width: 6),
             ],
           ),
-          if (_asking)
-            Positioned(
-              left: 10,
-              right: 10,
-              bottom: math.max(keyboard, MediaQuery.viewPaddingOf(context).bottom) + 10,
-              child: KeyedSubtree(key: _askKey, child: _askPanel()),
+          Expanded(child: _photo()),
+          if (_asking) ...[
+            if (keyboard == 0 && !_askFocus.hasFocus) _askPhotoTools(),
+            Padding(
+              padding: EdgeInsets.fromLTRB(12, 4, 12, keyboard > 0 ? 8 : pad.bottom + 12),
+              child: _askPanel(),
             ),
+          ] else ...[
+            _viewBar(),
+            _panel(pad),
+          ],
         ],
       ),
     );
   }
 
-  final _askKey = GlobalKey();
-  double _askHeight = 220;
-
-  /// The Ask panel's height changes with its hint; keep the photo's room in step.
-  void _measureAsk() {
-    final h = _askKey.currentContext?.size?.height;
-    if (h != null && (h - _askHeight).abs() > 1) setState(() => _askHeight = h);
+  void _askFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   void _stepBack() => _change(() {
@@ -646,7 +686,7 @@ class _EditScreenState extends State<EditScreen> {
     _r = _redo.removeLast();
   }, record: false);
 
-  final _zoom = TransformationController();
+  final _zoom = PhotoZoomController();
 
   Widget _photo() {
     final it = _it;
@@ -661,13 +701,17 @@ class _EditScreenState extends State<EditScreen> {
         final availW = outer.maxWidth - m * 2, availH = outer.maxHeight - m * 2;
         final w = math.min(availW, availH * ratio), h = w / ratio;
         final size = Size(w, h);
+        final viewport = Size(outer.maxWidth, outer.maxHeight);
+        final frame = Rect.fromCenter(center: viewport.center(Offset.zero), width: w, height: h);
+        _zoom.setGeometry(viewport, frame);
+        WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _zoom.settle(); });
         Offset norm(Offset p) => Offset((p.dx / w).clamp(0, 1), (p.dy / h).clamp(0, 1));
         final photo = SizedBox(
           width: w,
           height: h,
           child: GestureDetector(
             onTapUp: areaMode
-                ? (d) => _areaTap(norm(d.localPosition), size)
+                ? (d) { if (!_multiTouch) _areaTap(norm(d.localPosition), size); }
                 : (d) {
                     if (!asking) return _pickAt(norm(d.localPosition), size);
                     // With the keyboard up, the first tap only puts it away so the whole photo shows.
@@ -690,7 +734,13 @@ class _EditScreenState extends State<EditScreen> {
                     if (n != null) _pickAt(n, size);
                   },
             onScaleStart: areaMode
-                ? (d) => d.pointerCount >= 2 ? _pinchStart(d.focalPoint) : _strokeStart(norm(d.localFocalPoint))
+                ? (d) {
+                    if (d.pointerCount >= 2) {
+                      _pinchStart(d.focalPoint);
+                    } else if (!_multiTouch) {
+                      _strokeStart(norm(d.localFocalPoint));
+                    }
+                  }
                 : null,
             onScaleUpdate: areaMode
                 ? (d) {
@@ -698,7 +748,7 @@ class _EditScreenState extends State<EditScreen> {
                       if (_live != null) _strokeEnd(drop: true);
                       if (_pinchFrom == null) _pinchStart(d.focalPoint);
                       _pinchMove(d.focalPoint, d.scale);
-                    } else {
+                    } else if (!_multiTouch) {
                       _strokeMove(norm(d.localFocalPoint), size);
                     }
                   }
@@ -706,7 +756,7 @@ class _EditScreenState extends State<EditScreen> {
             onScaleEnd: areaMode
                 ? (d) {
                     _pinchFrom = _pinchAt = null;
-                    _strokeEnd(drop: d.pointerCount > 0);
+                    _strokeEnd(drop: _multiTouch || d.pointerCount > 0);
                   }
                 : null,
             child: Stack(
@@ -786,11 +836,15 @@ class _EditScreenState extends State<EditScreen> {
             children: [
               Positioned.fill(
                 key: _viewKey,
-                child: InteractiveViewer(
+                child: Listener(
+                  onPointerDown: _photoDown,
+                  onPointerUp: _photoUp,
+                  onPointerCancel: _photoCancel,
+                  child: InteractiveViewer(
                   transformationController: _zoom,
                   minScale: 1,
-                  maxScale: 8,
-                  // In Area, one finger draws; zoom first in another tool.
+                  maxScale: PhotoZoomController.maxScale,
+                  // Area owns one-finger paint and two-finger zoom.
                   panEnabled: !areaMode,
                   scaleEnabled: !areaMode,
                   clipBehavior: Clip.none,
@@ -798,6 +852,7 @@ class _EditScreenState extends State<EditScreen> {
                     width: outer.maxWidth,
                     height: outer.maxHeight,
                     child: Center(child: photo),
+                  ),
                   ),
                 ),
               ),
@@ -821,7 +876,7 @@ class _EditScreenState extends State<EditScreen> {
         : showMask
         ? 'Showing where color is kept'
         : running
-        ? 'Agent is ${_runLabel(_run!.status)}… Edit anything to take over'
+        ? 'Agent is ${agentWorkLabel(_run!.status)}… Edit anything to take over'
         : offer
         ? 'This spot is outside the area'
         : _note != null
@@ -892,16 +947,6 @@ class _EditScreenState extends State<EditScreen> {
     );
   }
 
-  static String _runLabel(String? s) => switch (s) {
-    'probe' || 'hue_histogram' => 'looking',
-    'add_color' || 'remove_color' => 'choosing colors',
-    'set_width' || 'set_softness' || 'set_gate' => 'adjusting reach',
-    'set_area' => 'limiting the area',
-    'set_mono_tone' => 'setting tone',
-    'render' => 'checking',
-    'finish' => 'finishing',
-    _ => 'looking',
-  };
 
   Widget _loupeWidget(Offset p, BoxConstraints box) {
     const d = 112.0, zoom = 3.0;
@@ -928,125 +973,137 @@ class _EditScreenState extends State<EditScreen> {
 
   static const _suggestions = ['Only the subject', 'Less color', 'More mood'];
 
-  /// In place of the tools while asking: one line in any language, quick
-  /// suggestions, and marks placed by tapping the photo.
+  Widget _askPhotoTools() {
+    final keeps = _marks.where((m) => m.intent == MarkIntent.keep).length;
+    final removes = _marks.length - keeps;
+    return Padding(
+      padding: const EdgeInsets.only(left: 20, right: 10, bottom: 4),
+      child: Row(children: [
+        Expanded(child: Text(
+          _marks.isEmpty
+              ? 'Tap the photo to mark things'
+              : '${[if (keeps > 0) '$keeps keep color', if (removes > 0) '$removes no color'].join(' · ')} · tap to switch',
+          style: Txt.small.copyWith(fontSize: 12, color: const Color(0xA6000000)),
+        )),
+        _ViewButton(label: 'Mask', on: _mask, onTap: () {
+          Haptics.tick();
+          setState(() => _mask = !_mask);
+          _request();
+        }),
+        _ViewButton(label: 'Before', on: _before, onHold: (on) => setState(() => _before = on)),
+      ]),
+    );
+  }
+
+  /// A quiet composer; typing gets the space, with suggestions only at rest.
   Widget _askPanel() {
     final canSend = _askText.text.trim().isNotEmpty || _marks.isNotEmpty;
-    final keeps = _marks.where((m) => m.intent == MarkIntent.keep).length, removes = _marks.length - keeps;
+    final typing = _askFocus.hasFocus || MediaQuery.viewInsetsOf(context).bottom > 0;
     return Glass(
-      clear: true,
-      radius: 26,
-      padding: const EdgeInsets.fromLTRB(18, 6, 12, 14),
+      dock: true,
+      radius: 22,
+      padding: const EdgeInsets.fromLTRB(16, 0, 6, 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(child: Text('Ask the agent', style: Txt.label)),
-              _ViewButton(
-                label: 'Mask',
-                on: _mask,
-                onTap: () {
-                  Haptics.tick();
-                  setState(() => _mask = !_mask);
-                  _request();
-                },
-              ),
-              _ViewButton(label: 'Before', on: _before, onHold: (on) => setState(() => _before = on)),
-              _ViewButton(
-                label: 'Close',
-                on: false,
-                onTap: () {
-                  Haptics.tick();
-                  FocusScope.of(context).unfocus();
-                  setState(() {
-                    _asking = false;
-                    _marks.clear();
-                  });
-                },
-              ),
-            ],
-          ),
-          // While typing, only what is needed to type: more of the photo shows.
-          if (MediaQuery.viewInsetsOf(context).bottom == 0) ...[
-            Text(
-              _marks.isEmpty
-                  ? 'Tap the photo to mark things. Tap again to switch.'
-                  : '${[if (keeps > 0) '$keeps keep color', if (removes > 0) '$removes no color'].join(' · ')} · tap a mark to switch',
-              // Over glass, quieter text is the ink made fainter, not gray.
-              style: Txt.small.copyWith(color: const Color(0x99161616)),
+          Row(children: [
+            Expanded(child: Text('Ask the agent', style: Txt.small.copyWith(
+              color: const Color(0xA6000000), fontWeight: FontWeight.w500,
+            ))),
+            IconButton(
+              tooltip: 'Close',
+              onPressed: () {
+                Haptics.tick();
+                _askFocus.unfocus();
+                setState(() {
+                  _asking = false;
+                  _marks.clear();
+                });
+              },
+              constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+              padding: EdgeInsets.zero,
+              icon: const Glyph(G.close, size: 16, color: Color(0xA6000000)),
             ),
-            const SizedBox(height: 14),
-          ] else
-            const SizedBox(height: 4),
-          Container(
+          ]),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
             margin: const EdgeInsets.only(right: 6),
+            padding: const EdgeInsets.only(left: 12, right: 2),
             decoration: BoxDecoration(
-              color: const Color(0xB3FFFFFF),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: const Color(0x14000000)),
+              color: const Color(0x80FFFFFF),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _askFocus.hasFocus ? const Color(0x66000000) : const Color(0x24000000), width: .8),
             ),
-            padding: const EdgeInsets.only(left: 16, right: 5),
             child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _askText,
-                    onChanged: (_) => setState(() {}),
-                    onSubmitted: _send,
-                    textInputAction: TextInputAction.send,
-                    style: Txt.label.copyWith(fontWeight: FontWeight.w400),
-                    cursorColor: Neutral.primary,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: InputBorder.none,
-                      hintText: 'What should change?',
-                      hintStyle: Txt.label.copyWith(fontWeight: FontWeight.w400, color: Neutral.tertiary),
-                      contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: canSend ? () => _send(_askText.text) : null,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 140),
-                    curve: Motion.settle,
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: canSend ? Neutral.primary : Neutral.hairline,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Center(child: Glyph(G.up, size: 18, color: Neutral.surface, weight: 1.8)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              for (final t in _suggestions)
-                GestureDetector(
-                  onTap: () {
-                    Haptics.tick();
-                    _send(t);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0x66FFFFFF),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0x14000000)),
-                    ),
-                    child: Text(t, style: Txt.small.copyWith(color: Neutral.primary)),
+              Expanded(
+                child: TextField(
+                  controller: _askText,
+                  focusNode: _askFocus,
+                  minLines: 1,
+                  maxLines: 3,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: _send,
+                  textInputAction: TextInputAction.send,
+                  style: Txt.body.copyWith(height: 1.35),
+                  cursorColor: Neutral.primary,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    hintText: 'What should change?',
+                    hintStyle: Txt.body.copyWith(height: 1.35, color: const Color(0xA6000000)),
+                    contentPadding: const EdgeInsets.only(top: 8, bottom: 12, right: 8),
                   ),
                 ),
+              ),
+              Semantics(
+                label: 'Send request', button: true, enabled: canSend,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: canSend ? () => _send(_askText.text) : null,
+                  child: SizedBox(
+                    width: 44, height: 44,
+                    child: Center(child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 140),
+                      curve: Motion.settle,
+                      width: 34, height: 34,
+                      decoration: BoxDecoration(
+                        color: canSend ? Neutral.primary : const Color(0x14000000),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(child: Glyph(G.up, size: 18,
+                        color: canSend ? Neutral.surface : const Color(0x66000000), weight: 1.8)),
+                    )),
+                  ),
+                ),
+              ),
             ],
           ),
+          ),
+          if (!typing && _askText.text.trim().isEmpty) ...[
+            const SizedBox(height: 4),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                for (final text in _suggestions)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 16),
+                    child: Semantics(
+                      button: true,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () { Haptics.tick(); _send(text); },
+                        child: SizedBox(height: 44, child: Center(
+                          child: Text(text, style: Txt.small.copyWith(color: const Color(0xB3000000))),
+                        )),
+                      ),
+                    ),
+                  ),
+              ]),
+            ),
+          ],
         ],
       ),
     );
@@ -1082,11 +1139,14 @@ class _EditScreenState extends State<EditScreen> {
                 behavior: HitTestBehavior.opaque,
                 onTap: () {
                   Haptics.tick();
-                  setState(() => _advanced = !_advanced);
+                  setState(() {
+                    _advanced = !_advanced;
+                    if (!_advanced && _r.excludedColors.isEmpty) _excluding = false;
+                  });
                 },
                 child: Row(
                   children: [
-                    Text('Values', style: Txt.small.copyWith(color: _advanced ? Neutral.primary : Neutral.tertiary)),
+                    Text(_tool == _Tool.accent ? 'Advanced' : 'Values', style: Txt.small.copyWith(color: _advanced ? Neutral.primary : Neutral.tertiary)),
                     const SizedBox(width: 8),
                     _MiniToggle(on: _advanced),
                   ],
@@ -1095,14 +1155,20 @@ class _EditScreenState extends State<EditScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          SizedBox(
-            height: 138,
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            alignment: Alignment.topCenter,
+            curve: Motion.settle,
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
               switchInCurve: Motion.settle,
               switchOutCurve: Curves.easeInCubic,
               transitionBuilder: softSwitch,
-              child: KeyedSubtree(key: ValueKey(_tool), child: _toolBody()),
+              child: SizedBox(
+                key: ValueKey(_tool),
+                height: _tool == _Tool.area ? 182 : _showColorModes ? 174 : 138,
+                child: _toolBody(),
+              ),
             ),
           ),
           const SizedBox(height: 6),
@@ -1152,10 +1218,30 @@ class _EditScreenState extends State<EditScreen> {
   };
 
   String get _toolTitle => switch (_tool) {
-    _Tool.accent => _adding ? 'Tap the photo to add a color' : 'Tap the photo to change this color',
+    _Tool.accent => _excluding
+        ? (_adding ? 'Tap a color to exclude' : 'Adjust the color to exclude')
+        : (_adding ? 'Tap the photo to add a color' : 'Tap the photo to change this color'),
     _Tool.area => _erase ? 'Paint to take color away' : 'Tap a thing, or paint over it',
     _Tool.mono => 'The black and white part',
   };
+
+  Widget _colorMode(String label, int count, bool exclude) {
+    final selected = _excluding == exclude;
+    return Semantics(
+      button: true, selected: selected,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _setExcluding(exclude),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text('$label · $count', style: Txt.small.copyWith(
+            color: selected ? Neutral.primary : Neutral.secondary,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          )),
+        ),
+      ),
+    );
+  }
 
   Widget _toolBody() {
     switch (_tool) {
@@ -1164,6 +1250,15 @@ class _EditScreenState extends State<EditScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_showColorModes)
+              SizedBox(
+                height: 36,
+                child: Row(children: [
+                  _colorMode('Keep', _r.colors.length, false),
+                  const SizedBox(width: 22),
+                  _colorMode('Exclude', _r.excludedColors.length, true),
+                ]),
+              ),
             SizedBox(
               height: 44,
               child: Row(
@@ -1214,21 +1309,8 @@ class _EditScreenState extends State<EditScreen> {
               onEnd: () => setState(() => _sizing = false),
               onChanged: (v) => setState(() => _brush = v / 100),
             ),
-            SliderRow(
-              height: 44,
-              label: 'Feather',
-              value: (_r.area?.edge ?? 0.015) * 100,
-              min: 0,
-              max: 10,
-              defaultValue: 1.5,
-              advanced: _advanced,
-              onStart: () {
-                _push(_r.copy());
-                _slide(true);
-              },
-              onEnd: () => _slide(false),
-              onChanged: (v) => _change(() => (_r.area ??= Area(edge: 0.015)).edge = v / 100, record: false),
-            ),
+            _areaSlider(feather: false),
+            _areaSlider(feather: true),
           ],
         );
       case _Tool.mono:
@@ -1344,6 +1426,45 @@ class _EditScreenState extends State<EditScreen> {
     ),
   );
 
+  double get _sourceShort => math.max(1, math.min(_it.width, _it.height)).toDouble();
+
+  void _setAreaValue(double pixels, {required bool feather, bool record = true}) {
+    _change(() {
+      final area = _r.area ??= Area(edge: Area.defaultEdgeFor(_sourceShort));
+      if (feather) { area.edge = pixels / _sourceShort; }
+      else { area.boundary = pixels / _sourceShort; }
+    }, record: record);
+  }
+
+  Future<void> _enterAreaValue({required bool feather}) async {
+    final value = (feather ? _r.area?.edge ?? Area.defaultEdgeFor(_sourceShort) : _r.area?.boundary ?? 0) * _sourceShort;
+    final result = await showCupertinoDialog<double>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => _AreaValueDialog(value: value, shortSide: _sourceShort, feather: feather),
+    );
+    if (result != null && mounted) _setAreaValue(result, feather: feather);
+  }
+
+  Widget _areaSlider({required bool feather}) {
+    final value = (feather ? _r.area?.edge ?? Area.defaultEdgeFor(_sourceShort) : _r.area?.boundary ?? 0) * _sourceShort;
+    final span = math.max(_sourceShort * 0.1, value.abs());
+    return SliderRow(
+      height: 44,
+      label: feather ? 'Feather' : 'Boundary',
+      value: value,
+      min: feather ? 0 : -span,
+      max: span,
+      defaultValue: feather ? Area.defaultFeatherPixels : 0,
+      advanced: true,
+      valueLabel: '${!feather && value > 0 ? '+' : ''}${value.toStringAsFixed(1)} px',
+      onValueTap: () => _enterAreaValue(feather: feather),
+      onStart: () { _push(_r.copy()); _slide(true); },
+      onEnd: () => _slide(false),
+      onChanged: (v) => _setAreaValue(v.roundToDouble(), feather: feather, record: false),
+    );
+  }
+
   /// How far the selected color reaches: the same Width and Edge as the camera.
   Widget _reach(KeptColor c) => Column(
     key: const ValueKey('reach'),
@@ -1354,7 +1475,7 @@ class _EditScreenState extends State<EditScreen> {
         value: c.width,
         min: 0,
         max: 60,
-        defaultValue: 16,
+        defaultValue: _excluding ? Recipe.defaultExcludeWidth : 16,
         advanced: _advanced,
         detail: '${((c.hue - c.width + 360) % 360).round()}°–${((c.hue + c.width) % 360).round()}°',
         onStart: () {
@@ -1370,7 +1491,7 @@ class _EditScreenState extends State<EditScreen> {
         value: c.softness,
         min: 0,
         max: 60,
-        defaultValue: 20,
+        defaultValue: _excluding ? Recipe.defaultExcludeSoftness : 20,
         advanced: _advanced,
         detail: '+${c.softness.round()}°',
         onStart: () {
@@ -1386,9 +1507,9 @@ class _EditScreenState extends State<EditScreen> {
   /// A kept color, or the slot to add one into. The selected one is ringed
   /// and carries the cross that takes it away, as in the camera.
   Widget _slot(int i) {
-    final filled = i < _r.colors.length;
+    final filled = i < _colors.length;
     final sel = filled ? i == _active : _adding;
-    final c = filled ? _r.colors[i] : null;
+    final c = filled ? _colors[i] : null;
     const s = 38.0;
     return SizedBox(
       width: s + 6,
@@ -1819,4 +1940,54 @@ class _VignetteRing extends CustomPainter {
 
   @override
   bool shouldRepaint(_VignetteRing old) => old.radius != radius;
+}
+
+
+class _AreaValueDialog extends StatefulWidget {
+  const _AreaValueDialog({required this.value, required this.shortSide, required this.feather});
+  final double value, shortSide;
+  final bool feather;
+
+  @override
+  State<_AreaValueDialog> createState() => _AreaValueDialogState();
+}
+
+class _AreaValueDialogState extends State<_AreaValueDialog> {
+  late final _controller = TextEditingController(text: widget.value.toStringAsFixed(1));
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => CupertinoAlertDialog(
+    title: Text(widget.feather ? 'Feather' : 'Boundary'),
+    content: Column(children: [
+      Text(widget.feather ? 'Fade width outside the full-opacity boundary, in original-photo pixels.'
+          : '0 px keeps the drawn area fully opaque. Positive expands; negative contracts. Values use original-photo pixels.'),
+      const SizedBox(height: 12),
+      CupertinoTextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.numberWithOptions(signed: !widget.feather, decimal: true),
+        suffix: const Padding(padding: EdgeInsets.only(right: 8), child: Text('px')),
+      ),
+      if (_error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_error!)),
+    ]),
+    actions: [
+      CupertinoDialogAction(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+      CupertinoDialogAction(onPressed: () => Navigator.pop(context, widget.feather ? Area.defaultFeatherPixels : 0.0), child: const Text('Reset')),
+      CupertinoDialogAction(isDefaultAction: true, onPressed: () {
+        final n = double.tryParse(_controller.text.trim());
+        if (n == null || !n.isFinite || n < (widget.feather ? 0 : -widget.shortSide) || n > widget.shortSide) {
+          setState(() => _error = 'Enter a value from ${widget.feather ? 0 : -widget.shortSide.round()} to ${widget.shortSide.round()} px.');
+          return;
+        }
+        Navigator.pop(context, n);
+      }, child: const Text('Apply')),
+    ],
+  );
 }

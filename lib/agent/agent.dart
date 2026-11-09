@@ -13,14 +13,14 @@ import '../core/renderer.dart';
 /// deterministic renderer; the agent only chooses settings.
 abstract class DevelopAgent {
   String get name;
-  Future<Recipe> develop(Rgba photo, {void Function(String)? log, AgentRun? run});
+  Future<Recipe> develop(Rgba photo, {void Function(String)? log, AgentRun? run, ({int width, int height})? originalSize});
 
   /// Cheap look before developing: is there a subject whose colors are
   /// worth keeping? Photos that are not wait for a person.
-  Future<Verdict> judge(Rgba photo) async => const Verdict(true);
+  Future<Verdict> judge(Rgba photo, {AgentRun? run}) async => const Verdict(true);
 
   /// Change [current] the way the person asks, and nothing else.
-  Future<Recipe> revise(Rgba photo, Recipe current, Revision request, {void Function(String)? log, AgentRun? run}) =>
+  Future<Recipe> revise(Rgba photo, Recipe current, Revision request, {void Function(String)? log, AgentRun? run, ({int width, int height})? originalSize}) =>
       Future.error(AgentError('Asking needs the cloud agent'));
 }
 
@@ -99,6 +99,7 @@ class AgentRun {
   String status = 'Looking';
 
   bool get cancelled => _cancel.isCompleted;
+  Future<void> get whenCancelled => _cancel.future;
   Stream<Recipe> get changes => _changes.stream;
 
   void cancel() {
@@ -120,6 +121,7 @@ class AgentRun {
   /// or why it failed.
   Recipe? result;
   String? note;
+  String? requestText;
   String? error;
 
   /// [f], unless the run is cancelled first.
@@ -134,14 +136,23 @@ class AgentCancelled implements Exception {
   String toString() => 'cancelled';
 }
 
+/// Optional platform capability. CLI tools retain the same deterministic core.
+typedef SubjectExtractor = Future<List<List<List<double>>>?> Function(Rgba photo, double x, double y);
+
 /// The tools the agent works with. The human Edit screen changes the same
 /// fields, so anything the agent does, a person can redo or undo.
 class EditSession {
-  EditSession(this.photo, {Recipe? start, this.marks = const []})
+  EditSession(this.photo, {Recipe? start, this.marks = const [], this.originalSize})
       : lab = toLab(photo),
         recipe = start?.copy() ?? Recipe();
 
   final Rgba photo;
+  SubjectExtractor? subjectExtractor;
+  final ({int width, int height})? originalSize;
+  int get originalShortSide => math.max(1, math.min(originalSize?.width ?? photo.width, originalSize?.height ?? photo.height));
+  String get sizeDescription => 'Preview ${photo.width}x${photo.height}; original photo '
+      '${originalSize?.width ?? photo.width}x${originalSize?.height ?? photo.height}. '
+      'Boundary and Feather pixel values refer to the original photo, not the preview.';
   final Lab lab;
   final Recipe recipe;
   final List<Mark> marks;
@@ -196,13 +207,67 @@ class EditSession {
     return n == 0 ? 0 : sum / n;
   }
 
+  /// Uses exactly the native object extraction called by a human Area tap.
+  Future<String> selectSubject(Map<String, dynamic> args) async {
+    final x = (args['x'] as num?)?.toDouble(), y = (args['y'] as num?)?.toDouble();
+    final mode = args['mode'] as String? ?? 'replace';
+    if (x == null || y == null || !x.isFinite || !y.isFinite || x < 0 || x > 1 || y < 0 || y > 1) {
+      return 'error: x and y must be normalized photo coordinates from 0 to 1.';
+    }
+    if (mode != 'replace' && mode != 'add') return 'error: mode must be replace or add.';
+    final polygons = await subjectExtractor?.call(photo, x, y);
+    if (polygons == null) return 'error: on-device object extraction is unavailable. Area was not changed. Use set_area if needed.';
+    if (polygons.isEmpty) return 'error: no object found at that point. Area was not changed. Try a point inside the subject or use set_area.';
+    final area = recipe.area?.copy() ?? Area(edge: Area.defaultEdgeFor(originalShortSide));
+    if (mode == 'replace') { area.polygons = []; area.ellipses = []; area.strokes = []; }
+    area.polygons = [...area.polygons, ...polygons];
+    recipe.area = area;
+    return 'ok; extracted ${polygons.length} object contours using the on-device Area tool. Boundary and Feather were preserved. Render to inspect; adjust_area can refine the edges.';
+  }
+
   String execute(String name, Map<String, dynamic> args) {
     double? d(String k) => (args[k] as num?)?.toDouble();
     int? i(String k) => (args[k] as num?)?.toInt();
     KeptColor? at(int? index) =>
         index != null && index >= 0 && index < recipe.colors.length ? recipe.colors[index] : null;
 
+    KeptColor? excludedAt(int? index) => index != null && index >= 0 && index < recipe.excludedColors.length
+        ? recipe.excludedColors[index] : null;
+    KeptColor? pickedColor() {
+      if (args['hex'] is String) {
+        final color = keptColorFromHex(args['hex'] as String);
+        if (color != null) return color;
+      }
+      final x = d('x'), y = d('y');
+      return x == null || y == null ? null : sampleColor(lab, x.clamp(0, 1), y.clamp(0, 1));
+    }
+
     switch (name) {
+      case 'exclude_color':
+        if (recipe.excludedColors.length >= Recipe.maxColors) return 'error: already ${Recipe.maxColors} exclusions';
+        final c = pickedColor();
+        if (c == null) return 'error: give x,y or hex';
+        c
+          ..width = (d('width') ?? Recipe.defaultExcludeWidth).clamp(0, 60)
+          ..softness = (d('softness') ?? Recipe.defaultExcludeSoftness).clamp(0, 60);
+        recipe.excludedColors.add(c);
+        return 'excluded color ${recipe.excludedColors.length - 1}: ${oklabToHex(c.l, c.a, c.b)}';
+      case 'set_excluded_color':
+        final old = excludedAt(i('index'));
+        if (old == null) return 'error: no such excluded color';
+        if (args.containsKey('hex') || args.containsKey('x') || args.containsKey('y')) {
+          final c = pickedColor();
+          if (c == null) return 'error: give x,y or hex';
+          old..l = c.l..a = c.a..b = c.b;
+        }
+        if (d('width') case final width?) old.width = width.clamp(0, 60);
+        if (d('softness') case final softness?) old.softness = softness.clamp(0, 60);
+        return 'ok';
+      case 'remove_excluded_color':
+        final c = excludedAt(i('index'));
+        if (c == null) return 'error: no such excluded color';
+        recipe.excludedColors.remove(c);
+        return 'ok';
       case 'probe':
         final pts = (args['points'] as List? ?? []).cast<List>();
         return pts.map((p) {
@@ -255,9 +320,27 @@ class EditSession {
         }
         return 'ok';
       case 'set_area':
-        final a = Area.fromJson(args);
+        final a = Area.fromJson({...args, 'edge': args['edge'] ?? recipe.area?.edge ?? Area.defaultEdgeFor(originalShortSide),
+          'boundary': args['boundary'] ?? recipe.area?.boundary ?? 0});
         recipe.area = a.isEmpty ? null : a;
         return a.isEmpty ? 'area cleared' : 'ok';
+      case 'adjust_area':
+        if ((d('boundary') != null && d('boundary_px') != null) ||
+            (d('edge') != null && d('feather_px') != null)) {
+          return 'error: use either fractional or pixel units for each adjustment';
+        }
+        final boundary = d('boundary') ?? (d('boundary_px') == null ? null : d('boundary_px')! / originalShortSide);
+        final edge = d('edge') ?? (d('feather_px') == null ? null : d('feather_px')! / originalShortSide);
+        if ((boundary == null && edge == null) ||
+            (boundary != null && (!boundary.isFinite || boundary.abs() > 1)) ||
+            (edge != null && (!edge.isFinite || edge < 0 || edge > 1))) {
+          return 'error: boundary must be -1..1 and edge 0..1 (or equivalent original-photo pixels); give at least one';
+        }
+        final area = recipe.area ??= Area(edge: Area.defaultEdgeFor(originalShortSide));
+        if (boundary != null) area.boundary = boundary;
+        if (edge != null) area.edge = edge;
+        return 'ok; Boundary ${(area.boundary * originalShortSide).toStringAsFixed(1)} px; '
+            'Feather ${(area.edge * originalShortSide).toStringAsFixed(1)} px (original photo)';
       case 'set_mono_tone':
         if (args['contrast'] != null) recipe.contrast = d('contrast')!.clamp(-0.3, 0.4);
         if (args['atmosphere'] != null) recipe.ambience = d('atmosphere')!.clamp(0.0, 1.0);
@@ -297,7 +380,7 @@ class LocalAgent extends DevelopAgent {
   String get name => 'on-device';
 
   @override
-  Future<Recipe> develop(Rgba photo, {void Function(String)? log, AgentRun? run}) async {
+  Future<Recipe> develop(Rgba photo, {void Function(String)? log, AgentRun? run, ({int width, int height})? originalSize}) async {
     final r = await (run?.guard(_pickAsync(photo)) ?? _pickAsync(photo));
     run?.emit(r, 'finish');
     return r;

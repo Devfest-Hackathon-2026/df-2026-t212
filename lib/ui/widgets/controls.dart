@@ -54,6 +54,8 @@ class SliderRow extends StatelessWidget {
     required this.onEnd,
     this.advanced = false,
     this.detail,
+    this.valueLabel,
+    this.onValueTap,
   });
   final String label;
   final double value, min, max, defaultValue;
@@ -61,6 +63,8 @@ class SliderRow extends StatelessWidget {
   final VoidCallback onStart, onEnd;
   final bool advanced;
   final String? detail;
+  final String? valueLabel;
+  final VoidCallback? onValueTap;
   final double height;
 
   @override
@@ -90,12 +94,17 @@ class SliderRow extends StatelessWidget {
           if (advanced)
             SizedBox(
               width: 92,
-              child: Text(
-                detail == null
-                    ? value.toStringAsFixed(1)
-                    : '${value.round()}  $detail',
-                textAlign: TextAlign.right,
-                style: Txt.mono.copyWith(fontSize: 10),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onValueTap,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    valueLabel ?? (detail == null ? value.toStringAsFixed(1) : '${value.round()}  $detail'),
+                    textAlign: TextAlign.right,
+                    style: Txt.mono.copyWith(fontSize: 10),
+                  ),
+                ),
               ),
             ),
         ],

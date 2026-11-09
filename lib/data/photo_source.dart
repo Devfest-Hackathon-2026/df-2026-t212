@@ -155,11 +155,34 @@ class PhotoSource {
     }
   }
 
-  /// Decoded RGBA pixels, long side at most [maxSide].
-  static Future<Rgba?> pixels(String id, int maxSide) async {
+  // Shared across badge colors and render requests. A bounded decoded cache
+  // avoids repeated native reads without retaining the whole photo library.
+  static final _pixels = <String, Rgba>{};
+  static final _loadingPixels = <String, Future<Rgba?>>{};
+  static int _pixelBytes = 0;
+  static const _pixelBudget = 24 * 1024 * 1024;
+
+  static Future<Rgba?> pixels(String id, int maxSide) {
+    final key = '$id@$maxSide';
+    final hit = _pixels.remove(key);
+    if (hit != null) {
+      _pixels[key] = hit;
+      return Future.value(hit);
+    }
+    return _loadingPixels.putIfAbsent(key, () => _decodePhoto(id, maxSide, key)
+        .whenComplete(() { _loadingPixels.remove(key); }));
+  }
+
+  static Future<Rgba?> _decodePhoto(String id, int maxSide, String key) async {
     final bytes = await jpeg(id, maxSide);
     if (bytes == null) return null;
-    return decodeRgba(bytes, maxSide: maxSide);
+    final pixels = await decodeRgba(bytes, maxSide: maxSide);
+    _pixels[key] = pixels;
+    _pixelBytes += pixels.pixels.lengthInBytes;
+    while (_pixelBytes > _pixelBudget && _pixels.isNotEmpty) {
+      _pixelBytes -= _pixels.remove(_pixels.keys.first)!.pixels.lengthInBytes;
+    }
+    return pixels;
   }
 
   /// The original file, for sharing.

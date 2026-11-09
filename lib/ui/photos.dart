@@ -1,5 +1,7 @@
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/gestures.dart';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
@@ -8,12 +10,18 @@ import '../core/recipe.dart';
 import '../data/photo_source.dart';
 import '../data/store.dart';
 import 'detail.dart';
+import 'activity.dart';
 import 'settings.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
+import 'widgets/sweep_selection.dart';
+import 'widgets/development_bar.dart';
+import 'widgets/confirm_remove.dart';
+import 'widgets/agent_work_status.dart';
 
 class PhotosScreen extends StatefulWidget {
-  const PhotosScreen({super.key});
+  const PhotosScreen({super.key, this.onSelectionChanged});
+  final ValueChanged<bool>? onSelectionChanged;
 
   @override
   State<PhotosScreen> createState() => _PhotosScreenState();
@@ -24,7 +32,52 @@ class _PhotosScreenState extends State<PhotosScreen> {
   int _columns = 3;
   double _scaleStart = 1;
   final Set<String> _selected = {};
-  bool get _selecting => _selected.isNotEmpty;
+  bool _selecting = false;
+  void _setSelecting(bool value, {PhotoItem? first}) {
+    _sweep.end();
+    setState(() {
+      _selecting = value;
+      if (!value) _selected.clear();
+      if (first != null) _selected.add(first.key);
+    });
+    widget.onSelectionChanged?.call(value);
+  }
+
+  late final _sweep = SweepSelection(
+    scroll: _scroll,
+    order: () {
+      final list = _selecting ? s.visible : s.galleryItems;
+      if (!s.groupByMonth) return list.map((it) => it.key).toList();
+      final groups = <String, List<String>>{};
+      for (final it in list) {
+        groups.putIfAbsent('${it.taken.year}-${it.taken.month}', () => []).add(it.key);
+      }
+      return groups.values.expand((group) => group).toList();
+    },
+    selection: () => _selected,
+    onChanged: (next) => setState(() { _selected.clear(); _selected.addAll(next); }),
+    onStep: Haptics.tick,
+    onStart: () {
+      if (!_selecting) {
+        setState(() => _selecting = true);
+        widget.onSelectionChanged?.call(true);
+      }
+      Haptics.light();
+    },
+    insets: () {
+      final pad = MediaQuery.paddingOf(context);
+      return EdgeInsets.only(top: pad.top + 44, bottom: pad.bottom + 72);
+    },
+  );
+
+  Widget _clearSelection() => TextAction(
+    'Deselect all',
+    onTap: _selected.isEmpty ? null : () {
+      _sweep.end();
+      setState(_selected.clear);
+      Haptics.tick();
+    },
+  );
 
   /// Photos that already played their color-return this session.
   static final Set<String> _played = {};
@@ -40,6 +93,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
 
   @override
   void dispose() {
+    _sweep.end();
     _scroll.dispose();
     _offset.dispose();
     super.dispose();
@@ -54,7 +108,9 @@ class _PhotosScreenState extends State<PhotosScreen> {
       return;
     }
     s.markSeen(it);
-    Navigator.of(context).push(DetailRoute(items: list, index: list.indexOf(it)));
+    final group = s.groupFor(it);
+    final viewing = group == null ? list : s.groupItems(group);
+    Navigator.of(context).push(DetailRoute(items: viewing, index: viewing.indexOf(it), groupId: group?.id));
   }
 
   void _onScaleEnd() {
@@ -77,12 +133,25 @@ class _PhotosScreenState extends State<PhotosScreen> {
     return ListenableBuilder(
       listenable: s,
       builder: (context, _) {
-        final list = s.visible;
+        final list = _selecting ? s.visible : s.galleryItems;
+        final visibleKeys = list.map((it) => it.key).toSet();
+        _sweep.retainKeys(visibleKeys);
+        final hasDevelopment = s.items.any((it) => it.shown && (it.isUndeveloped || (it.state == Develop.pending || it.state == Develop.developing)));
         return Stack(
+          key: _sweep.viewportKey,
           children: [
             GestureDetector(
-              onScaleUpdate: (d) => _scaleStart = d.scale,
-              onScaleEnd: (_) => _onScaleEnd(),
+              dragStartBehavior: DragStartBehavior.down,
+              onScaleUpdate: _selecting ? null : (d) => _scaleStart = d.scale,
+              onScaleEnd: _selecting ? null : (_) => _onScaleEnd(),
+              onHorizontalDragStart: _selecting ? (d) => _sweep.begin(d.globalPosition) : null,
+              onHorizontalDragUpdate: _selecting ? (d) => _sweep.move(d.globalPosition) : null,
+              onHorizontalDragEnd: _selecting ? (_) => _sweep.end() : null,
+              onHorizontalDragCancel: _selecting ? _sweep.end : null,
+              onLongPressStart: (d) => _sweep.begin(d.globalPosition),
+              onLongPressMoveUpdate: (d) => _sweep.move(d.globalPosition),
+              onLongPressEnd: (_) => _sweep.end(),
+              onLongPressCancel: _sweep.end,
               child: CustomScrollView(
                 controller: _scroll,
                 slivers: [
@@ -92,16 +161,23 @@ class _PhotosScreenState extends State<PhotosScreen> {
                   if (s.palette.isNotEmpty) SliverToBoxAdapter(child: _paletteRow()),
                   if (list.isEmpty)
                     SliverFillRemaining(hasScrollBody: false, child: _empty())
-                  else if (s.sort == SortMode.time)
+                  else if (s.groupByMonth)
                     ..._byMonth(list)
                   else
                     _grid(list, list),
                   if (list.isNotEmpty) SliverToBoxAdapter(child: _more()),
-                  SliverToBoxAdapter(child: SizedBox(height: pad.bottom + 96)),
+                  SliverToBoxAdapter(child: SizedBox(height: pad.bottom + (hasDevelopment ? 156 : 96))),
                 ],
               ),
             ),
             _topBar(pad),
+            if (!_selecting)
+              Positioned(
+                left: 20, right: 20, bottom: pad.bottom + 78,
+                child: DevelopmentBar(onReview: (items) {
+                  Navigator.of(context).push(DetailRoute(items: items, index: 0, developmentBatch: true));
+                }),
+              ),
             if (_selecting) _selectionBar(pad),
           ],
         );
@@ -122,6 +198,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
           final t = ((o - 36) / 28).clamp(0.0, 1.0);
           if (t == 0) return const SizedBox.shrink();
           return IgnorePointer(
+            ignoring: !_selecting,
             child: Opacity(
               opacity: t,
               child: ClipRect(
@@ -139,7 +216,15 @@ class _PhotosScreenState extends State<PhotosScreen> {
                       ),
                       border: Border(bottom: BorderSide(color: Color(0x14000000), width: 0.5)),
                     ),
-                    child: Text(_selecting ? '${_selected.length} selected' : 'Photos', style: Txt.label),
+                    child: _selecting
+                        ? Row(children: [
+                            const SizedBox(width: 20),
+                            Expanded(child: Text('${_selected.length} selected', style: Txt.label)),
+                            _clearSelection(),
+                            TextAction('Done', onTap: () => _setSelecting(false)),
+                            const SizedBox(width: 10),
+                          ])
+                        : Text('Photos', style: Txt.label),
                   ),
                 ),
               ),
@@ -153,29 +238,31 @@ class _PhotosScreenState extends State<PhotosScreen> {
   Widget _header() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 10, 4),
-      child: Row(
-        children: [
-          Text(_selecting ? '${_selected.length} selected' : 'Photos', style: Txt.display),
-          const Spacer(),
-          if (_selecting)
-            TextAction('Done', onTap: () => setState(_selected.clear))
-          else ...[
-            _SortSwitch(value: s.sort, onChanged: s.setSort),
-            TextAction(
-              'Settings',
-              color: Neutral.secondary,
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
-            ),
+      child: Column(children: [
+        SizedBox(height: 48, child: Row(children: [
+          Expanded(child: Text(_selecting ? '${_selected.length} selected' : 'Photos', style: _selecting ? Txt.label : Txt.display)),
+          if (_selecting) ...[
+            _clearSelection(),
+            TextAction('Done', onTap: () => _setSelecting(false)),
+          ] else ...[
+            TextAction('Select', color: Neutral.secondary, onTap: () => _setSelecting(true)),
+            Semantics(excludeSemantics: true, label: 'Activity${s.unreadActivity > 0 ? ', ${s.unreadActivity} unread' : ''}', button: true,
+              child: IconButton(tooltip: 'Activity', onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const ActivityScreen())),
+                icon: Badge(isLabelVisible: s.unreadActivity > 0, backgroundColor: Neutral.primary,
+                  child: const Glyph(G.bell, size: 21, color: Neutral.secondary)))),
+            IconButton(tooltip: 'Settings', icon: const Glyph(G.settings, size: 21, color: Neutral.secondary),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen()))),
           ],
-        ],
-      ),
+        ])),
+      ]),
     );
   }
 
   Widget _status() {
     String? text;
     if (s.access == Access.limited) text = 'Showing selected photos only';
-    if (s.developing) text = 'Developing ${s.doneCount + 1} of ${s.doneCount + s.pendingCount}';
+
     return AnimatedSize(
       duration: const Duration(milliseconds: 300),
       curve: Motion.settle,
@@ -185,9 +272,8 @@ class _PhotosScreenState extends State<PhotosScreen> {
               padding: const EdgeInsets.fromLTRB(20, 2, 20, 10),
               child: Row(
                 children: [
-                  if (s.developing) ...[const _Pulse(), const SizedBox(width: 8)],
                   Text(text, style: Txt.mono),
-                  if (s.access == Access.limited && !s.developing) ...[
+                  if (s.access == Access.limited) ...[
                     const Spacer(),
                     GestureDetector(
                       onTap: () async {
@@ -317,9 +403,12 @@ class _PhotosScreenState extends State<PhotosScreen> {
           final done = it.state == Develop.done;
           final play = done && !_played.contains(it.key) && !it.seen;
           if (done) _played.add(it.key);
-          return _Tile(
+          return KeyedSubtree(
+            key: _sweep.keyFor(it.key),
+            child: _Tile(
             key: ValueKey(it.key),
             item: it,
+            groupCount: _selecting ? 1 : (s.groupFor(it)?.members.length ?? 1),
             play: play,
             size: _columns == 1 ? 1000 : (_columns == 3 ? 420 : 260),
             radius: switch (_columns) {
@@ -328,11 +417,9 @@ class _PhotosScreenState extends State<PhotosScreen> {
               _ => 4.0,
             },
             selected: _selected.contains(it.key),
+            selecting: _selecting,
             onTap: () => _open(it, all),
-            onLongPress: () {
-              Haptics.light();
-              setState(() => _selected.add(it.key));
-            },
+            ),
           );
         }, childCount: items.length),
       ),
@@ -392,52 +479,53 @@ class _PhotosScreenState extends State<PhotosScreen> {
     );
   }
 
+  final _selectionMoreKey = GlobalKey();
+
   Widget _selectionBar(EdgeInsets pad) {
     final sel = _selected.map(s.byKey).whereType<PhotoItem>().toList();
+    final canAuto = sel.any((it) => it.isUndeveloped);
+    final canShare = sel.isNotEmpty && sel.every((it) => it.edit != null);
     return Positioned(
-      left: 20,
-      right: 20,
-      bottom: pad.bottom + 78,
+      left: 20, right: 20, bottom: pad.bottom + 10,
       child: Glass(
-        radius: 22,
-        padding: const EdgeInsets.symmetric(horizontal: 6),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            TextAction(
-              'Paste Edit',
-              onTap: s.clipboard == null
-                  ? null
-                  : () {
-                      s.pasteEdit(sel);
-                      setState(_selected.clear);
-                    },
-            ),
-            TextAction(
-              'Share',
-              onTap: () async {
-                final files = <XFile>[];
-                for (final it in sel) {
-                  final f = await s.rendered(it, 2048);
-                  if (f != null) files.add(XFile(f.path));
-                }
-                await SharePlus.instance.share(ShareParams(files: files));
-              },
-            ),
-            TextAction(
-              'Remove',
-              onTap: () {
-                for (final it in sel) {
-                  s.remove(it);
-                }
-                setState(_selected.clear);
-              },
-            ),
-          ],
-        ),
+        dock: true,
+        radius: 28,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+          TextAction('Auto', onTap: !canAuto ? null : () {
+            s.autoDevelopUndeveloped(sel);
+            _setSelecting(false);
+          }),
+          TextAction('Share', onTap: !canShare ? null : () async {
+            final files = <XFile>[];
+            for (final it in sel) {
+              final f = await s.rendered(it, 2048);
+              if (f != null) files.add(XFile(f.path));
+            }
+            if (files.isNotEmpty) await SharePlus.instance.share(ShareParams(files: files));
+          }),
+          if (s.clipboard == null)
+            TextAction('Group', onTap: sel.length < 2 ? null : () {
+              s.groupPhotos(sel); Haptics.light(); _setSelecting(false);
+            })
+          else
+            KeyedSubtree(key: _selectionMoreKey, child: TextAction('More', onTap: () {
+              final box = _selectionMoreKey.currentContext!.findRenderObject() as RenderBox;
+              showPopMenu(context, from: box.localToGlobal(Offset.zero) & box.size, items: [
+                PopItem('Group photos', sel.length < 2 ? null : () { s.groupPhotos(sel); _setSelecting(false); }),
+                PopItem('Paste Edit', sel.isEmpty ? null : () { s.pasteEdit(sel); _setSelecting(false); }),
+              ]);
+            })),
+          TextAction('Remove', onTap: sel.isEmpty ? null : () async {
+            if (!await confirmRemovePhotos(context, sel.length) || !mounted) return;
+            for (final it in sel) { s.remove(it); }
+            _setSelecting(false);
+          }),
+        ].map((action) => Expanded(child: Center(child: action))).toList()),
       ),
     );
   }
+
 }
 
 class _Tile extends StatelessWidget {
@@ -447,21 +535,27 @@ class _Tile extends StatelessWidget {
     required this.play,
     required this.size,
     required this.onTap,
-    required this.onLongPress,
     this.selected = false,
+    this.selecting = false,
+    this.groupCount = 1,
     this.radius = 0,
   });
   final PhotoItem item;
-  final bool play, selected;
+  final bool play, selected, selecting;
   final double radius;
   final int size;
-  final VoidCallback onTap, onLongPress;
+  final int groupCount;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final store = Store.instance;
+    final group = store.groupFor(item);
+    final run = store.runFor(item) ?? (group == null ? null :
+      store.groupItems(group).map(store.runFor).where((run) => run != null && !run.cancelled).firstOrNull);
+    final agentEditing = run != null && !run.cancelled;
     return GestureDetector(
       onTap: onTap,
-      onLongPress: onLongPress,
       child: AnimatedScale(
         scale: selected ? 0.9 : 1,
         duration: const Duration(milliseconds: 220),
@@ -505,7 +599,24 @@ class _Tile extends StatelessWidget {
                       ),
                     ),
                 ],
-                if (!item.seen && item.state == Develop.done)
+                if (item.isUndeveloped || item.state == Develop.pending || item.state == Develop.developing)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xB31C1C1C),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+                          child: Text(item.state == Develop.pending ? 'Queued' : item.state == Develop.developing ? 'Developing' : 'Undeveloped', style: Txt.mono.copyWith(fontSize: 9, color: Colors.white)),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (!item.seen && item.state == Develop.done && !agentEditing)
                   Positioned(
                     top: 7,
                     right: 7,
@@ -519,7 +630,7 @@ class _Tile extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (!selected && (item.favorite || (item.state == Develop.done && item.hues.isNotEmpty))) ...[
+                if (!selecting && (item.favorite || (item.state == Develop.done && item.hues.isNotEmpty))) ...[
                   // The bottom darkens a little so the heart and the palette
                   // read on any photo.
                   const Positioned.fill(
@@ -560,7 +671,24 @@ class _Tile extends StatelessWidget {
                       ),
                     ),
                 ],
-                if (selected)
+                if (agentEditing)
+                  Positioned(left: 6, right: 6, bottom: 27,
+                    child: IgnorePointer(child: Align(alignment: Alignment.centerLeft,
+                      child: AgentWorkStatus(run: run, compact: true)))),
+                if (groupCount > 1 && !selecting)
+                  Positioned(
+                    left: 6, top: 6,
+                    child: Semantics(label: '$groupCount grouped photos', child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(color: const Color(0x99000000), borderRadius: BorderRadius.circular(5)),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.photo_library_outlined, size: 12, color: Colors.white),
+                        const SizedBox(width: 4),
+                        Text('$groupCount', style: Txt.small.copyWith(fontSize: 11, color: Colors.white)),
+                      ]),
+                    )),
+                  ),
+                if (selecting)
                   Positioned(
                     bottom: 7,
                     right: 7,
@@ -568,10 +696,11 @@ class _Tile extends StatelessWidget {
                       width: 18,
                       height: 18,
                       decoration: BoxDecoration(
-                        color: Neutral.primary,
+                        color: selected ? Neutral.primary : const Color(0x40000000),
                         shape: BoxShape.circle,
                         border: Border.all(color: Neutral.surface, width: 1.5),
                       ),
+                      child: selected ? const Center(child: Glyph(G.check, size: 11, color: Neutral.surface)) : null,
                     ),
                   ),
               ],
@@ -581,61 +710,6 @@ class _Tile extends StatelessWidget {
       ),
     );
   }
-}
-
-class _SortSwitch extends StatelessWidget {
-  const _SortSwitch({required this.value, required this.onChanged});
-  final SortMode value;
-  final ValueChanged<SortMode> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    Widget opt(String t, SortMode m) => GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        if (value != m) Haptics.tick();
-        onChanged(m);
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
-        child: AnimatedDefaultTextStyle(
-          duration: const Duration(milliseconds: 180),
-          curve: Motion.settle,
-          style: Txt.label.copyWith(color: value == m ? Neutral.primary : Neutral.tertiary),
-          child: Text(t),
-        ),
-      ),
-    );
-    return Row(children: [opt('Time', SortMode.time), opt('Hue', SortMode.hue)]);
-  }
-}
-
-/// Quiet breathing dot for background work.
-class _Pulse extends StatefulWidget {
-  const _Pulse();
-  @override
-  State<_Pulse> createState() => _PulseState();
-}
-
-class _PulseState extends State<_Pulse> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))
-    ..repeat(reverse: true);
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => FadeTransition(
-    opacity: Tween(begin: 0.25, end: 1.0).animate(CurvedAnimation(parent: _c, curve: Curves.easeInOut)),
-    child: Container(
-      width: 6,
-      height: 6,
-      decoration: const BoxDecoration(color: Neutral.primary, shape: BoxShape.circle),
-    ),
-  );
 }
 
 /// A slow light passing over a photo that is still developing.

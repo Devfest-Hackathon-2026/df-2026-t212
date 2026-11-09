@@ -9,6 +9,7 @@ enum G {
   heart,
   heartFill,
   close,
+  check,
   more,
   share,
   trash,
@@ -26,6 +27,8 @@ enum G {
   up,
   camera,
   plus,
+  bell,
+  settings,
 
   /// Close up: the ultra wide, focusing near.
   macro,
@@ -173,6 +176,23 @@ class _GlyphPainter extends CustomPainter {
     }
 
     switch (g) {
+      case G.bell:
+        canvas.drawPath(Path()..moveTo(5, 17)..lineTo(6.5, 14.5)..lineTo(6.5, 10)
+          ..cubicTo(6.5, 6.8, 8.4, 4.8, 12, 4.8)..cubicTo(15.6, 4.8, 17.5, 6.8, 17.5, 10)
+          ..lineTo(17.5, 14.5)..lineTo(19, 17)..close(), line);
+        canvas.drawArc(const Rect.fromLTWH(9.5, 16.5, 5, 4.5), 0, math.pi, false, line);
+        seg(12, 3, 12, 4.8);
+      case G.settings:
+        final gear = Path();
+        for (var i = 0; i < 48; i++) {
+          final radius = switch (i % 6) { 0 || 5 => 7.0, 1 || 4 => 7.7, _ => 9.2 };
+          final angle = i * math.pi / 24 - math.pi / 2;
+          final x = 12 + math.cos(angle) * radius, y = 12 + math.sin(angle) * radius;
+          if (i == 0) { gear.moveTo(x, y); } else { gear.lineTo(x, y); }
+        }
+        gear.close();
+        canvas.drawPath(gear, line);
+        canvas.drawCircle(const Offset(12, 12), 3.2, line);
       case G.macro:
         tulip();
       case G.macroOff:
@@ -291,6 +311,9 @@ class _GlyphPainter extends CustomPainter {
             line,
           );
         }
+      case G.check:
+        canvas.drawPath(Path()..moveTo(5, 12)..lineTo(10, 17)..lineTo(19, 7), line);
+        break;
       case G.back:
         canvas.drawPath(
           Path()

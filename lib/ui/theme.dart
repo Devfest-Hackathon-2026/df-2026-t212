@@ -10,8 +10,8 @@ class Neutral {
   static const bg = Color(0xFFF3F3F2);
   static const surface = Color(0xFFFAFAF9);
   static const primary = Color(0xFF161616);
-  static const secondary = Color(0xFF6B6B6B);
-  static const tertiary = Color(0xFFA2A2A2);
+  static const secondary = Color(0xAD000000);
+  static const tertiary = Color(0x85000000);
   static const hairline = Color(0xFFE2E2E0);
   static const scrim = Color(0xFF0C0C0C);
   static const glass = Color(0xB8FAFAF9);

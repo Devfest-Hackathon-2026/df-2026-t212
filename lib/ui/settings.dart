@@ -4,6 +4,7 @@ import '../data/store.dart';
 import 'onboarding.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
+import 'widgets/swatch_examples.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -58,6 +59,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 4),
           Text('Settings', style: Txt.display),
           const SizedBox(height: 28),
+          _section('Gallery'),
+          _switch('Group by month', s.groupByMonth, (v) => setState(() => s.setGroupByMonth(v))),
+          _switch('Group similar photos', s.groupSimilarPhotos, (v) => setState(() => s.setGroupSimilarPhotos(v))),
+          Padding(padding: const EdgeInsets.only(top: 6, bottom: 8), child: Text(
+            'Group similar shots taken moments apart. Originals and edits stay separate.', style: Txt.small)),
+          _row('Swatches', switch (s.swatches) { SwatchStyle.photo => 'From the photo', SwatchStyle.soft => 'Soft', SwatchStyle.flat => 'Flat' }, () {
+            Haptics.tick();
+            setState(() => s.setSwatches(SwatchStyle.values[(s.swatches.index + 1) % SwatchStyle.values.length]));
+          }, preview: SwatchExamples(style: s.swatches)),
+          const SizedBox(height: 36),
           _section('Developing'),
           _switch('Develop new photos automatically', s.autoDevelop, (v) => setState(() => s.setAutoDevelop(v))),
           _row('Photos to show', s.months >= 1200 ? 'All photos' : 'Last ${s.months} months', () async {
@@ -70,10 +81,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (m != null) setState(() => s.setMonths(m));
           }),
           _switch('Skip screenshots', s.skipScreenshots, (v) => setState(() => s.setSkipScreenshots(v))),
-          _row('Swatches', switch (s.swatches) { SwatchStyle.photo => 'From the photo', SwatchStyle.soft => 'Soft', SwatchStyle.flat => 'Flat' }, () {
-            Haptics.tick();
-            setState(() => s.setSwatches(SwatchStyle.values[(s.swatches.index + 1) % SwatchStyle.values.length]));
-          }),
           _row('Developed today', '${s.developedToday} of ${Store.dailyLimit}', null),
           _row('Model', s.agent.name, null),
           FutureBuilder<String>(
@@ -132,15 +139,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ]),
       );
 
-  Widget _row(String label, String value, VoidCallback? onTap) => GestureDetector(
+  Widget _row(String label, String value, VoidCallback? onTap, {Widget? preview}) => GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
         child: Container(
           decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Neutral.hairline, width: 0.6))),
           padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Row(children: [
-            Expanded(child: Text(label, style: Txt.label.copyWith(fontWeight: FontWeight.w400))),
-            Text(value, style: Txt.small),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(child: Text(label, style: Txt.label.copyWith(fontWeight: FontWeight.w400))),
+              Text(value, style: Txt.small),
+            ]),
+            if (preview != null) ...[const SizedBox(height: 10), preview],
           ]),
         ),
       );

@@ -13,8 +13,12 @@ import '../agent/agent.dart';
 import '../agent/apple_judge.dart';
 import '../agent/openai_agent.dart';
 import '../core/recipe.dart';
+import '../core/burst_similarity.dart';
 import '../core/renderer.dart';
 import 'photo_source.dart';
+import 'photo_patch_cache.dart';
+import 'activity.dart';
+import 'subject.dart';
 
 /// [manual]: the person develops it by hand; the agent leaves it alone.
 enum Develop { pending, developing, done, failed, manual }
@@ -40,6 +44,7 @@ class PhotoItem {
     this.asked = false,
     this.sceneOf,
     this.fingerprint,
+    this.burstPrint,
     this.captured = false,
   });
 
@@ -74,7 +79,7 @@ class PhotoItem {
   /// The person chose this photo (imported, took it over, or pressed Auto).
   bool picked;
 
-  /// Queued by "Develop more": still judged, but outside the daily limit.
+  /// Explicitly queued by the person, outside the daily limit.
   bool asked;
 
   /// Key of the photo that stands for this one's scene. The agent develops
@@ -83,6 +88,7 @@ class PhotoItem {
 
   /// The photo shrunk to 16×16 grey, to tell the same picture saved twice.
   Uint8List? fingerprint;
+  Uint8List? burstPrint;
 
   /// In the library. Photos the agent was not going to develop on its own
   /// stay out until a person picks them.
@@ -94,6 +100,7 @@ class PhotoItem {
       };
 
   bool get hasLocation => lat != null && lng != null;
+  bool get isUndeveloped => state == Develop.manual && edit == null;
   List<KeptColor> get hues => edit?.colors ?? const [];
 
   Map<String, dynamic> toJson() => {
@@ -116,6 +123,7 @@ class PhotoItem {
         if (asked) 'asked': true,
         if (sceneOf != null) 'sceneOf': sceneOf,
         if (fingerprint != null) 'print': base64Encode(fingerprint!),
+        if (burstPrint != null) 'burstPrint': base64Encode(burstPrint!),
         if (captured) 'captured': true,
       };
 
@@ -139,6 +147,7 @@ class PhotoItem {
         asked: j['asked'] as bool? ?? false,
         sceneOf: j['sceneOf'] as String?,
         fingerprint: j['print'] == null ? null : base64Decode(j['print'] as String),
+        burstPrint: j['burstPrint'] == null ? null : base64Decode(j['burstPrint'] as String),
         captured: j['captured'] as bool? ?? false,
       );
 }
@@ -154,7 +163,6 @@ class PaletteEntry {
   double get hue => color.hue;
 }
 
-enum SortMode { time, hue }
 
 enum SwatchStyle { photo, soft, flat }
 
@@ -167,9 +175,13 @@ class Store extends ChangeNotifier {
   static const _model = String.fromEnvironment('OPENAI_MODEL', defaultValue: 'gpt-6.1-terra');
   static const _judgeModel = String.fromEnvironment('OPENAI_JUDGE_MODEL', defaultValue: 'gpt-6-luna');
 
-  late final DevelopAgent agent = _apiKey.isEmpty
+  DevelopAgent? _agent;
+  @visibleForTesting
+  set agentForTesting(DevelopAgent value) => _agent = value;
+  DevelopAgent get agent => _agent ??= _apiKey.isEmpty
       ? LocalAgent()
-      : OpenAIAgent(apiKey: _apiKey, model: _model, judgeModel: _judgeModel);
+      : OpenAIAgent(apiKey: _apiKey, model: _model, judgeModel: _judgeModel,
+          subjectExtractor: (photo, x, y) => Subject.outline(photo, ui.Offset(x, y)));
   final DevelopAgent fallback = LocalAgent();
 
   late Directory _dir;
@@ -212,22 +224,91 @@ class Store extends ChangeNotifier {
 
   // Shared between Photos and Map.
   final Set<int> paletteFilter = {};
-  SortMode sort = SortMode.time;
+  bool groupByMonth = true;
+  bool groupSimilarPhotos = true;
+  final List<PhotoGroup> photoGroups = [];
+  final Set<String> _keepSeparate = {};
+  Timer? _groupTimer;
+  int _groupRevision = 0;
+  bool _grouping = false;
+  bool _groupAgain = false;
   Recipe? clipboard;
 
   final List<String> agentLog = [];
+  final List<ActivityEntry> activity = [];
+  final Map<AgentRun, ActivityEntry> _backgroundEdits = {};
+  int get unreadActivity => activity.where((entry) => entry.complete && !entry.read).length;
+
+  ActivityEntry _startActivity(ActivityKind kind, Iterable<PhotoItem> photos, {String? request}) {
+    final entry = ActivityEntry(id: DateTime.now().microsecondsSinceEpoch.toString(), kind: kind,
+      keys: photos.map((it) => it.key).toSet().toList(), started: DateTime.now(), request: request);
+    activity.insert(0, entry);
+    while (activity.length > 100 && activity.last.complete) { activity.removeLast(); }
+    _save();
+    return entry;
+  }
+
+  void readActivity(ActivityEntry entry) { entry.read = true; _save(); notifyListeners(); }
+
+  void _finishActivity(PhotoItem item, ActivityOutcome outcome) {
+    for (final entry in activity.where((entry) => entry.kind != ActivityKind.editRequest)) {
+      entry.finish(item.key, outcome);
+    }
+  }
+
+  /// Done closes the editor, but this explicitly commits a running revision
+  /// when it finishes. A newer edit/removal still cancels this run normally.
+  void continueEditing(PhotoItem item, AgentRun run) {
+    if (run.cancelled || _backgroundEdits.containsKey(run)) return;
+    final entry = _startActivity(ActivityKind.editRequest, [item], request: run.requestText);
+    if (run.result != null) {
+      setEdit(item, run.result!.copy());
+      entry.finish(item.key, ActivityOutcome.developed);
+    } else {
+      _backgroundEdits[run] = entry;
+    }
+    _save(); notifyListeners();
+  }
+
+  void _finishBackgroundEdit(PhotoItem item, AgentRun run) {
+    final entry = _backgroundEdits.remove(run);
+    if (entry == null) return;
+    if (byKey(item.key) != item) {
+      entry.finish(item.key, ActivityOutcome.removed);
+    } else if (run.cancelled) {
+      entry.finish(item.key, ActivityOutcome.cancelled);
+    } else if (run.result == null) {
+      entry.finish(item.key, ActivityOutcome.failed);
+    } else {
+      item.edit = run.result!.copy();
+      item.state = item.hues.isEmpty ? Develop.manual : Develop.done;
+      _palette = null;
+      _scheduleGrouping();
+      entry.finish(item.key, ActivityOutcome.developed);
+    }
+    _save(); notifyListeners();
+  }
+
 
   Future<void> init() async {
     _dir = await getApplicationSupportDirectory();
     await Directory('${_dir.path}/renders').create(recursive: true);
+    _patchCache = PhotoPatchCache(Directory('${_dir.path}/patches'));
     final f = File('${_dir.path}/state.json');
     if (await f.exists()) {
       try {
         final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+        activity.addAll(((j['activity'] as List?) ?? []).map((e) => ActivityEntry.fromJson(Map<String, dynamic>.from(e))));
+        _explicitBatch.addAll(((j['explicitBatch'] as List?) ?? const []).cast<String>());
+        _automaticBatch.addAll(((j['automaticBatch'] as List?) ?? const []).cast<String>());
         onboarded = j['onboarded'] as bool? ?? false;
         months = j['months'] as int? ?? 12;
         autoDevelop = j['autoDevelop'] as bool? ?? true;
         skipScreenshots = j['skipScreenshots'] as bool? ?? true;
+        groupByMonth = j['groupByMonth'] as bool? ?? true;
+        groupSimilarPhotos = j['groupSimilarPhotos'] as bool? ?? true;
+        photoGroups.addAll(((j['photoGroups'] as List?) ?? []).map((g) => PhotoGroup.fromJson(Map<String, dynamic>.from(g))));
+        _keepSeparate.addAll(((j['keepSeparate'] as List?) ?? []).cast<String>());
         swatches = SwatchStyle.values.asNameMap()[j['swatches']] ?? SwatchStyle.photo;
         final since = j['autoSince'] as int?;
         autoSince = since == null ? null : DateTime.fromMillisecondsSinceEpoch(since);
@@ -243,7 +324,20 @@ class Store extends ChangeNotifier {
       }
     }
     _sortItems();
+    // Revisions cannot resume after process termination; report interruption.
+    for (final entry in activity.where((e) => !e.complete)) {
+      for (final key in entry.keys.where((key) => !entry.outcomes.containsKey(key)).toList()) {
+        final item = byKey(key);
+        if (item == null) { entry.finish(key, ActivityOutcome.removed); }
+        else if (entry.kind == ActivityKind.editRequest) { entry.finish(key, ActivityOutcome.cancelled); }
+        else if (item.state == Develop.done) { entry.finish(key, ActivityOutcome.developed); }
+        else if (item.state != Develop.pending && item.state != Develop.developing) { entry.finish(key, ActivityOutcome.skipped); }
+      }
+    }
+    _explicitBatch.addAll(items.where((it) => it.picked && it.asked &&
+        (it.state == Develop.pending || it.state == Develop.developing)).map((it) => it.key));
     ready = true;
+    _scheduleGrouping();
     if (onboarded) {
       access = await PhotoSource.access();
       unawaited(refresh());
@@ -279,6 +373,8 @@ class Store extends ChangeNotifier {
         run.cancel();
       }
       _runs.clear();
+      _explicitBatch.clear();
+      _automaticBatch.clear();
       _held.clear();
       items.clear();
       _byKey.clear();
@@ -286,11 +382,18 @@ class Store extends ChangeNotifier {
       _removedPrints.clear();
       paletteFilter.clear();
       _palette = null;
-      sort = SortMode.time;
+      groupByMonth = true;
+      groupSimilarPhotos = true;
+      photoGroups.clear();
+      _keepSeparate.clear();
+      _groupRevision++;
+      _groupTimer?.cancel();
       clipboard = null;
       agentLog.clear();
+      activity.clear();
+      _backgroundEdits.clear();
       _renders.clear();
-      _patches.clear();
+      _patchCache = PhotoPatchCache(Directory('${_dir.path}/patches'));
       onboarded = false;
       access = Access.unknown;
       months = 12;
@@ -311,10 +414,17 @@ class Store extends ChangeNotifier {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 400), () async {
       final j = {
+        'activity': activity.map((entry) => entry.toJson()).toList(),
+        'explicitBatch': _explicitBatch.toList(),
+        'automaticBatch': _automaticBatch.toList(),
         'onboarded': onboarded,
         'months': months,
         'autoDevelop': autoDevelop,
         'skipScreenshots': skipScreenshots,
+        'groupByMonth': groupByMonth,
+        'groupSimilarPhotos': groupSimilarPhotos,
+        'photoGroups': photoGroups.map((group) => group.toJson()).toList(),
+        'keepSeparate': _keepSeparate.toList(),
         'swatches': swatches.name,
         if (autoSince != null) 'autoSince': autoSince!.millisecondsSinceEpoch,
         'day': _day,
@@ -398,27 +508,9 @@ class Store extends ChangeNotifier {
     }
     bool auto(DateTime taken) => autoDevelop && !taken.isBefore(autoSince!);
     var changed = false;
-    final scenes = _SceneBuilder();
-    final moments = {for (final e in items) _moment(e.taken, e.width, e.height)};
+    final automatic = <PhotoItem>[];
     for (final r in refs) {
       if (_byKey.containsKey(r.id) || _removed.contains(r.id)) continue;
-      // The same photo saved twice (Duplicate in Photos keeps its moment):
-      // known, but never queued or shown on its own.
-      if (!moments.add(_moment(r.taken, r.width, r.height))) {
-        _add(PhotoItem(
-          id: r.id,
-          taken: r.taken,
-          lat: r.lat,
-          lng: r.lng,
-          width: r.width,
-          height: r.height,
-          state: Develop.manual,
-          judged: true,
-          note: _sameNote,
-        ));
-        changed = true;
-        continue;
-      }
       final it = PhotoItem(
         id: r.id,
         taken: r.taken,
@@ -428,8 +520,8 @@ class Store extends ChangeNotifier {
         height: r.height,
         state: auto(r.taken) ? Develop.pending : Develop.manual,
       );
-      if (it.state == Develop.pending) scenes.place(it);
       _add(it);
+      if (it.state == Develop.pending) automatic.add(it);
       changed = true;
     }
     // Screenshots that slipped in before: out, unless a person picked them.
@@ -448,42 +540,70 @@ class Store extends ChangeNotifier {
       it.state = Develop.manual;
       changed = true;
     }
+    if (automatic.isNotEmpty) _startActivity(ActivityKind.autoImport, automatic);
     if (changed) {
       _sortItems();
       _save();
       notifyListeners();
     }
     _pump();
+    _scheduleGrouping();
   }
 
   /// Photos picked by hand, from any date.
-  /// Photos picked by hand are developed by hand: they wait in black and
-  /// white instead of going to the agent.
-  Future<List<PhotoItem>> importRefs(List<PhotoRef> refs) async {
+  Future<List<PhotoItem>> importRefs(List<PhotoRef> refs, {bool autoDevelop = false}) async {
+    if (autoDevelop) _beginExplicitBatch();
     final added = <PhotoItem>[];
     for (final r in refs) {
       _removed.remove(r.id);
       final known = _byKey[r.id];
-      if (known != null) {
-        // Already known but kept out of the library: bring it in.
-        if (!known.shown) {
-          known.picked = true;
-          if (known.state == Develop.failed) known.state = Develop.manual;
-          added.add(known);
-        }
-        continue;
-      }
-      final it = PhotoItem(
-          id: r.id, taken: r.taken, lat: r.lat, lng: r.lng, width: r.width, height: r.height, state: Develop.manual, picked: true);
-      _add(it);
+      if (known?.shown ?? false) continue;
+      final it = known ?? PhotoItem(
+        id: r.id, taken: r.taken, lat: r.lat, lng: r.lng, width: r.width, height: r.height,
+      );
+      _prepareExplicitDevelopment(it, auto: autoDevelop);
+      if (known == null) _add(it);
       added.add(it);
     }
     if (added.isNotEmpty) {
+      final entry = _startActivity(ActivityKind.importBatch, added);
+      if (!autoDevelop) {
+        for (final item in added) { entry.finish(item.key, ActivityOutcome.added); }
+      }
       _sortItems();
       _save();
       notifyListeners();
+      if (autoDevelop) _pump();
     }
+    _scheduleGrouping();
     return added;
+  }
+
+  List<PhotoItem> get undeveloped => items.where((it) => it.shown && it.isUndeveloped).toList();
+
+  void autoDevelopUndeveloped([Iterable<PhotoItem>? scope]) {
+    final batch = (scope ?? undeveloped)
+        .where((it) => byKey(it.key) == it && it.shown && it.isUndeveloped).toList();
+    if (batch.isEmpty) return;
+    _beginExplicitBatch();
+    _startActivity(ActivityKind.developBatch, batch);
+    for (final it in batch) {
+      _prepareExplicitDevelopment(it, auto: true);
+    }
+    _save();
+    notifyListeners();
+    _pump();
+  }
+
+  void _prepareExplicitDevelopment(PhotoItem it, {required bool auto}) {
+    if (auto) _explicitBatch.add(it.key);
+    it
+      ..picked = true
+      ..asked = auto
+      ..state = auto ? Develop.pending : Develop.manual
+      ..sceneOf = null
+      ..attempts = 0
+      ..note = null;
   }
 
   /// A photo taken with After Hue's camera, developed as it was seen. The
@@ -523,6 +643,7 @@ class Store extends ChangeNotifier {
     _sortItems();
     _save();
     notifyListeners();
+    _scheduleGrouping();
     return it;
   }
 
@@ -530,6 +651,45 @@ class Store extends ChangeNotifier {
   bool inLibrary(String id) => _byKey[id]?.shown ?? false;
 
   // ------------------------------------------------------------ developing
+
+  final Set<String> _explicitBatch = {};
+  final Set<String> _automaticBatch = {};
+
+  void _syncAutomaticBatch() {
+    if (!_automaticBatch.any((key) {
+      final item = byKey(key);
+      return item?.state == Develop.pending || item?.state == Develop.developing;
+    })) { _automaticBatch.clear(); }
+    _automaticBatch.addAll(items.where((it) => !it.picked &&
+      (it.state == Develop.pending || it.state == Develop.developing)).map((it) => it.key));
+  }
+
+  ({int done, int total, int active}) automaticProgress() {
+    final batch = _automaticBatch.map(byKey).whereType<PhotoItem>().toList();
+    return (
+      done: batch.where((it) => it.state != Develop.pending && it.state != Develop.developing).length,
+      total: batch.length,
+      active: batch.where((it) => it.state == Develop.developing).length,
+    );
+  }
+
+
+  void _beginExplicitBatch() {
+    if (!_explicitBatch.any((key) {
+      final it = byKey(key);
+      return it?.state == Develop.pending || it?.state == Develop.developing;
+    })) {
+      _explicitBatch.clear();
+    }
+  }
+
+  ({int done, int total}) developmentProgress([Iterable<PhotoItem>? scope]) {
+    final allowed = scope?.map((it) => it.key).toSet();
+    final batch = _explicitBatch.where((key) => allowed == null || allowed.contains(key))
+        .map(byKey).whereType<PhotoItem>().toList();
+    return (done: batch.where((it) => it.edit != null &&
+        (it.state == Develop.done || it.state == Develop.manual)).length, total: batch.length);
+  }
 
   int _running = 0;
   static const _parallel = 2;
@@ -546,6 +706,7 @@ class Store extends ChangeNotifier {
 
   void _pump() {
     if (_resetting) return;
+    _syncAutomaticBatch();
     while (_running < _parallel) {
       final budget = _running + developedToday < dailyLimit;
       final next = items
@@ -571,10 +732,9 @@ class Store extends ChangeNotifier {
   /// The person asks for more: the next [moreBatch] older photos go through
   /// the same screen and agent. Photos already passed over are not retried.
   void developMore() {
+    final batch = <PhotoItem>[];
     var queued = 0;
-    final scenes = _SceneBuilder();
     for (final it in _unlooked.toList()) {
-      if (scenes.place(it)) continue;
       if (queued >= moreBatch) {
         // The next scene starts past the batch: leave it for next time.
         it.sceneOf = null;
@@ -584,7 +744,9 @@ class Store extends ChangeNotifier {
       it.asked = true;
       it.attempts = 0;
       queued++;
+      batch.add(it);
     }
+    if (batch.isNotEmpty) _startActivity(ActivityKind.developBatch, batch);
     _save();
     notifyListeners();
     _pump();
@@ -631,8 +793,9 @@ class Store extends ChangeNotifier {
   /// settled one, nothing is saved until the person keeps it.
   AgentRun reviseNow(PhotoItem it, Recipe current, Revision request) {
     _runs.remove(it.key)?.cancel();
-    final run = AgentRun()..recipe = current.copy();
+    final run = AgentRun()..recipe = current.copy()..requestText = request.text;
     _runs[it.key] = run;
+    notifyListeners();
     unawaited(_revise(it, current, request, run));
     return run;
   }
@@ -644,7 +807,7 @@ class Store extends ChangeNotifier {
     try {
       final px = await run.guard(PhotoSource.pixels(it.id, 768));
       if (px == null) throw StateError('could not read photo');
-      final r = await agent.revise(px, current, request, log: (s) => _log('$tag $s'), run: run);
+      final r = await agent.revise(px, current, request, originalSize: (width: it.width, height: it.height), log: (s) => _log('$tag $s'), run: run);
       if (run.cancelled) return;
       run.result = r;
       run.emit(r, 'finish');
@@ -655,7 +818,9 @@ class Store extends ChangeNotifier {
       run.error = '$e';
       _log('revise failed: $e');
     } finally {
+      _finishBackgroundEdit(it, run);
       if (_runs[it.key] == run) _runs.remove(it.key);
+      notifyListeners();
       run.close();
     }
   }
@@ -680,6 +845,9 @@ class Store extends ChangeNotifier {
       final b = e.fingerprint;
       if (identical(e, it) || e.id == it.id || b == null) continue;
       if ((e.width / e.height - ratio).abs() > 0.01) continue;
+      // Close captures belong to conservative grouping, including true bursts.
+      // Never hide them merely because a low-resolution fingerprint matches.
+      if (e.taken.difference(it.taken).abs() <= const Duration(seconds: 20)) continue;
       if (same(b)) return e.id.substring(0, 6);
     }
     if (_removedPrints.any(same)) return 'a removed photo';
@@ -694,6 +862,8 @@ class Store extends ChangeNotifier {
 
   Future<void> _develop(PhotoItem it, {AgentRun? run, bool queued = true}) async {
     run ??= AgentRun();
+    // Batch Auto is the same explicit request as Auto in Edit, but queued.
+    final batchAuto = queued && it.picked && it.asked;
     _runs[it.key] = run;
     notifyListeners();
     try {
@@ -701,7 +871,7 @@ class Store extends ChangeNotifier {
       if (px == null) throw StateError('could not read photo');
       it.fingerprint ??= _fingerprintOf(px);
       // The same picture already went through: once is enough.
-      final twin = queued ? _twinOf(it) : null;
+      final twin = queued && !batchAuto ? _twinOf(it) : null;
       if (twin != null) {
         it.judged = true;
         it.state = Develop.manual;
@@ -709,8 +879,8 @@ class Store extends ChangeNotifier {
         _log('${it.id.substring(0, 6)} skipped: same as $twin');
         throw _Skipped();
       }
-      if (queued && !it.judged) {
-        final v = await run.guard(_judge(it, px));
+      if (queued && !batchAuto && !it.judged) {
+        final v = await run.guard(_judge(it, px, run));
         it.judged = true;
         if (!v.develop) {
           it.state = Develop.manual;
@@ -721,7 +891,7 @@ class Store extends ChangeNotifier {
       }
       Recipe recipe;
       try {
-        recipe = await agent.develop(px, log: (s) => _log('${it.id.substring(0, 6)} $s'), run: run);
+        recipe = await agent.develop(px, originalSize: (width: it.width, height: it.height), log: (s) => _log('${it.id.substring(0, 6)} $s'), run: run);
       } on AgentCancelled {
         rethrow;
       } catch (e) {
@@ -732,8 +902,8 @@ class Store extends ChangeNotifier {
       if (run.cancelled) throw AgentCancelled();
       it.auto = recipe;
       it.edit = recipe.copy();
-      it.state = Develop.done;
-      _applyToScene(it);
+      it.state = batchAuto && recipe.colors.isEmpty ? Develop.manual : Develop.done;
+      _scheduleGrouping();
       if (queued && !it.asked) {
         if (_day != _todayKey) {
           _day = _todayKey;
@@ -747,12 +917,28 @@ class Store extends ChangeNotifier {
     } on _Skipped {
       // Left for a person; saved below.
     } catch (e) {
+      run.error = '$e';
       it.attempts++;
-      it.state = !queued ? Develop.manual : (it.attempts >= 3 ? Develop.failed : Develop.pending);
+      if (!queued || (batchAuto && it.attempts >= 3)) {
+        it.state = Develop.manual;
+      } else {
+        it.state = it.attempts >= 3 ? Develop.failed : Develop.pending;
+      }
       _log('develop failed: $e');
     } finally {
+      if (run.cancelled) {
+        _finishActivity(it, byKey(it.key) == it ? ActivityOutcome.cancelled : ActivityOutcome.removed);
+      } else if (it.state != Develop.pending) {
+        _finishActivity(it, it.state == Develop.done ? ActivityOutcome.developed :
+          it.state == Develop.failed || run.error != null ? ActivityOutcome.failed : ActivityOutcome.skipped);
+      }
+      if (!run.cancelled && it.edit != null && it.state == Develop.done) run.result ??= it.edit!.copy();
+      _finishBackgroundEdit(it, run);
       if (_runs[it.key] == run) _runs.remove(it.key);
+      notifyListeners();
       run.close();
+      _save();
+      notifyListeners();
     }
     _palette = null;
     _save();
@@ -773,44 +959,32 @@ class Store extends ChangeNotifier {
     return agent is LocalAgent ? 'Color only · $why' : '$_judgeModel · $why';
   }
 
-  /// The rest of [rep]'s scene gets its edit, without another agent run.
-  /// Frames more than a few seconds apart may be framed differently, so
-  /// they keep the colors but not the area.
-  void _applyToScene(PhotoItem rep) {
-    final r = rep.edit;
-    if (r == null) return;
-    for (final o in items.where((e) => e.sceneOf == rep.key && e.hues.isEmpty && e.state == Develop.manual)) {
-      final copy = r.copy();
-      if (o.taken.difference(rep.taken).abs() > const Duration(seconds: 5)) copy.area = null;
-      o
-        ..auto = copy.copy()
-        ..edit = copy
-        ..state = Develop.done
-        ..note = null;
-    }
-  }
-
   /// Free on-device screen first; only photos with real color reach the
   /// judge model. A judge error lets the photo through.
-  Future<Verdict> _judge(PhotoItem it, Rgba px) async {
-    final local = await screenOnDevice(px);
+  Future<Verdict> _judge(PhotoItem it, Rgba px, AgentRun run) async {
+    final local = await run.guard(screenOnDevice(px));
     if (!local.develop) return local;
     void say(String who, Verdict v) =>
         _log('${it.id.substring(0, 6)} $who: ${v.develop ? 'yes' : 'no'} · ${v.subject} · ${v.reason}');
     // Apple's on-device model first: free and private.
     try {
-      final v = await AppleJudge.judge(px);
+      final v = await run.guard(AppleJudge.judge(px));
       if (v != null) {
         say('apple', v);
         return v;
       }
+    } on AgentCancelled {
+      rethrow;
     } catch (e) {
       _log('apple judge failed: $e');
     }
     try {
-      final v = await agent.judge(px);
+      if (run.cancelled) throw AgentCancelled();
+      final v = await agent.judge(px, run: run);
       say(agent is LocalAgent ? 'device' : _judgeModel, v);
       return v;
+    } on AgentCancelled {
+      rethrow;
     } catch (e) {
       _log('judge failed: $e');
       return const Verdict(true);
@@ -829,6 +1003,7 @@ class Store extends ChangeNotifier {
 
   void setEdit(PhotoItem it, Recipe r) {
     it.edit = r;
+    _scheduleGrouping();
     _held.remove(it.key);
     if (it.state != Develop.done && r.colors.isNotEmpty) it.state = Develop.done;
     _palette = null;
@@ -849,6 +1024,11 @@ class Store extends ChangeNotifier {
   }
 
   void remove(PhotoItem it) {
+    _finishActivity(it, ActivityOutcome.removed);
+    removeFromGroup(it, remember: false);
+    _explicitBatch.remove(it.key);
+    _automaticBatch.remove(it.key);
+    _held.remove(it.key);
     _runs.remove(it.key)?.cancel();
     items.remove(it);
     _byKey.remove(it.key);
@@ -969,8 +1149,9 @@ class Store extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setSort(SortMode m) {
-    sort = m;
+  void setGroupByMonth(bool value) {
+    groupByMonth = value;
+    _save();
     notifyListeners();
   }
 
@@ -981,11 +1162,139 @@ class Store extends ChangeNotifier {
     // Photos still developing are shown in black and white until their color comes back.
     final list = items.where((e) => e.shown);
     final filtered = paletteFilter.isEmpty ? list.toList() : list.where((e) => keys.contains(e.key)).toList();
-    if (sort == SortMode.hue) {
-      double order(PhotoItem e) => e.hues.isEmpty ? 1e9 : _hueOrder(e.hues.first);
-      filtered.sort((a, b) => order(a).compareTo(order(b)));
-    }
     return filtered;
+  }
+
+  PhotoGroup? groupFor(PhotoItem item) => groupSimilarPhotos
+      ? photoGroups.where((g) => g.members.contains(item.key) && g.members.where((key) => byKey(key)?.shown == true).length > 1).firstOrNull
+      : null;
+
+  List<PhotoItem> groupItems(PhotoGroup group) => group.members.map(byKey).whereType<PhotoItem>()
+      .where((it) => it.shown).toList();
+
+  List<PhotoItem> get galleryItems {
+    final all = visible;
+    if (!groupSimilarPhotos) return all;
+    final keys = all.map((it) => it.key).toSet();
+    final hidden = <String>{};
+    for (final group in photoGroups) {
+      final members = group.members.where(keys.contains).toList();
+      if (members.length < 2) continue;
+      final cover = members.contains(group.cover) ? group.cover : members.first;
+      hidden.addAll(members.where((key) => key != cover));
+    }
+    return all.where((it) => !hidden.contains(it.key)).toList();
+  }
+
+  void setGroupSimilarPhotos(bool value) {
+    groupSimilarPhotos = value;
+    _groupRevision++;
+    if (value) _scheduleGrouping();
+    _save(); notifyListeners();
+  }
+
+  void groupPhotos(Iterable<PhotoItem> selection) {
+    final chosen = selection.where((it) => byKey(it.key) == it).toList();
+    if (chosen.length < 2) return;
+    final keys = chosen.map((it) => it.key).toSet();
+    for (final group in photoGroups.where((g) => g.members.any(keys.contains)).toList()) {
+      keys.addAll(group.members); photoGroups.remove(group);
+    }
+    _keepSeparate.removeAll(keys);
+    groupSimilarPhotos = true;
+    photoGroups.add(PhotoGroup(id: chosen.first.key, cover: chosen.first.key, members: keys.toList(), manual: true));
+    _groupRevision++; _save(); notifyListeners();
+  }
+
+  void setGroupCover(PhotoItem item) {
+    final group = groupFor(item);
+    if (group == null) return;
+    group.cover = item.key; group.manual = true;
+    _groupRevision++; _save(); notifyListeners();
+  }
+
+  void removeFromGroup(PhotoItem item, {bool remember = true}) {
+    if (remember) _keepSeparate.add(item.key);
+    for (final group in photoGroups.where((g) => g.members.contains(item.key)).toList()) {
+      group.members.remove(item.key);
+      group.manual = true;
+      if (group.members.length < 2) { photoGroups.remove(group); }
+      else if (group.cover == item.key) { group.cover = group.members.first; }
+    }
+    _groupRevision++;
+    if (remember) { _save(); notifyListeners(); }
+  }
+
+  void ungroupPhotos(PhotoGroup group) {
+    _keepSeparate.addAll(group.members);
+    photoGroups.remove(group);
+    _groupRevision++; _save(); notifyListeners();
+  }
+
+  void _scheduleGrouping() {
+    _groupTimer?.cancel();
+    if (!groupSimilarPhotos || !ready || items.length < 2) return;
+    if (_grouping) { _groupAgain = true; return; }
+    _groupTimer = Timer(const Duration(milliseconds: 600), () => unawaited(regroupSimilarPhotos()));
+  }
+
+  /// Only inspect thumbnails with a nearby capture time; unrelated library
+  /// photos cost no image reads. The whole group must fit a 20-second window.
+  Future<void> regroupSimilarPhotos() async {
+    _groupTimer?.cancel();
+    if (_grouping) { _groupAgain = true; return; }
+    if (!groupSimilarPhotos || _resetting) return;
+    _grouping = true;
+    final revision = _groupRevision, generation = _generation;
+    try {
+      final locked = photoGroups.where((g) => g.manual).expand((g) => g.members).toSet();
+      final candidates = items.where((it) => it.shown && it.copyOf == null &&
+          !_keepSeparate.contains(it.key) && !locked.contains(it.key)).toList()
+        ..sort((a, b) => b.taken.compareTo(a.taken));
+      final groups = <PhotoGroup>[];
+      PhotoGroup? current;
+      PhotoItem? anchor;
+      for (var i = 0; i < candidates.length; i++) {
+        final it = candidates[i];
+        final previous = i == 0 ? null : candidates[i - 1];
+        if (previous == null || it.taken.difference(previous.taken).abs() > const Duration(seconds: 20)) {
+          anchor = it; current = null; continue;
+        }
+        final first = anchor ?? previous;
+        if (!_burstMetadata(first, it)) { anchor = it; current = null; continue; }
+        for (final photo in [first, it]) {
+          if (photo.burstPrint != null) continue;
+          final pixels = await PhotoSource.pixels(photo.id, 192);
+          if (pixels != null) photo.burstPrint = burstSignature(pixels);
+          if (revision != _groupRevision || generation != _generation || !groupSimilarPhotos) return;
+        }
+        if (first.burstPrint != null && it.burstPrint != null && similarBurst(first.burstPrint!, it.burstPrint!)) {
+          if (current == null) {
+            current = PhotoGroup(id: first.key, cover: first.key, members: [first.key]);
+            groups.add(current);
+          }
+          current.members.add(it.key);
+        } else { anchor = it; current = null; }
+      }
+      if (revision != _groupRevision || generation != _generation) return;
+      photoGroups.removeWhere((g) => !g.manual);
+      photoGroups.addAll(groups);
+      _save(); notifyListeners();
+    } finally {
+      _grouping = false;
+      if (_groupAgain) { _groupAgain = false; _scheduleGrouping(); }
+    }
+  }
+
+  static bool _burstMetadata(PhotoItem a, PhotoItem b) {
+    if (a.taken.difference(b.taken).abs() > const Duration(seconds: 20)) return false;
+    if ((a.width / a.height - b.width / b.height).abs() > .03) return false;
+    if (a.hasLocation && b.hasLocation) {
+      final latitude = (a.lat! + b.lat!) * math.pi / 360;
+      final dx = (a.lng! - b.lng!) * math.cos(latitude), dy = a.lat! - b.lat!;
+      if (math.sqrt(dx * dx + dy * dy) * 111000 > 50) return false;
+    }
+    return true;
   }
 
   // ------------------------------------------------------------ rendering
@@ -1017,62 +1326,23 @@ class Store extends ChangeNotifier {
 
   Future<Uint8List?> original(PhotoItem it, int size) => PhotoSource.jpeg(it.id, size);
 
-  final Map<String, Future<ui.Image?>> _patches = {};
+  late PhotoPatchCache _patchCache;
 
-  /// A small square cut from [it] where it looks most like color [c]: what a
-  /// swatch or heart is filled with, blurred when [swatches] is soft. Null
-  /// if nothing in the photo is close, or swatches are flat.
-  /// [light] lifts it to a light tone, keeping its texture, for marks that
-  /// sit on a darkened corner (the favorite heart).
   Future<ui.Image?> patch(PhotoItem it, KeptColor c, {bool light = false}) {
-    if (swatches == SwatchStyle.flat) return Future.value(null);
-    final key = _patchKey(it, c, light);
-    return _patches[key] ??= _makePatch(
-      it.id,
-      c.copy(),
-      swatches == SwatchStyle.soft,
-      light,
-    ).then((im) => _patchesDone[key] = im);
+    if (swatches == SwatchStyle.flat) return SynchronousFuture(null);
+    return _patchCache.get(it.id, c, soft: swatches == SwatchStyle.soft, light: light);
   }
 
-  final Map<String, ui.Image?> _patchesDone = {};
-
-  /// The patch [patch] would give, if it is already cut: for marks redrawn
-  /// every frame, which cannot wait a frame for a future. Null while it is
-  /// still being cut; a null image when there is none to cut.
   ({ui.Image? image})? patchReady(PhotoItem it, KeptColor c) {
     if (swatches == SwatchStyle.flat) return (image: null);
-    final key = _patchKey(it, c, false);
-    return _patchesDone.containsKey(key) ? (image: _patchesDone[key]) : null;
+    return _patchCache.ready(it.id, c, soft: swatches == SwatchStyle.soft);
   }
 
-  String _patchKey(PhotoItem it, KeptColor c, bool light) {
-    String f(double v) => v.toStringAsFixed(3);
-    final soft = swatches == SwatchStyle.soft;
-    return '${it.id}|${f(c.l)},${f(c.a)},${f(c.b)}|$soft|$light';
-  }
-
-  static Future<ui.Image?> _makePatch(String id, KeptColor c, bool soft, bool light) async {
-    final px = await PhotoSource.pixels(id, 1024);
-    if (px == null) return null;
-    final p = await Isolate.run(() {
-      var p = colorPatch(px, c);
-      if (p == null) return null;
-      if (soft) p = boxBlur(p, math.max(1, p.width ~/ 10), passes: 3);
-      return light ? liftPatch(p, 0.8) : p;
-    });
-    if (p == null) return null;
-    final done = Completer<ui.Image>();
-    ui.decodeImageFromPixels(p.pixels, p.width, p.height, ui.PixelFormat.rgba8888, done.complete);
-    return done.future;
-  }
 }
 
 class _Skipped implements Exception {}
 
 const _sameNote = 'Same as another photo';
-
-String _moment(DateTime taken, int w, int h) => '${taken.millisecondsSinceEpoch}:${math.min(w, h)}x${math.max(w, h)}';
 
 /// The picture at 16×16 in grey, each cell the mean of its area.
 Uint8List _fingerprintOf(Rgba px) {
@@ -1094,39 +1364,4 @@ Uint8List _fingerprintOf(Rgba px) {
     }
   }
   return out;
-}
-
-/// Groups photos, newest first, into scenes: frames taken within 20 seconds
-/// of each other at the same place. The first of each scene stands for it.
-class _SceneBuilder {
-  static const gap = Duration(seconds: 20);
-  static const meters = 50.0;
-
-  PhotoItem? _rep, _prev;
-
-  /// True when [it] joins the current scene (and is marked so); false when it
-  /// starts a new one.
-  bool place(PhotoItem it) {
-    final prev = _prev, rep = _rep;
-    _prev = it;
-    if (prev != null && rep != null && _same(prev, it)) {
-      it
-        ..sceneOf = rep.key
-        ..judged = true
-        ..note = 'Same scene as another photo';
-      return true;
-    }
-    _rep = it;
-    return false;
-  }
-
-  static bool _same(PhotoItem a, PhotoItem b) {
-    if (a.taken.difference(b.taken).abs() > gap) return false;
-    if (!a.hasLocation || !b.hasLocation) return true;
-    const r = 6371000.0;
-    final la = a.lat! * math.pi / 180, lb = b.lat! * math.pi / 180;
-    final x = (b.lng! - a.lng!) * math.pi / 180 * math.cos((la + lb) / 2);
-    final y = lb - la;
-    return math.sqrt(x * x + y * y) * r < meters;
-  }
 }

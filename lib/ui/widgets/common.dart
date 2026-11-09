@@ -36,11 +36,13 @@ class Glass extends StatelessWidget {
     this.padding = EdgeInsets.zero,
     this.dark = false,
     this.clear = false,
+    this.dock = false,
   });
   final Widget child;
   final double radius;
   final EdgeInsets padding;
   final bool dark;
+  final bool dock;
 
   /// Thinner, for a panel that lies over a photo.
   final bool clear;
@@ -63,7 +65,7 @@ class Glass extends StatelessWidget {
       child: ClipRRect(
         borderRadius: r,
         child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: dark ? 12 : 24, sigmaY: dark ? 12 : 24),
+          filter: ui.ImageFilter.blur(sigmaX: dark ? 12 : (dock ? 14 : 24), sigmaY: dark ? 12 : (dock ? 14 : 24)),
           blendMode: BlendMode.src,
           child: Container(
             padding: padding,
@@ -74,7 +76,7 @@ class Glass extends StatelessWidget {
                   ? const Color(0x38222224)
                   : clear
                   ? const Color(0x40FFFFFF)
-                  : const Color(0x66FFFFFF),
+                  : dock ? const Color(0x94FFFFFF) : const Color(0x66FFFFFF),
             ),
             child: child,
           ),
@@ -88,12 +90,13 @@ class Glass extends StatelessWidget {
 /// it is filled with a piece of that photo where the color lives, so it has
 /// the photo's own texture; the flat color shows while that piece loads.
 class Swatch extends StatelessWidget {
-  const Swatch(this.color, {super.key, this.size = 22, this.selected = false, this.onTap, this.onLongPress, this.from});
+  const Swatch(this.color, {super.key, this.size = 22, this.selected = false, this.onTap, this.onLongPress, this.from, this.texture});
   final KeptColor color;
   final double size;
   final bool selected;
   final VoidCallback? onTap, onLongPress;
   final PhotoItem? from;
+  final Widget? texture;
 
   @override
   Widget build(BuildContext context) {
@@ -120,7 +123,7 @@ class Swatch extends StatelessWidget {
             borderRadius: BorderRadius.circular(size * (selected ? 0.22 : 0.3)),
             child: ColoredBox(
               color: colorOf(color),
-              child: from == null ? const SizedBox.expand() : PhotoPatch(from!, color),
+              child: texture ?? (from == null ? const SizedBox.expand() : PhotoPatch(from!, color)),
             ),
           ),
         ),
@@ -138,8 +141,11 @@ class PhotoPatch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final store = Store.instance;
+    final ready = store.patchReady(item, color);
     return FutureBuilder<ui.Image?>(
-      future: Store.instance.patch(item, color),
+      initialData: ready?.image,
+      future: store.patch(item, color),
       builder: (_, snap) => AnimatedOpacity(
         opacity: snap.data == null ? 0 : 1,
         duration: const Duration(milliseconds: 200),
@@ -296,77 +302,73 @@ class DevelopedImage extends StatefulWidget {
 }
 
 class _DevelopedImageState extends State<DevelopedImage> {
-  // Renders already on disk, so a photo seen once is there on the first
-  // frame next time instead of flashing blank: by exact size, and by look
-  // at any size, to stand in while a larger one is made.
-  static final Map<String, File> _ready = {};
-  static final Map<String, File> _anySize = {};
-
-  Future<File?>? _f;
-  File? _now;
+  // Only publish files after their first frame has decoded. In particular,
+  // another Hero/destination must never choose an undecoded upgrade as its
+  // own fallback. Keep the small version available if a large image is evicted.
+  static final _ready = <String, File>{};
+  static final _thumbnails = <String, ({File file, int size})>{};
+  File? _display;
   String? _sig, _base;
+  int _request = 0;
 
-  void _load() {
-    final r = widget.recipe ?? widget.item.edit;
-    final base = '${widget.item.key}${r?.signature}';
-    final sig = '$base@${widget.size}';
-    if (sig == _sig) return;
-    _sig = sig;
-    _base = base;
-    _now = _ready[sig];
-    _f = _now != null
-        ? null
-        : Store.instance.rendered(widget.item, widget.size, recipe: r).then((f) {
-            if (f != null) {
-              _ready[sig] = f;
-              _anySize[base] = f;
-            }
-            return f;
-          });
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _load();
   }
 
-  /// [f], fading in over [under] once it is decoded, unless it already is.
-  Widget _image(File f, Widget? under) => Image.file(
-    f,
-    fit: widget.fit,
-    alignment: widget.alignment ?? focusAlignment(widget.item),
-    width: double.infinity,
-    height: double.infinity,
-    gaplessPlayback: true,
-    frameBuilder: (context, child, frame, sync) {
-      if (sync || under == null) return child;
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          under,
-          AnimatedOpacity(
-            opacity: frame == null ? 0 : 1,
-            duration: const Duration(milliseconds: 220),
-            curve: Motion.settle,
-            child: child,
-          ),
-        ],
-      );
-    },
-  );
+  @override
+  void didUpdateWidget(DevelopedImage old) {
+    super.didUpdateWidget(old);
+    _load();
+  }
 
-  Widget _standIn() {
-    final other = _anySize[_base];
-    if (other != null) return _image(other, null);
-    return widget.placeholder ?? const ColoredBox(color: Neutral.hairline, child: SizedBox.expand());
+  void _load() {
+    final recipe = widget.recipe ?? widget.item.edit;
+    final base = '${widget.item.id}|${recipe?.signature}';
+    final sig = '$base@${widget.size}';
+    if (_sig == sig) return;
+    final samePhoto = _base == base;
+    _sig = sig;
+    _base = base;
+    final request = ++_request;
+    if (!samePhoto) _display = _thumbnails[base]?.file;
+    if (recipe == null) { _display = null; return; }
+    final cached = _ready.remove(sig);
+    if (cached != null) _ready[sig] = cached;
+    final size = widget.size;
+    (cached == null ? Store.instance.rendered(widget.item, size, recipe: recipe) : SynchronousFuture<File?>(cached))
+        .then((file) async {
+      if (file == null || !mounted || request != _request) return;
+      var decoded = true;
+      await precacheImage(FileImage(file), context, onError: (_, _) => decoded = false);
+      if (!decoded || !mounted || request != _request) return;
+      _ready[sig] = file;
+      if ((_thumbnails[base]?.size ?? size + 1) >= size) {
+        _thumbnails.remove(base);
+        _thumbnails[base] = (file: file, size: size);
+      }
+      while (_ready.length > 256) { _ready.remove(_ready.keys.first); }
+      while (_thumbnails.length > 256) { _thumbnails.remove(_thumbnails.keys.first); }
+      setState(() => _display = file);
+    }).catchError((Object _) {
+      // Keep the already visible thumbnail if a larger render is unavailable.
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    _load();
-    final now = _now;
-    if (now != null) return _image(now, _standIn());
-    return FutureBuilder<File?>(
-      future: _f,
-      builder: (context, snap) {
-        final f = snap.data;
-        return f == null ? _standIn() : _image(f, _standIn());
-      },
+    final file = _display;
+    if (file == null) return widget.placeholder ?? const ColoredBox(color: Neutral.hairline, child: SizedBox.expand());
+    return Image.file(
+      file,
+      // A new photo must never inherit a previous photo's decoded frame.
+      key: ValueKey(_base),
+      fit: widget.fit,
+      alignment: widget.alignment ?? focusAlignment(widget.item),
+      width: double.infinity,
+      height: double.infinity,
+      gaplessPlayback: true,
     );
   }
 }
@@ -377,10 +379,11 @@ RectTween straightRect(Rect? begin, Rect? end) => RectTween(begin: begin, end: e
 
 /// The untouched photo, in black and white while it waits to be developed.
 class OriginalImage extends StatefulWidget {
-  const OriginalImage(this.item, {super.key, this.size = 420, this.mono = true});
+  const OriginalImage(this.item, {super.key, this.size = 420, this.mono = true, this.fit = BoxFit.cover});
   final PhotoItem item;
   final int size;
   final bool mono;
+  final BoxFit fit;
 
   @override
   State<OriginalImage> createState() => _OriginalImageState();
@@ -410,7 +413,7 @@ class _OriginalImageState extends State<OriginalImage> {
         }
         final image = Image.memory(
           b,
-          fit: BoxFit.cover,
+          fit: widget.fit,
           width: double.infinity,
           height: double.infinity,
           gaplessPlayback: true,
@@ -451,7 +454,7 @@ class TextAction extends StatelessWidget {
         child: Text(
           label,
           style: (style ?? Txt.label).copyWith(
-            color: (color ?? Neutral.primary).withValues(alpha: onTap == null ? 0.35 : 1),
+            color: (color ?? Neutral.primary).withValues(alpha: (color ?? Neutral.primary).a * (onTap == null ? 0.35 : 1)),
           ),
         ),
       ),
@@ -782,7 +785,10 @@ class _PopRoute extends PopupRoute<void> {
     return Stack(
       children: [
         Positioned(
-          top: from.bottom + 2,
+          top: from.bottom + 2 + items.length * 52 < size.height - MediaQuery.paddingOf(context).bottom
+              ? from.bottom + 2 : null,
+          bottom: from.bottom + 2 + items.length * 52 < size.height - MediaQuery.paddingOf(context).bottom
+              ? null : size.height - from.top + 2,
           right: math.max(12, size.width - from.right + 4),
           child: FadeTransition(
             opacity: CurvedAnimation(parent: a, curve: Motion.settle, reverseCurve: Curves.easeInCubic),

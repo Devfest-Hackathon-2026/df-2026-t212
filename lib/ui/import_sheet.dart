@@ -2,13 +2,15 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../data/photo_source.dart';
 import '../data/store.dart';
-import 'edit.dart';
+import 'detail.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
+import 'widgets/sweep_selection.dart';
 
 /// Pick photos from any date to develop. Photos already in After Hue are
 /// shown faded and cannot be picked again.
@@ -35,6 +37,23 @@ class _ImportSheetState extends State<ImportSheet> {
   int _page = 0;
   bool _loading = false, _end = false, _importing = false;
   Set<String>? _shots;
+  final _scroll = ScrollController();
+  late final _sweep = SweepSelection(
+    scroll: _scroll,
+    order: () => _assets.map((a) => a.id).toList(),
+    selection: () => _picked,
+    canSelect: (id) => !_importing && !Store.instance.inLibrary(id),
+    onChanged: (next) => setState(() { _picked.clear(); _picked.addAll(next); }),
+    onStart: Haptics.light,
+    onStep: Haptics.tick,
+  );
+
+  @override
+  void dispose() {
+    _sweep.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -60,19 +79,30 @@ class _ImportSheetState extends State<ImportSheet> {
     if (skip && !_end && _assets.length < 40) unawaited(_more());
   }
 
-  Future<void> _import() async {
+  Future<void> _import({required bool autoDevelop}) async {
     if (_picked.isEmpty || _importing) return;
+    _sweep.end();
     setState(() => _importing = true);
     Haptics.firm();
     final picked = _assets.where((a) => _picked.contains(a.id)).toList();
-    final refs = [for (final a in picked) await PhotoSource.refOf(a)];
-    final added = await Store.instance.importRefs(refs);
+    late final List<PhotoItem> added;
+    try {
+      final refs = [for (final a in picked) await PhotoSource.refOf(a)];
+      if (!mounted) return;
+      added = await Store.instance.importRefs(refs, autoDevelop: autoDevelop);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _importing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not import the selected photos.')),
+      );
+      return;
+    }
     if (!mounted) return;
     final nav = Navigator.of(context);
     nav.pop();
-    // Picked by hand, developed by hand: open the first one in Edit. The rest
-    // wait in black and white in the library.
-    if (added.isNotEmpty) nav.push(EditRoute(added.first));
+    if (autoDevelop || added.isEmpty) return;
+    nav.push(DetailRoute(items: added, index: 0, developmentBatch: true));
   }
 
   @override
@@ -83,23 +113,15 @@ class _ImportSheetState extends State<ImportSheet> {
         const SizedBox(height: 8),
         Container(width: 36, height: 4, decoration: BoxDecoration(color: Neutral.hairline, borderRadius: BorderRadius.circular(2))),
         Padding(
-          padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
-          child: Row(
-            children: [
-              TextAction('Cancel', color: Neutral.secondary, onTap: () => Navigator.of(context).pop()),
-              const Spacer(),
-              Text('Import', style: Txt.label),
-              const Spacer(),
-              TextAction(n == 0 ? 'Import' : 'Import $n', onTap: n == 0 || _importing ? null : _import),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Choose photos to develop by hand.', style: Txt.mono),
-          ),
+          padding: const EdgeInsets.fromLTRB(10, 6, 20, 12),
+          child: Row(children: [
+            TextAction('Cancel', color: Neutral.secondary, onTap: _importing ? null : () => Navigator.of(context).pop()),
+            Expanded(child: Text('Choose photos', textAlign: TextAlign.center, style: Txt.label)),
+            TextAction('Deselect all', color: Neutral.secondary, onTap: n == 0 || _importing ? null : () {
+              _sweep.end();
+              setState(_picked.clear);
+            }),
+          ]),
         ),
         Expanded(
           child: _assets.isEmpty
@@ -109,8 +131,20 @@ class _ImportSheetState extends State<ImportSheet> {
                     if (n.metrics.extentAfter < 600) _more();
                     return false;
                   },
-                  child: GridView.builder(
-                    padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.paddingOf(context).bottom + 20),
+                  child: GestureDetector(
+                    key: _sweep.viewportKey,
+                    dragStartBehavior: DragStartBehavior.down,
+                    onHorizontalDragStart: _importing ? null : (d) => _sweep.begin(d.globalPosition),
+                    onHorizontalDragUpdate: _importing ? null : (d) => _sweep.move(d.globalPosition),
+                    onHorizontalDragEnd: _importing ? null : (_) => _sweep.end(),
+                    onHorizontalDragCancel: _sweep.end,
+                    onLongPressStart: _importing ? null : (d) => _sweep.begin(d.globalPosition),
+                    onLongPressMoveUpdate: _importing ? null : (d) => _sweep.move(d.globalPosition),
+                    onLongPressEnd: (_) => _sweep.end(),
+                    onLongPressCancel: _sweep.end,
+                    child: GridView.builder(
+                    controller: _scroll,
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 4,
                       mainAxisSpacing: 3,
@@ -121,21 +155,41 @@ class _ImportSheetState extends State<ImportSheet> {
                       final a = _assets[i];
                       final already = Store.instance.inLibrary(a.id);
                       final picked = _picked.contains(a.id);
-                      return _Thumb(
+                      return KeyedSubtree(
+                        key: _sweep.keyFor(a.id),
+                        child: _Thumb(
                         key: ValueKey(a.id),
                         asset: a,
                         already: already,
                         picked: picked,
-                        onTap: already
+                        onTap: already || _importing
                             ? null
                             : () {
                                 Haptics.tick();
                                 setState(() => picked ? _picked.remove(a.id) : _picked.add(a.id));
                               },
+                        ),
                       );
                     },
+                    ),
                   ),
                 ),
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Text(_importing ? 'Importing $n photos…' : n == 0 ? 'Select photos to develop' : '$n selected', style: Txt.small),
+              const SizedBox(height: 6),
+              Wrap(alignment: WrapAlignment.spaceBetween, children: [
+                TextAction('Edit manually', color: Neutral.secondary,
+                  onTap: n == 0 || _importing ? null : () => _import(autoDevelop: false)),
+                TextAction(n == 0 ? 'Auto develop' : 'Auto develop $n',
+                  onTap: n == 0 || _importing ? null : () => _import(autoDevelop: true)),
+              ]),
+            ]),
+          ),
         ),
       ],
     );

@@ -96,7 +96,12 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// Shots taken since the camera opened, oldest first: what the thumbnail
   /// opens to look back over.
   final List<PhotoItem> _shots = [];
-  bool _blink = false;
+  late final _exposure = AnimationController(vsync: this, duration: const Duration(milliseconds: 180));
+  static final _shutterShade = TweenSequence<double>([
+    TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeInQuad)), weight: 32),
+    TweenSequenceItem(tween: ConstantTween(1.0), weight: 16),
+    TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0).chain(CurveTween(curve: Curves.easeOutCubic)), weight: 132),
+  ]);
 
   // The lens, as the person has set it.
   double _zoom = 1;
@@ -179,6 +184,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     _macroNoteTimer?.cancel();
     _countdown?.cancel();
     _pullBack.dispose();
+    _exposure.dispose();
     _fly.dispose();
     _develop.dispose();
     _loupeImage?.dispose();
@@ -410,6 +416,8 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     switch (event) {
       case 'shutter':
         _shutter();
+      case 'exposure':
+        if (_feed?.live == true) _exposure.forward(from: 0);
       case 'macro':
         final m = (args as Map?) ?? const {};
         final shown = m['shown'] == true;
@@ -648,10 +656,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     if (_feed == null) return;
     Haptics.shutter();
     final look = _r.copy();
-    setState(() => _blink = true);
-    Future.delayed(const Duration(milliseconds: 90), () {
-      if (mounted) setState(() => _blink = false);
-    });
     final frame = LiveCamera.thumb(width: 240);
     try {
       final s = await LiveCamera.capture();
@@ -1518,6 +1522,18 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                           ),
                   ),
                 ),
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: AnimatedBuilder(
+                      animation: _exposure,
+                      builder: (context, _) {
+                        final peak = MediaQuery.disableAnimationsOf(context) ? 0.35 : 0.86;
+                        final shade = _exposure.isAnimating ? _shutterShade.transform(_exposure.value) * peak : 0.0;
+                        return ColoredBox(color: Colors.black.withValues(alpha: shade));
+                      },
+                    ),
+                  ),
+                ),
                 if (_grid)
                   const Positioned.fill(
                     child: IgnorePointer(child: CustomPaint(painter: _GridPainter())),
@@ -1555,16 +1571,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       ),
                     ),
                   ),
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: AnimatedOpacity(
-                      curve: Motion.settle,
-                      opacity: _blink ? 0.85 : 0,
-                      duration: Duration(milliseconds: _blink ? 40 : 260),
-                      child: const ColoredBox(color: Colors.white),
-                    ),
-                  ),
-                ),
                 for (final p in _pings) _PingRing(key: ValueKey(p.id), ping: p),
                 Positioned(left: 14, bottom: 12, child: _macroButton()),
                 if (feed != null && feed.stops.length > 1)

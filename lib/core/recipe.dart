@@ -93,7 +93,9 @@ class Stroke {
 }
 
 class Area {
-  Area({this.polygons = const [], this.ellipses = const [], this.strokes = const [], this.edge = 0.03});
+  static const defaultFeatherPixels = 10.0;
+  static double defaultEdgeFor(num shortSide) => (defaultFeatherPixels / math.max(1, shortSide)).clamp(0.0, 1.0);
+  Area({this.polygons = const [], this.ellipses = const [], this.strokes = const [], this.edge = 0.03, this.boundary = 0});
 
   /// Each polygon is a flat list of points: [[x, y], ...].
   List<List<List<double>>> polygons;
@@ -104,8 +106,12 @@ class Area {
   /// Paint over the shapes, in the order it was laid down.
   List<Stroke> strokes;
 
-  /// Feather, as a fraction of the photo's short side.
+  /// Outward fade from full opacity to zero, as a fraction of the short side.
   double edge;
+
+  /// Offset of the full-opacity boundary from the drawn mask, in short-side
+  /// fractions. Positive expands; negative contracts; zero preserves its inside.
+  double boundary;
 
   bool get isEmpty => polygons.isEmpty && ellipses.isEmpty && strokes.isEmpty;
 
@@ -117,6 +123,7 @@ class Area {
         ellipses: ellipses.map((e) => List.of(e)).toList(),
         strokes: strokes.map((s) => s.copy()).toList(),
         edge: edge,
+        boundary: boundary,
       );
 
   Map<String, dynamic> toJson() => {
@@ -124,6 +131,7 @@ class Area {
         'ellipses': ellipses,
         if (strokes.isNotEmpty) 'strokes': strokes.map((s) => s.toJson()).toList(),
         'edge': edge,
+        if (boundary != 0) 'boundary': boundary,
       };
 
   factory Area.fromJson(Map<String, dynamic> j) => Area(
@@ -144,6 +152,7 @@ class Area {
             .toList(),
         strokes: ((j['strokes'] as List?) ?? []).map(Stroke.fromJson).whereType<Stroke>().toList(),
         edge: (j['edge'] as num?)?.toDouble() ?? 0.03,
+        boundary: ((j['boundary'] as num?)?.toDouble() ?? 0).clamp(-1.0, 1.0),
       );
 }
 
@@ -151,6 +160,7 @@ class Area {
 class Recipe {
   Recipe({
     List<KeptColor>? colors,
+    List<KeptColor>? excludedColors,
     this.area,
     this.contrast = 0.1,
     this.ambience = defaultAmbience,
@@ -160,9 +170,16 @@ class Recipe {
     this.why,
     this.focus,
   })
-      : colors = colors ?? [];
+      : colors = colors ?? [],
+        excludedColors = excludedColors ?? [];
 
   List<KeptColor> colors;
+
+  /// Unwanted hues subtracted from the kept range. Distinct kept samples
+  /// protect their nearer hues; exclusion wins for the same hue.
+  List<KeptColor> excludedColors;
+  static const defaultExcludeWidth = 4.0;
+  static const defaultExcludeSoftness = 4.0;
   Area? area;
 
   /// Tone of the black-and-white part.
@@ -172,7 +189,7 @@ class Recipe {
   /// 0 is pure grey; higher keeps the warmth of a sunset or the blue of
   /// dusk as a faint tint, so the mono part still feels like the place.
   double ambience;
-  static const defaultAmbience = 0.4;
+  static const defaultAmbience = 0.2;
 
   /// Darkening toward the edges, as in Photos: strength 0-1, and the radius
   /// where it is half way, in units of the half-diagonal (corners are 1).
@@ -193,6 +210,7 @@ class Recipe {
 
   Recipe copy() => Recipe(
         colors: colors.map((c) => c.copy()).toList(),
+        excludedColors: excludedColors.map((c) => c.copy()).toList(),
         area: area?.copy(),
         contrast: contrast,
         ambience: ambience,
@@ -204,10 +222,17 @@ class Recipe {
       );
 
   /// Stable key for render caching.
-  String get signature => toJson().toString().hashCode.toRadixString(16);
+  String get signature {
+    final data = toJson().toString();
+    // Refresh cached exclusions after introducing relative hue separation.
+    final hue = excludedColors.isEmpty ? '' : 'hue-separation-v2:';
+    final mask = area == null || area!.isEmpty ? '' : 'outward-feather-v1:';
+    return '$hue$mask$data'.hashCode.toRadixString(16);
+  }
 
   Map<String, dynamic> toJson() => {
         'colors': colors.map((c) => c.toJson()).toList(),
+        if (excludedColors.isNotEmpty) 'excludedColors': excludedColors.map((c) => c.toJson()).toList(),
         if (area != null) 'area': area!.toJson(),
         'contrast': contrast,
         'ambience': ambience,
@@ -220,6 +245,7 @@ class Recipe {
 
   factory Recipe.fromJson(Map<String, dynamic> j) => Recipe(
         colors: ((j['colors'] as List?) ?? []).map((c) => KeptColor.fromJson(c as Map<String, dynamic>)).toList(),
+        excludedColors: ((j['excludedColors'] as List?) ?? []).map((c) => KeptColor.fromJson(c as Map<String, dynamic>)).toList(),
         area: j['area'] == null ? null : Area.fromJson(j['area'] as Map<String, dynamic>),
         contrast: (j['contrast'] as num?)?.toDouble() ?? 0.1,
         ambience: (j['ambience'] as num?)?.toDouble() ?? defaultAmbience,

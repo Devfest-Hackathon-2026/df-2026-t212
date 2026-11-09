@@ -10,6 +10,7 @@ import 'package:image/image.dart' as img;
 
 Future<void> main(List<String> args) async {
   var im = img.decodeImage(File(args[0]).readAsBytesSync())!;
+  final originalSize = (width: im.width, height: im.height);
   final side = int.tryParse(Platform.environment['SIDE'] ?? '') ?? 768;
   if (math.max(im.width, im.height) > side) {
     im = im.width >= im.height ? img.copyResize(im, width: side) : img.copyResize(im, height: side);
@@ -20,7 +21,7 @@ Future<void> main(List<String> args) async {
     model: Platform.environment['OPENAI_MODEL'] ?? 'gpt-6.1-terra',
   );
   final sw = Stopwatch()..start();
-  final recipe = await agent.develop(src, log: (s) => stdout.writeln('  ${sw.elapsed.inSeconds}s $s'));
+  final recipe = await agent.develop(src, originalSize: originalSize, log: (s) => stdout.writeln('  ${sw.elapsed.inSeconds}s $s'));
   stdout.writeln('done in ${sw.elapsed.inSeconds}s');
   stdout.writeln(const JsonEncoder.withIndent('  ').convert(recipe.toJson()));
   if (args.length > 1) {

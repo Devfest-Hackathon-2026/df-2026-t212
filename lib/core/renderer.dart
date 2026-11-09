@@ -272,15 +272,81 @@ Float32List areaMask(int w, int h, Area? area) {
   for (final st in area.strokes) {
     _paintStroke(m, w, h, st.points, math.max(0.5, st.radius * short), st.erase ? 0 : 1);
   }
-  final sigma = area.edge * math.min(w, h) / 2;
-  final r = sigma.round();
-  if (r >= 1) {
-    final tmp = Float32List(w * h);
-    for (var pass = 0; pass < 3; pass++) {
-      _boxBlur(m, w, h, r, tmp);
+  _shapeBoundary(m, w, h, area.boundary * short, math.max(0, area.edge * short));
+  return m;
+}
+
+/// Squared Euclidean distance to the nearest pixel with [inside] membership.
+/// Separable lower envelopes keep the work linear in the image's pixel count.
+Float64List _maskDistances(Float32List mask, int w, int h, bool inside) {
+  final far = (w * w + h * h + 1).toDouble();
+  final field = Float64List(w * h);
+  final size = math.max(w, h);
+  final f = Float64List(size), d = Float64List(size), cuts = Float64List(size + 1);
+  final sites = Int32List(size);
+  void transform(int length) {
+    var k = 0;
+    sites[0] = 0;
+    cuts[0] = double.negativeInfinity;
+    cuts[1] = double.infinity;
+    for (var q = 1; q < length; q++) {
+      double crossing() {
+        final v = sites[k];
+        return ((f[q] + q * q) - (f[v] + v * v)) / (2 * (q - v));
+      }
+      var cross = crossing();
+      while (k > 0 && cross <= cuts[k]) { k--; cross = crossing(); }
+      k++;
+      sites[k] = q;
+      cuts[k] = cross;
+      cuts[k + 1] = double.infinity;
+    }
+    k = 0;
+    for (var q = 0; q < length; q++) {
+      while (cuts[k + 1] < q) { k++; }
+      final delta = q - sites[k];
+      d[q] = delta * delta + f[sites[k]];
     }
   }
-  return m;
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) { f[x] = (mask[y * w + x] > 0.5) == inside ? 0 : far; }
+    transform(w);
+    for (var x = 0; x < w; x++) { field[y * w + x] = d[x]; }
+  }
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) { f[y] = field[y * w + x]; }
+    transform(h);
+    for (var y = 0; y < h; y++) { field[y * w + x] = d[y]; }
+  }
+  if (!inside) {
+    // Outside the raster is unselected, including when an explicit shape
+    // fills the whole image. Contracting it must also move the canvas edges.
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final edge = math.min(math.min(x + 1, w - x), math.min(y + 1, h - y));
+        final i = y * w + x;
+        field[i] = math.min(field[i], (edge * edge).toDouble());
+      }
+    }
+  }
+  return field;
+}
+
+void _shapeBoundary(Float32List mask, int w, int h, double boundary, double feather) {
+  if (boundary == 0 && feather == 0) return;
+  final count = mask.where((v) => v > 0.5).length;
+  if (count == 0 || (count == mask.length && boundary >= 0)) return;
+  final toInside = boundary + feather > 0 ? _maskDistances(mask, w, h, true) : null;
+  final toOutside = boundary < 0 ? _maskDistances(mask, w, h, false) : null;
+  for (var i = 0; i < mask.length; i++) {
+    final inside = mask[i] > 0.5;
+    if (inside && boundary >= 0) { mask[i] = 1; continue; }
+    if (!inside && boundary + feather <= 0) { mask[i] = 0; continue; }
+    // Pixel centers lie half a pixel from the binary mask's boundary.
+    final distance = inside ? -(math.sqrt(toOutside![i]) - 0.5) : math.sqrt(toInside![i]) - 0.5;
+    mask[i] = feather <= 0 ? (distance <= boundary ? 1 : 0)
+        : 1 - _smoothstep(boundary, boundary + feather, distance);
+  }
 }
 
 /// Lays [v] along the line through [pts] with a round tip of radius [rad] px.
@@ -312,11 +378,20 @@ double _smoothstep(double e0, double e1, double x) {
   return t * t * (3 - 2 * t);
 }
 
-Float32List keepWeight(Lab lab, List<KeptColor> colors) {
+double _hueDistance(double a, double b) => ((a - b + 540) % 360 - 180).abs();
+
+/// Hue windows, optionally separated from competing kept color samples.
+/// Only exclusions supply [protect]: ordinary keep windows stay unchanged.
+Float32List keepWeight(Lab lab, List<KeptColor> colors, {List<KeptColor> protect = const []}) {
   final n = lab.l.length;
   final w = Float32List(n);
   if (colors.isEmpty) return w;
   final hues = colors.map((c) => c.hue).toList();
+  final protectedHues = [
+    for (final hue in hues)
+      // Near-identical samples cannot be separated by hue; exclusion wins.
+      protect.where((c) => _hueDistance(c.hue, hue) > 0.5).map((c) => c.hue).toList(),
+  ];
   for (var i = 0; i < n; i++) {
     final a = lab.a[i], b = lab.b[i], L = lab.l[i];
     final C = math.sqrt(a * a + b * b);
@@ -324,7 +399,7 @@ Float32List keepWeight(Lab lab, List<KeptColor> colors) {
     var best = 0.0;
     for (var k = 0; k < colors.length; k++) {
       final c = colors[k];
-      final dh = ((H - hues[k] + 540) % 360 - 180).abs();
+      final dh = _hueDistance(H, hues[k]);
       final t = ((dh - c.width) / math.max(c.softness, 1e-6)).clamp(0.0, 1.0);
       final wh = 0.5 * (1 + math.cos(math.pi * t));
       if (wh <= 0) continue;
@@ -334,7 +409,16 @@ Float32List keepWeight(Lab lab, List<KeptColor> colors) {
       if (lg != null) {
         wl = _smoothstep(lg[0] - 0.08, lg[0], L) * (1 - _smoothstep(lg[1], lg[1] + 0.08, L));
       }
-      final v = wh * wc * wl;
+      var separation = 1.0;
+      for (final hue in protectedHues[k]) {
+        final keptDistance = _hueDistance(H, hue);
+        // Compare angular distance, not chroma or brightness: pale pink
+        // should be protected just as strongly as saturated pink. The
+        // transition scales with the samples' separation, even for close hues.
+        final ratio = keptDistance / math.max(keptDistance + dh, 1e-9);
+        separation = math.min(separation, _smoothstep(0.35, 0.65, ratio));
+      }
+      final v = wh * wc * wl * separation;
       if (v > best) best = v;
     }
     w[i] = best;
@@ -406,12 +490,22 @@ RenderResult render(Rgba src, Recipe recipe, {Lab? lab}) {
   final w = src.width, h = src.height, n = w * h;
   lab ??= toLab(src);
   final raw = keepWeight(lab, recipe.colors);
+  final excluded = recipe.excludedColors.isEmpty ? null : keepWeight(lab, recipe.excludedColors, protect: recipe.colors);
   final mask = areaMask(w, h, recipe.area);
-  for (var i = 0; i < n; i++) {
-    raw[i] *= mask[i];
-  }
   final r = math.max(2, (math.min(w, h) * 0.006).round());
   final weight = recipe.colors.isEmpty ? raw : guidedFilter(lab.l, raw, w, h, r, 2e-3);
+
+  // Geometry is already feathered. Apply it after color edge smoothing so
+  // the renderer does not blur or displace the user's full-opacity boundary.
+  for (var i = 0; i < n; i++) { weight[i] *= mask[i]; }
+
+  // Subtract after edge smoothing so smoothing cannot reintroduce a color
+  // the person explicitly excluded. The exclusion's own Edge keeps it soft.
+  if (excluded != null) {
+    for (var i = 0; i < n; i++) {
+      weight[i] *= 1 - excluded[i];
+    }
+  }
 
   final amb = recipe.ambience.clamp(0.0, 1.0);
   final vig = recipe.vignette.clamp(0.0, 1.0);

@@ -71,7 +71,8 @@ class LiveCamera {
   }
 
   /// What the camera says unasked: `shutter` (a volume button), `focusReset`
-  /// (the scene moved on from a tapped point), `orientation` (degrees the
+  /// (the scene moved on from a tapped point), `exposure` (capture begins),
+  /// `orientation` (degrees the
   /// photo will be turned: 90 upright, 0 or 180 on its side).
   static void listen(void Function(String event, Object? args)? on) {
     _ch.setMethodCallHandler(on == null ? null : (call) async => on(call.method, call.arguments));

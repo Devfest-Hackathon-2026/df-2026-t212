@@ -6,14 +6,17 @@ import '../data/store.dart';
 import 'edit.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
+import 'widgets/development_bar.dart';
+import 'widgets/confirm_remove.dart';
+import 'widgets/agent_work_status.dart';
 
 class DetailRoute extends PageRouteBuilder<void> {
-  DetailRoute({required List<PhotoItem> items, required int index, bool review = false})
+  DetailRoute({required List<PhotoItem> items, required int index, bool review = false, bool developmentBatch = false, String? groupId})
     : super(
         opaque: false,
         transitionDuration: const Duration(milliseconds: 420),
         reverseTransitionDuration: const Duration(milliseconds: 320),
-        pageBuilder: (_, _, _) => DetailScreen(items: items, index: index, review: review),
+        pageBuilder: (_, _, _) => DetailScreen(items: items, index: index, review: review, developmentBatch: developmentBatch, groupId: groupId),
         transitionsBuilder: (_, a, _, child) => FadeTransition(
           opacity: CurvedAnimation(parent: a, curve: Curves.easeOut),
           child: child,
@@ -23,7 +26,7 @@ class DetailRoute extends PageRouteBuilder<void> {
 
 /// One job: look at one photo, and compare it with the original.
 class DetailScreen extends StatefulWidget {
-  const DetailScreen({super.key, required this.items, required this.index, this.review = false});
+  const DetailScreen({super.key, required this.items, required this.index, this.review = false, this.developmentBatch = false, this.groupId});
   final List<PhotoItem> items;
   final int index;
 
@@ -31,6 +34,8 @@ class DetailScreen extends StatefulWidget {
   /// here is there a trash button, and it always deletes the shot itself,
   /// from the iPhone too: a failed shot is thrown away and taken again.
   final bool review;
+  final bool developmentBatch;
+  final String? groupId;
 
   @override
   State<DetailScreen> createState() => _DetailScreenState();
@@ -90,10 +95,12 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
   /// The current photo is no longer here: show the next, or close when
   /// there is none.
   Future<void> _leave() async {
-    _rising = false;
-    await _gone.animateTo(1, duration: const Duration(milliseconds: 200), curve: Curves.easeInCubic);
     if (!mounted) return;
+    // Remove immediately after confirmation. Only the arriving photo animates;
+    // the removed photo never waits for a render or an outgoing animation.
     final was = item;
+    _showOriginal = false;
+    _gone.value = 1;
     setState(() {
       _items.remove(was);
       if (_items.isNotEmpty) _index = _index.clamp(0, _items.length - 1);
@@ -148,6 +155,18 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
       context,
       from: from,
       items: [
+        if (widget.groupId != null && s.groupFor(item) != null) ...[
+          PopItem('Use as group cover', () { s.setGroupCover(item); _toast('Group cover updated'); }),
+          PopItem('Remove from group', () {
+            s.removeFromGroup(item);
+            _leave();
+          }),
+          PopItem('Ungroup photos', () {
+            final group = s.groupFor(item);
+            if (group != null) s.ungroupPhotos(group);
+            Navigator.pop(context);
+          }),
+        ],
         PopItem('Duplicate', () {
           s.duplicate(item);
           _toast('Duplicated');
@@ -159,8 +178,10 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
         PopItem('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
         PopItem('Why this color?', _why),
         if (!widget.review)
-          PopItem('Remove from After Hue', () {
-            s.remove(item);
+          PopItem('Remove from After Hue', () async {
+            final removing = item;
+            if (!await confirmRemovePhotos(context, 1) || !mounted) return;
+            s.remove(removing);
             _leave();
           }, quiet: true, divided: true),
       ],
@@ -225,7 +246,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
     final fade = (1 - (_drag.abs() / 400)).clamp(0.0, 1.0);
     if (_inset == null || _bare.value == 0) {
       final top = pad.top + 4 + 44;
-      final bottom = 14 + 24 + 14 + 58 + pad.bottom + 8;
+      final bottom = 14 + 24 + 14 + 58 + pad.bottom + 8 + (widget.developmentBatch ? 56 : 0);
       _inset = top > bottom ? top : bottom;
     }
     final inset = _inset!;
@@ -234,6 +255,8 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
       builder: (context, _) {
         if (_items.isEmpty) return const SizedBox();
         final bare = Curves.easeInOut.transform(_bare.value);
+        final run = s.runFor(item);
+        final agentEditing = run != null && !run.cancelled;
         // Bars only fade: the photo under them never moves.
         Widget bar(Widget child) => IgnorePointer(
           ignoring: bare > 0,
@@ -306,7 +329,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                         IconAction(G.close, label: 'Close', onTap: () => Navigator.pop(context)),
                         Expanded(
                           child: Text(
-                            '${_index + 1} / ${_items.length}',
+                            '${_index + 1} / ${_items.length}${widget.groupId == null ? '' : ' · Group'}',
                             style: Txt.mono,
                             textAlign: TextAlign.center,
                           ),
@@ -330,6 +353,11 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        if (widget.developmentBatch)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: DevelopmentBar(scope: _items),
+                          ),
                         SizedBox(
                           height: 24,
                           child: AnimatedSwitcher(
@@ -338,8 +366,10 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                             switchOutCurve: Curves.easeInCubic,
                             transitionBuilder: softSwitch,
                             child: Row(
-                              key: ValueKey('${item.key}$_hint$_showOriginal'),
-                              children: _hint
+                              key: ValueKey('${item.key}$_hint$_showOriginal$agentEditing'),
+                              children: agentEditing && !_showOriginal
+                                  ? [Expanded(child: AgentWorkStatus(run: run))]
+                                  : _hint
                                   ? [
                                       Text(
                                         'Press and hold to see the original',
@@ -404,6 +434,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
   Widget _photo(BuildContext context, int i) {
     final it = _items[i];
     final page = Padding(
+      key: ValueKey(it.key),
       padding: const EdgeInsets.symmetric(horizontal: _gap),
       child: Center(
         child: AspectRatio(
@@ -414,14 +445,20 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
               Hero(
                 createRectTween: straightRect,
                 tag: 'photo-${it.key}',
-                child: DevelopedImage(it, size: 1600, fit: BoxFit.contain, alignment: Alignment.center),
+                child: DevelopedImage(
+                  it,
+                  size: 1600,
+                  fit: BoxFit.contain,
+                  alignment: Alignment.center,
+                  placeholder: OriginalImage(it, size: 1600, fit: BoxFit.contain),
+                ),
               ),
               if (i == _index)
                 AnimatedOpacity(
                   opacity: _showOriginal ? 1 : 0,
                   duration: const Duration(milliseconds: 180),
                   curve: Motion.settle,
-                  child: _Original(it),
+                  child: OriginalImage(it, size: 1600, mono: false, fit: BoxFit.contain),
                 ),
             ],
           ),
@@ -447,10 +484,8 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
     final pal = s.palette;
     for (var i = 0; i < pal.length; i++) {
       if (pal[i].keys.contains(item.key) && (pal[i].color.hue - c.hue).abs() < 25) {
-        s.paletteFilter
-          ..clear()
-          ..add(i);
-        s.setSort(s.sort);
+        s.paletteFilter.clear();
+        s.togglePalette(i);
         Navigator.pop(context);
         return;
       }
@@ -501,20 +536,4 @@ class _EditButtonState extends State<_EditButton> {
           ),
         ),
       );
-}
-
-class _Original extends StatelessWidget {
-  const _Original(this.item);
-  final PhotoItem item;
-
-  static final Map<String, Future<Uint8List?>> _cache = {};
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<Uint8List?>(
-      future: _cache[item.id] ??= Store.instance.original(item, 1600),
-      builder: (_, snap) =>
-          snap.data == null ? const SizedBox() : Image.memory(snap.data!, fit: BoxFit.contain, gaplessPlayback: true),
-    );
-  }
 }

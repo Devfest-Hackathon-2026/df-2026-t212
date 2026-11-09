@@ -925,7 +925,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       next.count = i + 1
     }
     next.contrast = Float(args["contrast"] as? Double ?? 0.1)
-    next.ambience = Float(args["ambience"] as? Double ?? 0.4)
+    next.ambience = Float(args["ambience"] as? Double ?? 0.2)
     next.vignette = Float(args["vignette"] as? Double ?? 0)
     next.vignetteRadius = Float(args["vignetteRadius"] as? Double ?? 0.8)
     lock.lock()
@@ -1118,6 +1118,10 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     } ?? photoOutput.maxPhotoDimensions
   }
 
+  func photoOutput(_ output: AVCapturePhotoOutput, willCapturePhotoFor settings: AVCaptureResolvedPhotoSettings) {
+    emit("exposure")
+  }
+
   func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
     guard error == nil, let data = photo.fileDataRepresentation() else {
       finishCapture(photo, FlutterError(code: "capture", message: "\(error.map { "\($0)" } ?? "no data")", details: nil))
@@ -1217,7 +1221,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     static let maxColors = 4
     var count = 0
     var colors = [Kept](repeating: Kept(), count: maxColors)
-    var contrast: Float = 0.1, ambience: Float = 0.4, vignette: Float = 0, vignetteRadius: Float = 0.8
+    var contrast: Float = 0.1, ambience: Float = 0.2, vignette: Float = 0, vignetteRadius: Float = 0.8
     var castA: Float = 0, castB: Float = 0
     var castStale = true
 

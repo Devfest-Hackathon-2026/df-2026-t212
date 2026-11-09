@@ -23,6 +23,7 @@ class Shell extends StatefulWidget {
 
 class _ShellState extends State<Shell> {
   int _tab = 0;
+  bool _selecting = false;
 
   void _camera() {
     Haptics.light();
@@ -58,7 +59,7 @@ class _ShellState extends State<Shell> {
                   opacity: _tab == 0 ? 1 : 0,
                   duration: const Duration(milliseconds: 260),
                   curve: Motion.settle,
-                  child: const PhotosScreen(),
+                  child: PhotosScreen(onSelectionChanged: (value) => setState(() => _selecting = value)),
                 ),
               ),
             ),
@@ -87,10 +88,11 @@ class _ShellState extends State<Shell> {
               curve: hidden ? Curves.easeInCubic : Motion.settle,
               left: 20,
               right: 20,
-              bottom: hidden ? -100 : pad.bottom + 10,
+              bottom: hidden || _selecting ? -100 : pad.bottom + 10,
               child: Row(
                 children: [
                   Glass(
+                    dock: true,
                     radius: 28,
                     padding: const EdgeInsets.all(5),
                     child: _TabSwitch(
@@ -102,6 +104,7 @@ class _ShellState extends State<Shell> {
                   const Spacer(),
                   // Import and Camera bring photos in; they are acts, not places.
                   Glass(
+                    dock: true,
                     radius: 28,
                     child: Row(children: [
                       _RoundAction(onTap: () {
