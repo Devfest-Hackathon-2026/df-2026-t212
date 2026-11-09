@@ -761,7 +761,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       Positioned(top: top - 6, right: 8, child: _optionsMenu()),
                       // The colors in view drop from the + they would fill.
                       Positioned(
-                        top: top - 4,
+                        top: top + 6,
                         left: 0,
                         right: 0,
                         child: Center(child: _inView()),
@@ -876,78 +876,118 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// The kept colors: a dot each, the chosen one with its hex; a dashed dot
-  /// to add another.
+  /// The kept colors, a dot each in one capsule, the one being set ringed;
+  /// the next empty place at the end; past a hairline, the cross that lets
+  /// the ringed one go.
   Widget _chips() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < _r.colors.length; i++) _chip(i),
-        if (_addSlot >= 0)
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              Haptics.tick();
-              setState(() => _active = _addSlot);
-            },
-            child: Padding(
-              padding: const EdgeInsets.all(6),
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CustomPaint(painter: _DashedDot(strong: _active == _addSlot)),
-              ),
-            ),
+    final cur = _cur;
+    return _tray(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: SizedBox(
+        height: 36,
+        child: AnimatedSize(
+          duration: const Duration(milliseconds: 280),
+          curve: Motion.settle,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < _r.colors.length; i++)
+                _slot(
+                  key: ValueKey('kept$i'),
+                  on: i == _active,
+                  onTap: () => setState(() => _active = i),
+                  dot: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Motion.settle,
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: colorOf(_r.colors[i]),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0x2EFFFFFF), width: 0.6),
+                    ),
+                  ),
+                ),
+              if (_addSlot >= 0)
+                _slot(
+                  key: const ValueKey('add'),
+                  on: _active == _addSlot,
+                  onTap: () => setState(() => _active = _addSlot),
+                  dot: const SizedBox.square(dimension: 20, child: CustomPaint(painter: _EmptyDot())),
+                ),
+              if (cur != null) ...[
+                Container(
+                  width: 0.6,
+                  height: 16,
+                  margin: const EdgeInsets.only(left: 3),
+                  color: const Color(0x33FFFFFF),
+                ),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _remove(_active),
+                  child: const SizedBox(
+                    width: 30,
+                    height: 36,
+                    child: Center(child: Glyph(G.close, size: 13, color: _dim, weight: 1.5)),
+                  ),
+                ),
+              ],
+            ],
           ),
-      ],
+        ),
+      ),
     );
   }
 
-  Widget _chip(int i) {
-    final c = _r.colors[i];
-    final sel = i == _active;
+  /// A place in the palette, its dot ringed while it is the one being set:
+  /// the ring grows out from behind the dot.
+  Widget _slot({required Key key, required bool on, required Widget dot, required VoidCallback onTap}) {
     return GestureDetector(
+      key: key,
       behavior: HitTestBehavior.opaque,
       onTap: () {
         Haptics.tick();
-        setState(() => _active = i);
+        onTap();
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        curve: Motion.settle,
-        margin: const EdgeInsets.symmetric(horizontal: 2),
-        padding: EdgeInsets.fromLTRB(6, 5, sel ? 4 : 6, 5),
-        decoration: BoxDecoration(
-          color: sel ? const Color(0x1FFFFFFF) : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
+      child: SizedBox(
+        width: 32,
+        height: 36,
+        child: Stack(
+          alignment: Alignment.center,
           children: [
             AnimatedContainer(
+              duration: const Duration(milliseconds: 260),
               curve: Motion.settle,
-              duration: const Duration(milliseconds: 220),
-              width: 18,
-              height: 18,
+              width: on ? 28 : 20,
+              height: on ? 28 : 20,
               decoration: BoxDecoration(
-                color: colorOf(c),
                 shape: BoxShape.circle,
-                border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
+                border: Border.all(color: on ? _ink : const Color(0x00F2F2F0), width: 1.5),
               ),
             ),
-            if (sel) ...[
-              const SizedBox(width: 7),
-              Text(oklabToHex(c.l, c.a, c.b).toUpperCase(), style: Txt.mono.copyWith(color: _ink, fontSize: 12)),
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => _remove(i),
-                child: const Padding(
-                  padding: EdgeInsets.only(left: 4, right: 2),
-                  child: Glyph(G.close, size: 14, color: _dim, weight: 1.4),
-                ),
-              ),
-            ],
+            dot,
           ],
+        ),
+      ),
+    );
+  }
+
+  /// The ground colors sit on: dark and neutral enough that a swatch reads
+  /// as itself over any scene, not tinted by what is blurred behind it.
+  Widget _tray({required Widget child, double radius = 18, EdgeInsets padding = EdgeInsets.zero}) {
+    final r = BorderRadius.circular(radius);
+    return ClipRRect(
+      borderRadius: r,
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: const Color(0xA6141414),
+            borderRadius: r,
+            border: Border.all(color: const Color(0x1FFFFFFF), width: 0.6),
+          ),
+          child: child,
         ),
       ),
     );
@@ -1459,12 +1499,11 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
           alignment: Alignment.topCenter,
           duration: Duration(milliseconds: open ? 300 : 160),
           curve: open ? Motion.settle : Curves.easeInCubic,
-          child: Glass(
-            dark: true,
-            radius: 24,
+          child: _tray(
+            radius: 22,
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: SizedBox(
-              height: 46,
+              height: 44,
               child: _candidates.isEmpty
                   ? Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -1473,7 +1512,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                         child: Text('No strong colors', style: Txt.small.copyWith(color: _dim)),
                       ),
                     )
-                  : _swatchRow(44, 30),
+                  : _swatchRow(38, 26),
             ),
           ),
         ),
@@ -2168,7 +2207,7 @@ class _ZoomWheelPainter extends CustomPainter {
 }
 
 /// Width and Edge, made as the zoom's buttons are: a frosted capsule by the
-/// shutter holding ↔ and ◐ with their numbers. Held or slid, the one under
+/// shutter holding each name with its number. Held or slid, the one under
 /// the finger opens into the same half disc, a unit to a tick, turning with
 /// the finger under a fixed mark; the other steps back. Tapped, it shows
 /// its wheel a moment, so the hand learns it turns. On the open wheel, a
@@ -2418,22 +2457,17 @@ class _ReachWheelPainter extends CustomPainter {
   final int active;
 
   static const ink = _ZoomWheelPainter.ink;
-  static const glyphs = [G.width, G.edge];
+  static const names = ['Width', 'Edge'];
 
   /// Points of rim a unit, and as far under the finger.
   static const unit = 6.0;
 
-  static _WheelGeometry geometry(Size s, double base) => _WheelGeometry(s, 2, step: 66, base: base);
+  static _WheelGeometry geometry(Size s, double base) => _WheelGeometry(s, 2, step: 78, base: base);
 
   /// Where [v] sits on the wheel standing at [at]: the tens as numbers, the
   /// default as a dot just inside the ticks.
   static Offset labelAt(_WheelGeometry g, double at, double v, bool dot) =>
       g.onRim((v - at) * unit / g.r, dot ? 25 : 34);
-
-  Offset _turned(Offset v) {
-    final a = turns * 2 * math.pi;
-    return Offset(v.dx * math.cos(a) - v.dy * math.sin(a), v.dx * math.sin(a) + v.dy * math.cos(a));
-  }
 
   void _text(Canvas canvas, String text, Offset at, double size, Color color, {FontWeight weight = FontWeight.w500}) {
     final tp = TextPainter(
@@ -2455,11 +2489,30 @@ class _ReachWheelPainter extends CustomPainter {
     canvas.restore();
   }
 
-  void _glyph(Canvas canvas, G g, Offset at, double size, Color color) {
+  /// A name and its number side by side, centered on [at] together, upright
+  /// for the person.
+  void _pair(Canvas canvas, String name, String number, Offset at, double size, double nameAlpha, double alpha, bool bold) {
+    TextPainter lay(String text, Color color, FontWeight weight) => TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: size,
+          fontWeight: weight,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final a = lay(name, ink.withValues(alpha: nameAlpha), FontWeight.w500);
+    final b = lay(number, ink.withValues(alpha: alpha), bold ? FontWeight.w600 : FontWeight.w500);
+    const gap = 5.0;
+    final w = a.width + gap + b.width;
     canvas.save();
     canvas.translate(at.dx, at.dy);
     canvas.rotate(turns * 2 * math.pi);
-    paintGlyph(canvas, g, Offset.zero, size, color, weight: 1.5);
+    a.paint(canvas, Offset(-w / 2, -a.height / 2));
+    b.paint(canvas, Offset(-w / 2 + a.width + gap, -b.height / 2));
     canvas.restore();
   }
 
@@ -2518,9 +2571,9 @@ class _ReachWheelPainter extends CustomPainter {
 
       // The tens on the wheel, giving way near the top to the number set.
       for (var v = 0.0; v <= 60; v += 10) {
-        // The number set is wider than the zoom's, its glyph beside it.
+        // The number set is wider than the zoom's, its name beside it.
         final along = (v - pos).abs() * unit;
-        final near = (1 - (along - 46) / 22).clamp(0.0, 1.0);
+        final near = (1 - (along - 54) / 22).clamp(0.0, 1.0);
         final fade = (1 - math.pow(along / 240, 3)).clamp(0.0, 1.0) * (1 - near);
         if (fade <= 0) continue;
         _text(canvas, v.toStringAsFixed(0), scaled(labelAt(g, pos, v, false)), 12, ink.withValues(alpha: 0.85 * fade * t));
@@ -2536,15 +2589,15 @@ class _ReachWheelPainter extends CustomPainter {
       final at = on ? Offset.lerp(from, atTop, t)! : from;
       final alpha = on ? 1.0 : (1 - t * 1.6).clamp(0.0, 1.0);
       if (alpha <= 0) continue;
-      final gap = on ? 10 + 3 * t : 10.0;
-      _glyph(canvas, glyphs[i], at + _turned(Offset(-gap, 0)), on ? 16 + t : 16, ink.withValues(alpha: alpha * 0.92));
-      _text(
+      _pair(
         canvas,
+        names[i],
         values[i].round().toString(),
-        at + _turned(Offset(gap - 1, 0)),
+        at,
         on ? 12.5 + 1.5 * t : 12.5,
-        ink.withValues(alpha: alpha),
-        weight: on && t > 0.5 ? FontWeight.w600 : FontWeight.w500,
+        alpha * (0.62 + 0.2 * t),
+        alpha,
+        on && t > 0.5,
       );
     }
     canvas.restore();
@@ -2634,30 +2687,24 @@ class _BiasPainter extends CustomPainter {
   bool shouldRepaint(_BiasPainter o) => o.t != t;
 }
 
-/// The empty dot a new color goes into.
-class _DashedDot extends CustomPainter {
-  _DashedDot({required this.strong});
-  final bool strong;
+/// The empty place a new color goes into: a faint disc with a plus.
+class _EmptyDot extends CustomPainter {
+  const _EmptyDot();
 
   @override
   void paint(Canvas canvas, Size s) {
-    final p = Paint()
-      ..color = strong ? const Color(0xFFF2F2F0) : const Color(0x80FFFFFF)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
     final c = s.center(Offset.zero);
-    final r = s.width / 2 - 0.6;
-    const n = 12;
-    for (var i = 0; i < n; i++) {
-      final a = i * 2 * math.pi / n;
-      canvas.drawArc(Rect.fromCircle(center: c, radius: r), a, math.pi / n, false, p);
-    }
-    canvas.drawLine(c - const Offset(4, 0), c + const Offset(4, 0), p);
-    canvas.drawLine(c - const Offset(0, 4), c + const Offset(0, 4), p);
+    canvas.drawCircle(c, s.width / 2, Paint()..color = const Color(0x24FFFFFF));
+    final p = Paint()
+      ..color = const Color(0xE6F2F2F0)
+      ..strokeWidth = 1.4
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(c - const Offset(4.2, 0), c + const Offset(4.2, 0), p);
+    canvas.drawLine(c - const Offset(0, 4.2), c + const Offset(0, 4.2), p);
   }
 
   @override
-  bool shouldRepaint(_DashedDot o) => o.strong != strong;
+  bool shouldRepaint(_EmptyDot o) => false;
 }
 
 class _Ping {
