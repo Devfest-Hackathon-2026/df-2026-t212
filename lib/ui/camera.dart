@@ -914,11 +914,9 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// The kept colors, a dot each in one capsule, the one being set ringed;
-  /// the next empty place at the end; past a hairline, the cross that lets
-  /// the ringed one go.
+  /// The kept colors, a dot each in one capsule, the one being set ringed
+  /// and wearing the cross that lets it go; the next empty place at the end.
   Widget _chips() {
-    final cur = _cur;
     return _tray(
       padding: const EdgeInsets.symmetric(horizontal: 3),
       child: SizedBox(
@@ -934,6 +932,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                   key: ValueKey('kept$i'),
                   on: i == _active,
                   onTap: () => setState(() => _active = i),
+                  onRemove: () => _remove(i),
                   dot: AnimatedContainer(
                     duration: const Duration(milliseconds: 220),
                     curve: Motion.settle,
@@ -956,23 +955,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                   }),
                   dot: const SizedBox.square(dimension: 20, child: CustomPaint(painter: _EmptyDot())),
                 ),
-              if (cur != null) ...[
-                Container(
-                  width: 0.6,
-                  height: 16,
-                  margin: const EdgeInsets.only(left: 3),
-                  color: const Color(0x33FFFFFF),
-                ),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _remove(_active),
-                  child: const SizedBox(
-                    width: 30,
-                    height: 36,
-                    child: Center(child: Glyph(G.close, size: 13, color: _dim, weight: 1.5)),
-                  ),
-                ),
-              ],
             ],
           ),
         ),
@@ -982,7 +964,14 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
 
   /// A place in the palette, its dot ringed while it is the one being set:
   /// the ring grows out from behind the dot.
-  Widget _slot({required Key key, required bool on, required Widget dot, required VoidCallback onTap}) {
+  Widget _slot({
+    required Key key,
+    required bool on,
+    required Widget dot,
+    required VoidCallback onTap,
+    VoidCallback? onRemove,
+  }) {
+    final badge = on && onRemove != null;
     return GestureDetector(
       key: key,
       behavior: HitTestBehavior.opaque,
@@ -995,6 +984,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         height: 36,
         child: Stack(
           alignment: Alignment.center,
+          clipBehavior: Clip.none,
           children: [
             AnimatedContainer(
               duration: const Duration(milliseconds: 260),
@@ -1007,6 +997,46 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
               ),
             ),
             dot,
+            // The cross on the ringed dot itself: only this one goes.
+            if (onRemove != null)
+              Positioned(
+                right: -3,
+                top: -2,
+                child: IgnorePointer(
+                  ignoring: !badge,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onRemove,
+                    child: SizedBox.square(
+                      dimension: 22,
+                      child: Center(
+                        child: AnimatedScale(
+                          scale: badge ? 1 : 0.4,
+                          duration: Duration(milliseconds: badge ? 300 : 140),
+                          curve: badge ? Motion.settle : Curves.easeInCubic,
+                          child: AnimatedOpacity(
+                            opacity: badge ? 1 : 0,
+                            duration: Duration(milliseconds: badge ? 200 : 120),
+                            curve: Motion.settle,
+                            child: Container(
+                              width: 15,
+                              height: 15,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: _ink,
+                                border: Border.all(color: const Color(0xFF141414), width: 1.5),
+                              ),
+                              child: const Center(
+                                child: Glyph(G.close, size: 9, color: Color(0xFF141414), weight: 1.5),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
