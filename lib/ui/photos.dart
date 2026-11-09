@@ -39,7 +39,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
     setState(() {
       _selecting = value;
       if (!value) _selected.clear();
-      if (first != null) _selected.add(first.key);
+      if (first != null) _selected.addAll(_members(first).map((it) => it.key));
     });
     widget.onSelectionChanged?.call(value);
   }
@@ -47,7 +47,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
   late final _sweep = SweepSelection(
     scroll: _scroll,
     order: () {
-      final list = _selecting ? s.visible : s.galleryItems;
+      final list = s.galleryItems;
       if (!s.groupByMonth) return list.map((it) => it.key).toList();
       final groups = <String, List<String>>{};
       for (final it in list) {
@@ -56,6 +56,10 @@ class _PhotosScreenState extends State<PhotosScreen> {
       return groups.values.expand((group) => group).toList();
     },
     selection: () => _selected,
+    selectionKeys: (key) {
+      final item = s.byKey(key);
+      return item == null ? <String>[] : _members(item).map((it) => it.key);
+    },
     onChanged: (next) => setState(() { _selected.clear(); _selected.addAll(next); }),
     onStep: Haptics.tick,
     onStart: () {
@@ -100,11 +104,31 @@ class _PhotosScreenState extends State<PhotosScreen> {
     super.dispose();
   }
 
+  List<PhotoItem> _members(PhotoItem item) {
+    final group = s.groupFor(item);
+    return group == null ? [item] : s.groupItems(group);
+  }
+
+  void _selectGroup(PhotoItem item) {
+    _sweep.end();
+    final members = _members(item);
+    final keys = members.map((it) => it.key).toSet();
+    Navigator.push(context, MaterialPageRoute<void>(builder: (_) => _GroupSelectionScreen(
+      members: members,
+      selected: _selected.intersection(keys),
+      onChanged: (next) {
+        if (!mounted) return;
+        setState(() { _selected.removeAll(keys); _selected.addAll(next); });
+      },
+    )));
+  }
+
   void _open(PhotoItem it, List<PhotoItem> all) {
     // Every photo opens to be looked at first; Edit is one tap from there.
     final list = all;
     if (_selecting) {
-      setState(() => _selected.contains(it.key) ? _selected.remove(it.key) : _selected.add(it.key));
+      final keys = _members(it).map((photo) => photo.key).toSet();
+      setState(() => keys.every(_selected.contains) ? _selected.removeAll(keys) : _selected.addAll(keys));
       Haptics.tick();
       return;
     }
@@ -134,9 +158,10 @@ class _PhotosScreenState extends State<PhotosScreen> {
     return ListenableBuilder(
       listenable: s,
       builder: (context, _) {
-        final list = _selecting ? s.visible : s.galleryItems;
+        final list = s.galleryItems;
         final visibleKeys = list.map((it) => it.key).toSet();
         _sweep.retainKeys(visibleKeys);
+        _selected.removeWhere((key) => s.byKey(key)?.shown != true);
         final hasDevelopment = s.items.any((it) => it.shown && (it.isUndeveloped || (it.state == Develop.pending || it.state == Develop.developing)));
         return Stack(
           key: _sweep.viewportKey,
@@ -383,6 +408,8 @@ class _PhotosScreenState extends State<PhotosScreen> {
         ),
         delegate: SliverChildBuilderDelegate((context, i) {
           final it = items[i];
+          final members = _members(it);
+          final selectedCount = members.where((photo) => _selected.contains(photo.key)).length;
           final done = it.state == Develop.done;
           final play = done && !_played.contains(it.key) && !it.seen;
           if (done) _played.add(it.key);
@@ -391,7 +418,8 @@ class _PhotosScreenState extends State<PhotosScreen> {
             child: _Tile(
             key: ValueKey(it.key),
             item: it,
-            groupCount: _selecting ? 1 : (s.groupFor(it)?.members.length ?? 1),
+            groupCount: members.length,
+            onGroupTap: _selecting && members.length > 1 ? () => _selectGroup(it) : null,
             play: play,
             size: _columns == 1 ? 1000 : (_columns == 3 ? 420 : 260),
             radius: switch (_columns) {
@@ -399,7 +427,8 @@ class _PhotosScreenState extends State<PhotosScreen> {
               3 => 6.0,
               _ => 4.0,
             },
-            selected: _selected.contains(it.key),
+            selected: selectedCount == members.length,
+            partiallySelected: selectedCount > 0 && selectedCount < members.length,
             selecting: _selecting,
             onTap: () => _open(it, all),
             ),
@@ -511,6 +540,102 @@ class _PhotosScreenState extends State<PhotosScreen> {
 
 }
 
+/// Individual selection stays scoped to the opened group, keeping the gallery
+/// layout and scroll position intact behind this route.
+class _GroupSelectionScreen extends StatefulWidget {
+  const _GroupSelectionScreen({required this.members, required this.selected, required this.onChanged});
+  final List<PhotoItem> members;
+  final Set<String> selected;
+  final ValueChanged<Set<String>> onChanged;
+
+  @override
+  State<_GroupSelectionScreen> createState() => _GroupSelectionScreenState();
+}
+
+class _GroupSelectionScreenState extends State<_GroupSelectionScreen> {
+  final _scroll = ScrollController();
+  late final Set<String> _selected = Set.of(widget.selected);
+  List<PhotoItem> get _members => widget.members.where((it) => Store.instance.byKey(it.key)?.shown == true).toList();
+  late final _sweep = SweepSelection(
+    scroll: _scroll,
+    order: () => _members.map((it) => it.key).toList(),
+    selection: () => _selected,
+    onChanged: _change,
+    onStart: Haptics.light,
+    onStep: Haptics.tick,
+  );
+
+  void _change(Set<String> next) {
+    setState(() { _selected.clear(); _selected.addAll(next); });
+    widget.onChanged(Set.of(_selected));
+  }
+
+  @override
+  void dispose() {
+    _sweep.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: SafeArea(child: ListenableBuilder(
+      listenable: Store.instance,
+      builder: (context, _) {
+        final members = _members;
+        final keys = members.map((it) => it.key).toSet();
+        _selected.retainAll(keys);
+        _sweep.retainKeys(keys);
+        return Column(children: [
+          Padding(padding: const EdgeInsets.fromLTRB(20, 8, 10, 0), child: Row(children: [
+            Expanded(child: Text('Group', style: Txt.display)),
+            TextAction('Done', onTap: () => Navigator.pop(context)),
+          ])),
+          Padding(padding: const EdgeInsets.fromLTRB(20, 4, 10, 8), child: Row(children: [
+            Expanded(child: Text('${_selected.length} of ${members.length} selected', style: Txt.small)),
+            TextAction(_selected.length == members.length ? 'Deselect all' : 'Select all', onTap: members.isEmpty ? null : () {
+              _sweep.end(); Haptics.tick();
+              _change(_selected.length == members.length ? {} : keys);
+            }),
+          ])),
+          Expanded(child: GestureDetector(
+            key: _sweep.viewportKey,
+            dragStartBehavior: DragStartBehavior.down,
+            onHorizontalDragStart: (d) => _sweep.begin(d.globalPosition),
+            onHorizontalDragUpdate: (d) => _sweep.move(d.globalPosition),
+            onHorizontalDragEnd: (_) => _sweep.end(),
+            onHorizontalDragCancel: _sweep.end,
+            onLongPressStart: (d) => _sweep.begin(d.globalPosition),
+            onLongPressMoveUpdate: (d) => _sweep.move(d.globalPosition),
+            onLongPressEnd: (_) => _sweep.end(),
+            onLongPressCancel: _sweep.end,
+            child: HeroMode(enabled: false, child: GridView.builder(
+              controller: _scroll,
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3, crossAxisSpacing: 4, mainAxisSpacing: 4),
+              itemCount: members.length,
+              itemBuilder: (context, i) {
+                final item = members[i];
+                return KeyedSubtree(key: _sweep.keyFor(item.key), child: _Tile(
+                  key: ValueKey('group-selection-${item.key}'),
+                  item: item, play: false, size: 420, radius: 6,
+                  selecting: true, selected: _selected.contains(item.key),
+                  onTap: () {
+                    final next = Set<String>.of(_selected);
+                    if (!next.remove(item.key)) next.add(item.key);
+                    Haptics.tick(); _change(next);
+                  },
+                ));
+              },
+            )),
+          )),
+        ]);
+      },
+    )),
+  );
+}
+
 class _Tile extends StatelessWidget {
   const _Tile({
     super.key,
@@ -519,12 +644,15 @@ class _Tile extends StatelessWidget {
     required this.size,
     required this.onTap,
     this.selected = false,
+    this.partiallySelected = false,
     this.selecting = false,
+    this.onGroupTap,
     this.groupCount = 1,
     this.radius = 0,
   });
   final PhotoItem item;
-  final bool play, selected, selecting;
+  final bool play, selected, partiallySelected, selecting;
+  final VoidCallback? onGroupTap;
   final double radius;
   final int size;
   final int groupCount;
@@ -540,7 +668,7 @@ class _Tile extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedScale(
-        scale: selected ? 0.9 : 1,
+        scale: selected || partiallySelected ? 0.9 : 1,
         duration: const Duration(milliseconds: 220),
         curve: Motion.settle,
         child: DecoratedBox(
@@ -584,8 +712,10 @@ class _Tile extends StatelessWidget {
                 ],
                 if (item.isUndeveloped || item.state == Develop.pending || item.state == Develop.developing)
                   Positioned(
-                    top: 6,
-                    right: 6,
+                    top: groupCount > 1 ? null : 6,
+                    bottom: groupCount > 1 ? 6 : null,
+                    left: groupCount > 1 ? 6 : null,
+                    right: groupCount > 1 && selecting ? 30 : 6,
                     child: IgnorePointer(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
@@ -594,7 +724,7 @@ class _Tile extends StatelessWidget {
                         ),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-                          child: Text(item.state == Develop.pending ? 'Queued' : item.state == Develop.developing ? 'Developing' : 'Undeveloped', style: Txt.mono.copyWith(fontSize: 9, color: Colors.white)),
+                          child: Text(item.state == Develop.pending ? 'Queued' : item.state == Develop.developing ? 'Developing' : 'Undeveloped', maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.mono.copyWith(fontSize: 9, color: Colors.white)),
                         ),
                       ),
                     ),
@@ -658,18 +788,36 @@ class _Tile extends StatelessWidget {
                   Positioned(left: 6, right: 6, bottom: 27,
                     child: IgnorePointer(child: Align(alignment: Alignment.centerLeft,
                       child: AgentWorkStatus(run: run, compact: true)))),
-                if (groupCount > 1 && !selecting)
+                if (groupCount > 1)
                   Positioned(
-                    left: 6, top: 6,
-                    child: Semantics(label: '$groupCount grouped photos', child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                      decoration: BoxDecoration(color: const Color(0x99000000), borderRadius: BorderRadius.circular(5)),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.photo_library_outlined, size: 12, color: Colors.white),
-                        const SizedBox(width: 4),
-                        Text('$groupCount', style: Txt.small.copyWith(fontSize: 11, color: Colors.white)),
-                      ]),
-                    )),
+                    left: 0, top: 0,
+                    child: Semantics(
+                      excludeSemantics: true,
+                      label: onGroupTap == null ? '$groupCount grouped photos' : 'Choose photos in group of $groupCount',
+                      value: selecting ? (partiallySelected ? 'Partially selected' : selected ? 'Selected' : 'Not selected') : null,
+                      button: onGroupTap != null,
+                      onTap: onGroupTap,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: onGroupTap,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                          child: Align(alignment: Alignment.topLeft, widthFactor: 1, heightFactor: 1,
+                            child: Container(
+                              margin: const EdgeInsets.all(6),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                              decoration: BoxDecoration(color: const Color(0x99000000), borderRadius: BorderRadius.circular(5)),
+                              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                const Icon(Icons.photo_library_outlined, size: 12, color: Colors.white),
+                                const SizedBox(width: 4),
+                                Text('$groupCount', style: Txt.small.copyWith(fontSize: 11, color: Colors.white)),
+                                if (onGroupTap != null) const Icon(Icons.chevron_right, size: 12, color: Colors.white),
+                              ]),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 if (selecting)
                   Positioned(
@@ -679,11 +827,13 @@ class _Tile extends StatelessWidget {
                       width: 18,
                       height: 18,
                       decoration: BoxDecoration(
-                        color: selected ? Neutral.primary : const Color(0x40000000),
+                        color: selected || partiallySelected ? Neutral.primary : const Color(0x40000000),
                         shape: BoxShape.circle,
                         border: Border.all(color: Neutral.surface, width: 1.5),
                       ),
-                      child: selected ? const Center(child: Glyph(G.check, size: 11, color: Neutral.surface)) : null,
+                      child: partiallySelected
+                          ? const Center(child: SizedBox(width: 8, height: 2, child: ColoredBox(color: Neutral.surface)))
+                          : selected ? const Center(child: Glyph(G.check, size: 11, color: Neutral.surface)) : null,
                     ),
                   ),
               ],

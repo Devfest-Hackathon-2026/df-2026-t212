@@ -14,6 +14,7 @@ class SweepSelection {
     this.onStart,
     this.onStep,
     this.canSelect,
+    this.selectionKeys,
     this.insets,
   });
 
@@ -25,6 +26,9 @@ class SweepSelection {
   /// Feedback for a changed range, limited to once per 60 ms.
   final VoidCallback? onStep;
   final bool Function(String)? canSelect;
+  /// A visible tile may represent several selected photos (a collapsed group).
+  final Iterable<String> Function(String)? selectionKeys;
+  Iterable<String> _selectionKeys(String id) => selectionKeys?.call(id) ?? [id];
   final EdgeInsets Function()? insets;
   final viewportKey = GlobalKey();
   final Map<String, GlobalKey> _keys = {};
@@ -75,7 +79,7 @@ class SweepSelection {
     end();
     _before = Set.of(selection());
     _anchor = id;
-    _adds = !_before.contains(id);
+    _adds = !_selectionKeys(id).every(_before.contains);
     onStart?.call();
     if (onStart != null) _cooldownFeedback();
     move(position);
@@ -95,7 +99,7 @@ class SweepSelection {
     final finish = ids.indexOf(id ?? '');
     if (start < 0 || finish < 0) return;
     final range = ids.sublist(start < finish ? start : finish, (start > finish ? start : finish) + 1)
-        .where((id) => canSelect?.call(id) ?? true);
+        .where((id) => canSelect?.call(id) ?? true).expand(_selectionKeys);
     final next = Set<String>.of(_before);
     if (_adds) { next.addAll(range); } else { next.removeAll(range); }
     if (!setEquals(next, selection())) {

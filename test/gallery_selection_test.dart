@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:afterhue/data/photo_source.dart';
 import 'package:afterhue/data/store.dart';
 import 'package:afterhue/ui/photos.dart';
 import 'package:flutter/material.dart';
@@ -21,11 +23,17 @@ void main() {
       return null;
     });
     addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    final folder = Directory.systemTemp.createTempSync('afterhue-sweep-');
+    const paths = MethodChannel('plugins.flutter.io/path_provider');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(paths, (_) async => folder.path);
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(paths, null);
+      folder.deleteSync(recursive: true);
+    });
     final store = Store.instance;
-    store.items.clear();
-    store.items.addAll(List.generate(72, (i) => PhotoItem(
-      id: 'sweep-$i', taken: DateTime(2026, i < 12 ? 11 : 10, 10),
-      width: 600, height: 900, state: Develop.manual, picked: true,
+    await tester.runAsync(store.init);
+    await store.importRefs(List.generate(72, (i) => PhotoRef(
+      id: 'sweep-$i', taken: DateTime(2026, i < 12 ? 11 : 10, 10), width: 600, height: 900,
     )));
     final modes = <bool>[];
     await tester.pumpWidget(MaterialApp(home: Scaffold(body: PhotosScreen(onSelectionChanged: modes.add))));
@@ -112,5 +120,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.runAsync(() async { await Future<void>.delayed(const Duration(milliseconds: 30)); });
   });
 }
