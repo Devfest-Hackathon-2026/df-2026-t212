@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'crop.dart';
 
 /// One kept color. Stored in OKLab so it renders the same everywhere.
 class KeptColor {
@@ -10,6 +11,7 @@ class KeptColor {
     this.softness = 20,
     this.chromaMin = 0.03,
     this.lightness,
+    this.references = const [],
   });
 
   double l, a, b;
@@ -26,6 +28,10 @@ class KeptColor {
   /// Optional [low, high] OKLab lightness gate.
   List<double>? lightness;
 
+  /// Normalized source positions and their measured OKLab: [x, y, L, a, b].
+  /// These are evidence for source tracking, never instructions to the renderer.
+  List<List<double>> references;
+
   double get chroma => math.sqrt(a * a + b * b);
   double get hue => (math.atan2(b, a) * 180 / math.pi + 360) % 360;
 
@@ -37,6 +43,7 @@ class KeptColor {
         softness: softness,
         chromaMin: chromaMin,
         lightness: lightness == null ? null : List.of(lightness!),
+        references: references.map((p) => List<double>.of(p)).toList(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -45,6 +52,7 @@ class KeptColor {
         'softness': softness,
         'chromaMin': chromaMin,
         if (lightness != null) 'lightness': lightness,
+        if (references.isNotEmpty) 'references': references,
       };
 
   factory KeptColor.fromJson(Map<String, dynamic> j) {
@@ -57,6 +65,10 @@ class KeptColor {
       softness: (j['softness'] as num).toDouble(),
       chromaMin: (j['chromaMin'] as num?)?.toDouble() ?? 0.03,
       lightness: (j['lightness'] as List?)?.cast<num>().map((e) => e.toDouble()).toList(),
+      references: ((j['references'] as List?) ?? []).whereType<List>()
+          .where((p) => p.length == 5 && p.every((v) => v is num && v.isFinite))
+          .map((p) => p.cast<num>().map((v) => v.toDouble()).toList())
+          .where((p) => p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1).toList(),
     );
   }
 }
@@ -163,6 +175,8 @@ class Recipe {
     List<KeptColor>? excludedColors,
     this.area,
     this.contrast = 0.1,
+    this.saturation = 1,
+    this.crop,
     this.ambience = defaultAmbience,
     this.vignette = 0,
     this.vignetteRadius = defaultVignetteRadius,
@@ -184,6 +198,10 @@ class Recipe {
 
   /// Tone of the black-and-white part.
   double contrast;
+
+  /// Chroma multiplier for kept colors only. 1 preserves source color.
+  double saturation;
+  PhotoCrop? crop;
 
   /// How much of the light's color the black-and-white part keeps, 0-1.
   /// 0 is pure grey; higher keeps the warmth of a sunset or the blue of
@@ -213,6 +231,8 @@ class Recipe {
         excludedColors: excludedColors.map((c) => c.copy()).toList(),
         area: area?.copy(),
         contrast: contrast,
+        saturation: saturation,
+        crop: crop,
         ambience: ambience,
         vignette: vignette,
         vignetteRadius: vignetteRadius,
@@ -223,7 +243,11 @@ class Recipe {
 
   /// Stable key for render caching.
   String get signature {
-    final data = toJson().toString();
+    final visual = toJson();
+    for (final key in ['colors', 'excludedColors']) {
+      for (final c in (visual[key] as List? ?? [])) { (c as Map).remove('references'); }
+    }
+    final data = visual.toString();
     // Refresh cached exclusions after introducing relative hue separation.
     final hue = excludedColors.isEmpty ? '' : 'hue-separation-v2:';
     final mask = area == null || area!.isEmpty ? '' : 'outward-feather-v1:';
@@ -235,6 +259,8 @@ class Recipe {
         if (excludedColors.isNotEmpty) 'excludedColors': excludedColors.map((c) => c.toJson()).toList(),
         if (area != null) 'area': area!.toJson(),
         'contrast': contrast,
+        if (saturation != 1) 'saturation': saturation,
+        if (crop != null) 'crop': crop!.toJson(),
         'ambience': ambience,
         if (vignette > 0) 'vignette': vignette,
         if (vignette > 0) 'vignetteRadius': vignetteRadius,
@@ -248,6 +274,8 @@ class Recipe {
         excludedColors: ((j['excludedColors'] as List?) ?? []).map((c) => KeptColor.fromJson(c as Map<String, dynamic>)).toList(),
         area: j['area'] == null ? null : Area.fromJson(j['area'] as Map<String, dynamic>),
         contrast: (j['contrast'] as num?)?.toDouble() ?? 0.1,
+        saturation: ((j['saturation'] as num?)?.toDouble() ?? 1).clamp(0, 2),
+        crop: j['crop'] == null ? null : PhotoCrop.fromJson(Map<String, dynamic>.from(j['crop'])),
         ambience: (j['ambience'] as num?)?.toDouble() ?? defaultAmbience,
         vignette: (j['vignette'] as num?)?.toDouble() ?? 0,
         vignetteRadius: (j['vignetteRadius'] as num?)?.toDouble() ?? defaultVignetteRadius,

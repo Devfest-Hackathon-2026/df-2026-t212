@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
 import '../core/recipe.dart';
+import '../core/crop.dart';
 import '../core/renderer.dart';
 
 /// Decides a [Recipe] for one photo. The pixels are always made by the
@@ -258,7 +259,7 @@ class EditSession {
         if (args.containsKey('hex') || args.containsKey('x') || args.containsKey('y')) {
           final c = pickedColor();
           if (c == null) return 'error: give x,y or hex';
-          old..l = c.l..a = c.a..b = c.b;
+          old..l = c.l..a = c.a..b = c.b..references = c.references;
         }
         if (d('width') case final width?) old.width = width.clamp(0, 60);
         if (d('softness') case final softness?) old.softness = softness.clamp(0, 60);
@@ -341,6 +342,16 @@ class EditSession {
         if (edge != null) area.edge = edge;
         return 'ok; Boundary ${(area.boundary * originalShortSide).toStringAsFixed(1)} px; '
             'Feather ${(area.edge * originalShortSide).toStringAsFixed(1)} px (original photo)';
+      case 'set_crop':
+        try {
+          recipe.crop = args['reset'] == true ? null : PhotoCrop.fromJson({...?recipe.crop?.toJson(), ...args});
+          return 'ok; selections stay in original source coordinates';
+        } on FormatException catch (e) { return 'error: ${e.message}'; }
+      case 'set_saturation':
+        final value = d('value');
+        if (value == null || !value.isFinite || value < 0 || value > 2) return 'error: value must be 0..2; 1 preserves source saturation';
+        recipe.saturation = value;
+        return 'ok';
       case 'set_mono_tone':
         if (args['contrast'] != null) recipe.contrast = d('contrast')!.clamp(-0.3, 0.4);
         if (args['atmosphere'] != null) recipe.ambience = d('atmosphere')!.clamp(0.0, 1.0);

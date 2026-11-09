@@ -28,9 +28,42 @@ import Vision
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "OriginalHash") {
       OriginalHash.register(messenger: registrar.messenger())
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "SourceSnapshot") {
+      SourceSnapshot.register(messenger: registrar.messenger())
+    }
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "Subject") {
       Subject.register(messenger: registrar.messenger())
     }
+  }
+}
+
+/// Read the current rendered library version, without mutating Photos or
+/// silently downloading an iCloud original during a background scan.
+enum SourceSnapshot {
+  static func register(messenger: FlutterBinaryMessenger) {
+    FlutterMethodChannel(name: "afterhue/source_snapshot", binaryMessenger: messenger)
+      .setMethodCallHandler { call, result in
+        guard let id = call.arguments as? String,
+              let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else {
+          result(nil); return
+        }
+        let stamp = Int64((asset.modificationDate ?? asset.creationDate ?? Date.distantPast).timeIntervalSince1970 * 1000)
+        if call.method == "version" { result(stamp); return }
+        guard call.method == "capture" else { result(FlutterMethodNotImplemented); return }
+        let options = PHImageRequestOptions()
+        options.version = .current
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = false
+        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, info in
+          DispatchQueue.main.async {
+            guard let data = data, info?[PHImageErrorKey] == nil else { result(nil); return }
+            let image = UIImage(data: data)
+            result(["bytes": FlutterStandardTypedData(bytes: data), "modified": stamp,
+                    "width": Int((image?.size.width ?? CGFloat(asset.pixelWidth)) * (image?.scale ?? 1)),
+                    "height": Int((image?.size.height ?? CGFloat(asset.pixelHeight)) * (image?.scale ?? 1))])
+          }
+        }
+      }
   }
 }
 

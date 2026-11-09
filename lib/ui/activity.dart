@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../data/activity.dart';
 import '../data/store.dart';
 import 'detail.dart';
+import 'source_updates.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 
@@ -80,6 +81,10 @@ class ActivityScreen extends StatelessWidget {
                       child: InkWell(
                         onTap: () {
                           store.readActivity(entry);
+                          if (entry.kind == ActivityKind.sourceUpdate) {
+                            Navigator.push(context, MaterialPageRoute(builder: (_) => SourceUpdatesScreen(keys: entry.keys)));
+                            return;
+                          }
                           if (photos.isNotEmpty) {
                             Navigator.push(
                               context,

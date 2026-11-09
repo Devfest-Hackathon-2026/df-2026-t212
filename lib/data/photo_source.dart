@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/services.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:ui' as ui;
@@ -20,6 +21,40 @@ class PhotoRef {
 
 /// Reads the OS photo library. Originals are never modified.
 class PhotoSource {
+  static Directory? snapshots;
+  static const _snapshotChannel = MethodChannel('afterhue/source_snapshot');
+
+  static Future<int?> currentVersion(String id) async {
+    try { return await _snapshotChannel.invokeMethod<int>('version', id); }
+    catch (_) { return null; }
+  }
+
+  static Future<({String revision, int modified, List<int>? size})?> capture(String id) async {
+    final folder = snapshots;
+    if (folder == null) return null;
+    try {
+      final data = await _snapshotChannel.invokeMapMethod<String, dynamic>('capture', id);
+      final bytes = data?['bytes'] as Uint8List?;
+      if (bytes == null || bytes.isEmpty) return null;
+      final revision = await _hashSnapshot(bytes);
+      await folder.create(recursive: true);
+      final file = File('${folder.path}/$revision');
+      if (!await file.exists()) {
+        final temp = File('${file.path}.${DateTime.now().microsecondsSinceEpoch}.tmp');
+        await temp.writeAsBytes(bytes, flush: true);
+        await temp.rename(file.path);
+      }
+      final width = data!['width'] as int? ?? 0, height = data['height'] as int? ?? 0;
+      return (revision: revision, modified: data['modified'] as int, size: width > 0 && height > 0 ? [width, height] : null);
+    } catch (_) { return null; }
+  }
+
+  static Future<Uint8List?> snapshotBytes(String id) async {
+    final revision = id.substring('snapshot:'.length);
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(revision) || snapshots == null) return null;
+    try { return await File('${snapshots!.path}/$revision').readAsBytes(); }
+    catch (_) { return null; }
+  }
   static Future<Access> access({bool request = false}) async {
     final state = request
         ? await PhotoManager.requestPermissionExtend()
@@ -150,11 +185,53 @@ class PhotoSource {
   /// JPEG bytes of the photo, long side at most [maxSide].
   static Future<Uint8List?> jpeg(String id, int maxSide) async {
     try {
+      if (id.startsWith('snapshot:')) {
+        final key = '$id@$maxSide';
+        return await _loadingThumbs.putIfAbsent(key, () => _snapshotThumbnail(id, maxSide)
+          .whenComplete(() { _loadingThumbs.remove(key); }));
+      }
       final e = await _entity(id);
       return await e!.thumbnailDataWithSize(ThumbnailSize.square(maxSide), quality: 92);
     } catch (_) {
       return null;
     }
+  }
+
+  static final _loadingThumbs = <String, Future<Uint8List?>>{};
+
+  static Future<Uint8List?> _snapshotThumbnail(String id, int maxSide) async {
+    final folder = snapshots;
+    if (folder == null) return null;
+    final revision = id.substring('snapshot:'.length);
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(revision)) return null;
+    final file = File('${folder.path}/thumbs/${revision}_$maxSide.png');
+    if (await file.exists()) return file.readAsBytes();
+    final bytes = await snapshotBytes(id);
+    if (bytes == null) return null;
+    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    final descriptor = await ui.ImageDescriptor.encoded(buffer);
+    try {
+      final long = descriptor.width > descriptor.height ? descriptor.width : descriptor.height;
+      final scale = long > maxSide ? maxSide / long : 1.0;
+      final codec = await descriptor.instantiateCodec(
+        targetWidth: (descriptor.width * scale).round().clamp(1, descriptor.width),
+        targetHeight: (descriptor.height * scale).round().clamp(1, descriptor.height));
+      try {
+        final image = (await codec.getNextFrame()).image;
+        try {
+          final out = (await image.toByteData(format: ui.ImageByteFormat.png))?.buffer.asUint8List();
+          if (out != null) {
+            try {
+              await file.parent.create(recursive: true);
+              final temp = File('${file.path}.tmp');
+              await temp.writeAsBytes(out);
+              await temp.rename(file.path);
+            } on FileSystemException { /* Display still works without disk caching. */ }
+          }
+          return out;
+        } finally { image.dispose(); }
+      } finally { codec.dispose(); }
+    } finally { descriptor.dispose(); buffer.dispose(); }
   }
 
   // Shared across badge colors and render requests. A bounded decoded cache
@@ -163,6 +240,13 @@ class PhotoSource {
   static final _loadingPixels = <String, Future<Rgba?>>{};
   static int _pixelBytes = 0;
   static const _pixelBudget = 24 * 1024 * 1024;
+
+  static Rgba? cachedPixels(String id) {
+    for (final entry in _pixels.entries) {
+      if (entry.key.startsWith('$id@')) return entry.value;
+    }
+    return null;
+  }
 
   static Future<Rgba?> pixels(String id, int maxSide) {
     final key = '$id@$maxSide';
@@ -176,7 +260,7 @@ class PhotoSource {
   }
 
   static Future<Rgba?> _decodePhoto(String id, int maxSide, String key) async {
-    final bytes = await jpeg(id, maxSide);
+    final bytes = id.startsWith('snapshot:') ? await snapshotBytes(id) : await jpeg(id, maxSide);
     if (bytes == null) return null;
     final pixels = await decodeRgba(bytes, maxSide: maxSide);
     _pixels[key] = pixels;
@@ -246,3 +330,6 @@ Future<Rgba> decodeRgba(Uint8List bytes, {int? maxSide}) async {
   return out;
 }
 
+
+// Full-size source hashing must never block Flutter's UI isolate.
+Future<String> _hashSnapshot(Uint8List bytes) => Isolate.run(() => sha256.convert(bytes).toString());

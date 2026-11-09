@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/store.dart';
+import 'source_updates.dart';
 import 'onboarding.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
@@ -68,6 +69,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Haptics.tick();
             setState(() => s.setSwatches(SwatchStyle.values[(s.swatches.index + 1) % SwatchStyle.values.length]));
           }, preview: SwatchExamples(style: s.swatches)),
+          const SizedBox(height: 36),
+          _section('Originals'),
+          _switch('Follow changes in Photos', s.followSourceChanges, (v) => setState(() => s.setFollowSourceChanges(v))),
+          Padding(padding: const EdgeInsets.only(top: 6, bottom: 8), child: Text(
+            'Match the same colors on this device. Uncertain changes wait for review. Updates can be undone.', style: Txt.small)),
+          _row('Review original updates', '${s.items.where((it) => it.pendingSource != null).length}',
+            () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const SourceUpdatesScreen()));
+              if (mounted) setState(() {});
+            }),
           const SizedBox(height: 36),
           _section('Developing'),
           _switch('Develop new photos automatically', s.autoDevelop, (v) => setState(() => s.setAutoDevelop(v))),

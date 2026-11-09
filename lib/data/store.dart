@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
@@ -13,6 +14,7 @@ import '../agent/agent.dart';
 import '../agent/apple_judge.dart';
 import '../agent/openai_agent.dart';
 import '../core/recipe.dart';
+import '../core/source_tracking.dart';
 import '../core/burst_similarity.dart';
 import '../core/renderer.dart';
 import 'photo_source.dart';
@@ -29,8 +31,8 @@ class PhotoItem {
     required this.taken,
     this.lat,
     this.lng,
-    required this.width,
-    required this.height,
+    required int width,
+    required int height,
     this.edit,
     this.auto,
     this.state = Develop.pending,
@@ -47,11 +49,25 @@ class PhotoItem {
     this.exactDuplicateOf,
     this.burstPrint,
     this.captured = false,
-  });
+    this.sourceRevision, this.baselineSourceRevision, this.sourceModified, this.pendingSource, this.sourceReview,
+    this.previousSource, this.previousEdit, this.pendingEdit,
+    this.sourceSize, this.pendingSize, this.previousSize,
+  // Public dimension parameters stay compatible; getters follow the selected source version.
+  // ignore: prefer_initializing_formals
+  }) : _width = width, _height = height;
 
   /// Taken with After Hue's camera. Only these leave the iPhone's library
   /// when deleted here; any other photo is the person's own and stays there.
   final bool captured;
+  String? baselineSourceRevision;
+  String? sourceRevision, pendingSource, sourceReview, previousSource;
+  int? sourceModified;
+  Recipe? previousEdit, pendingEdit;
+  String get sourceId => sourceRevision == null ? id : 'snapshot:$sourceRevision';
+
+  /// Freezing the initial source changes storage, not the rendered pixels.
+  /// Older snapshots without baseline evidence keep their versioned cache key.
+  String get sourceCacheId => sourceRevision == null || sourceRevision == baselineSourceRevision ? id : sourceId;
 
   /// Library asset id. Duplicates share the asset and differ in [key].
   final String id;
@@ -60,7 +76,10 @@ class PhotoItem {
 
   final DateTime taken;
   final double? lat, lng;
-  final int width, height;
+  final int _width, _height;
+  List<int>? sourceSize, pendingSize, previousSize;
+  int get width => sourceSize?[0] ?? _width;
+  int get height => sourceSize?[1] ?? _height;
 
   Recipe? edit;
 
@@ -110,12 +129,23 @@ class PhotoItem {
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        if (sourceRevision != null) 'sourceRevision': sourceRevision,
+        if (baselineSourceRevision != null) 'baselineSourceRevision': baselineSourceRevision,
+        if (sourceModified != null) 'sourceModified': sourceModified,
+        if (pendingSource != null) 'pendingSource': pendingSource,
+        if (sourceReview != null) 'sourceReview': sourceReview,
+        if (previousSource != null) 'previousSource': previousSource,
+        if (previousEdit != null) 'previousEdit': previousEdit!.toJson(),
+        if (pendingEdit != null) 'pendingEdit': pendingEdit!.toJson(),
         if (copyOf != null) 'copyOf': copyOf,
         'taken': taken.millisecondsSinceEpoch,
         'lat': lat,
         'lng': lng,
-        'w': width,
-        'h': height,
+        'w': _width,
+        'h': _height,
+        if (sourceSize != null) 'sourceSize': sourceSize,
+        if (pendingSize != null) 'pendingSize': pendingSize,
+        if (previousSize != null) 'previousSize': previousSize,
         if (edit != null) 'edit': edit!.toJson(),
         if (auto != null) 'auto': auto!.toJson(),
         'state': state == Develop.developing ? Develop.pending.name : state.name,
@@ -156,6 +186,14 @@ class PhotoItem {
         exactDuplicateOf: j['exactDuplicateOf'] as String?,
         burstPrint: j['burstPrint'] == null ? null : base64Decode(j['burstPrint'] as String),
         captured: j['captured'] as bool? ?? false,
+        sourceSize: (j['sourceSize'] as List?)?.cast<int>(), pendingSize: (j['pendingSize'] as List?)?.cast<int>(),
+        previousSize: (j['previousSize'] as List?)?.cast<int>(),
+        baselineSourceRevision: j['baselineSourceRevision'] as String?,
+        sourceRevision: j['sourceRevision'] as String?, sourceModified: j['sourceModified'] as int?,
+        pendingSource: j['pendingSource'] as String?, sourceReview: j['sourceReview'] as String?,
+        previousSource: j['previousSource'] as String?,
+        previousEdit: j['previousEdit'] == null ? null : Recipe.fromJson(Map<String, dynamic>.from(j['previousEdit'])),
+        pendingEdit: j['pendingEdit'] == null ? null : Recipe.fromJson(Map<String, dynamic>.from(j['pendingEdit'])),
       );
 }
 
@@ -200,6 +238,7 @@ class Store extends ChangeNotifier {
   /// The agent develops new photos on its own. Off: everything waits for a
   /// person (or Auto in Edit).
   bool autoDevelop = true;
+  bool followSourceChanges = false;
   bool skipScreenshots = true;
 
   /// How swatches look: a piece of the photo, the same piece blurred, or a
@@ -301,6 +340,7 @@ class Store extends ChangeNotifier {
 
   Future<void> init() async {
     _dir = await getApplicationSupportDirectory();
+    PhotoSource.snapshots = Directory('${_dir.path}/sources');
     await Directory('${_dir.path}/renders').create(recursive: true);
     _patchCache = PhotoPatchCache(Directory('${_dir.path}/patches'));
     final f = File('${_dir.path}/state.json');
@@ -313,6 +353,7 @@ class Store extends ChangeNotifier {
         onboarded = j['onboarded'] as bool? ?? false;
         months = j['months'] as int? ?? 12;
         autoDevelop = j['autoDevelop'] as bool? ?? true;
+        followSourceChanges = j['followSourceChanges'] == true;
         skipScreenshots = j['skipScreenshots'] as bool? ?? true;
         groupByMonth = j['groupByMonth'] as bool? ?? true;
         groupSimilarPhotos = j['groupSimilarPhotos'] as bool? ?? true;
@@ -376,6 +417,7 @@ class Store extends ChangeNotifier {
 
   Future<void> resetForDemo() async {
     _resetting = true;
+    _sourceCheckTimer?.cancel();
     _generation++;
     _saveTimer?.cancel();
     try {
@@ -415,6 +457,7 @@ class Store extends ChangeNotifier {
       access = Access.unknown;
       months = 12;
       autoDevelop = true;
+      followSourceChanges = false;
       skipScreenshots = true;
       swatches = SwatchStyle.photo;
       autoSince = null;
@@ -437,6 +480,7 @@ class Store extends ChangeNotifier {
         'onboarded': onboarded,
         'months': months,
         'autoDevelop': autoDevelop,
+        'followSourceChanges': followSourceChanges,
         'skipScreenshots': skipScreenshots,
         'groupByMonth': groupByMonth,
         'groupSimilarPhotos': groupSimilarPhotos,
@@ -453,7 +497,9 @@ class Store extends ChangeNotifier {
       final previous = _saving;
       final saving = () async {
         await previous;
-        await File('${_dir.path}/state.json').writeAsString(jsonEncode(j));
+        final temp = File('${_dir.path}/state.pending.json');
+        await temp.writeAsString(jsonEncode(j), flush: true);
+        await temp.rename('${_dir.path}/state.json');
       }();
       _saving = saving;
       try {
@@ -565,6 +611,7 @@ class Store extends ChangeNotifier {
     }
     _pump();
     _scheduleGrouping();
+    scheduleSourceCheck();
   }
 
   /// Photos picked by hand, from any date.
@@ -827,12 +874,12 @@ class Store extends ChangeNotifier {
     final tag = it.id.substring(0, 6);
     _log('$tag revise: ${request.text ?? ''} ${request.marks.map((m) => '${m.intent.name}@${m.x.toStringAsFixed(2)},${m.y.toStringAsFixed(2)}').join(' ')}');
     try {
-      final px = await run.guard(PhotoSource.pixels(it.id, 768));
+      final px = await run.guard(sourcePixels(it, 768));
       if (px == null) throw StateError('could not read photo');
       final r = await agent.revise(px, current, request, originalSize: (width: it.width, height: it.height), log: (s) => _log('$tag $s'), run: run);
       if (run.cancelled) return;
-      run.result = r;
-      run.emit(r, 'finish');
+      run.result = await run.guard(withColorReferencesAsync(px, r));
+      run.emit(run.result!, 'finish');
       _log('$tag revised: ${run.note ?? ''}');
     } on AgentCancelled {
       if (generation == _generation) _log('$tag revise taken over');
@@ -913,7 +960,7 @@ class Store extends ChangeNotifier {
         await run.guard(_hashPhoto(it));
         if (it.exactDuplicateOf != null) throw _Skipped();
       }
-      final px = await run.guard(PhotoSource.pixels(it.id, 768));
+      final px = await run.guard(sourcePixels(it, 768));
       if (px == null) throw StateError('could not read photo');
       if (queued && !batchAuto && !it.judged) {
         final v = await run.guard(_judge(it, px, run));
@@ -936,6 +983,8 @@ class Store extends ChangeNotifier {
         recipe = await fallback.develop(px, run: run);
       }
       if (run.cancelled) throw AgentCancelled();
+      final chosen = recipe;
+      recipe = await run.guard(withColorReferencesAsync(px, chosen));
       it.auto = recipe;
       it.edit = recipe.copy();
       it.state = batchAuto && recipe.colors.isEmpty ? Develop.manual : Develop.done;
@@ -1039,6 +1088,10 @@ class Store extends ChangeNotifier {
 
   void setEdit(PhotoItem it, Recipe r) {
     it.edit = r;
+    it.pendingEdit = null;
+    if (it.pendingSource != null) it.sourceReview = 'Your edit changed. Review it against the updated original.';
+    final pixels = PhotoSource.cachedPixels(it.sourceId);
+    if (pixels != null) { unawaited(_attachReferences(it, r, pixels: pixels)); }
     _scheduleGrouping();
     _held.remove(it.key);
     if (it.state != Develop.done && r.colors.isNotEmpty) it.state = Develop.done;
@@ -1113,6 +1166,7 @@ class Store extends ChangeNotifier {
       state: it.state,
       seen: true,
       captured: it.captured,
+      sourceRevision: it.sourceRevision, baselineSourceRevision: it.baselineSourceRevision, sourceModified: it.sourceModified, sourceSize: it.sourceSize,
     );
     final i = items.indexOf(it);
     items.insert(i + 1, copy);
@@ -1301,7 +1355,7 @@ class Store extends ChangeNotifier {
         if (!_burstMetadata(first, it)) { anchor = it; current = null; continue; }
         for (final photo in [first, it]) {
           if (photo.burstPrint != null) continue;
-          final pixels = await PhotoSource.pixels(photo.id, 192);
+          final pixels = await sourcePixels(photo, 192);
           if (pixels != null) photo.burstPrint = burstSignature(pixels);
           if (revision != _groupRevision || generation != _generation || !groupSimilarPhotos) return;
         }
@@ -1336,43 +1390,206 @@ class Store extends ChangeNotifier {
 
   // ------------------------------------------------------------ rendering
 
+  final Map<String, Future<void>> _capturingSources = {};
+  bool _checkingSources = false;
+  Timer? _sourceCheckTimer;
+
+  /// Let the first gallery frames and visible cache reads finish first.
+  void scheduleSourceCheck() {
+    _sourceCheckTimer?.cancel();
+    _sourceCheckTimer = Timer(const Duration(seconds: 3), () {
+      unawaited(checkSourceChanges(background: true));
+    });
+  }
+  int openPhotoViews = 0;
+
+  Future<void> ensureSource(PhotoItem item) async {
+    if (item.sourceRevision != null) return;
+    return _capturingSources.putIfAbsent(item.key, () async {
+      final generation = _generation;
+      final snapshot = await PhotoSource.capture(item.id);
+      if (snapshot == null || generation != _generation || byKey(item.key) != item || item.sourceRevision != null) return;
+      item.sourceRevision = snapshot.revision;
+      item.baselineSourceRevision = snapshot.revision;
+      item.sourceSize = snapshot.size;
+      item.sourceModified = snapshot.modified;
+      _save();
+    }).whenComplete(() { _capturingSources.remove(item.key); });
+  }
+
+  Future<Rgba?> sourcePixels(PhotoItem item, int size) async {
+    await ensureSource(item);
+    return PhotoSource.pixels(item.sourceId, size);
+  }
+
+  Future<void> _attachReferences(PhotoItem item, Recipe recipe, {Rgba? pixels}) async {
+    final generation = _generation;
+    final revision = item.sourceRevision;
+    final px = pixels ?? await sourcePixels(item, 384);
+    if (px == null) return;
+    final enriched = await withColorReferencesAsync(px, recipe);
+    if (generation != _generation || byKey(item.key) != item || item.edit != recipe ||
+        (revision != null && revision != item.sourceRevision)) { return; }
+    item.edit = enriched;
+    _save();
+  }
+
+  void saveSourceReview() { _save(); notifyListeners(); }
+
+  void setFollowSourceChanges(bool value) {
+    followSourceChanges = value;
+    _save(); notifyListeners();
+  }
+
+  /// Scans are serialized and bounded to imported photos. They never invoke an
+  /// agent. A missing historical source gets a new baseline, not a guessed edit.
+  Future<void> checkSourceChanges({bool background = false}) async {
+    if (_checkingSources || _resetting || !ready) return;
+    _checkingSources = true;
+    final generation = _generation;
+    final changed = <PhotoItem>[];
+    final captured = <String, ({String revision, int modified, List<int>? size})?>{};
+    try {
+      for (final item in List<PhotoItem>.of(items.where((it) => it.shown))) {
+        if (background) await Future<void>.delayed(const Duration(milliseconds: 150));
+        if (generation != _generation) return;
+        if (byKey(item.key) != item || _held.contains(item.key) || _runs.containsKey(item.key)) continue;
+        if (item.sourceRevision == null) {
+          await ensureSource(item);
+          continue;
+        }
+        // Tracking derives legacy/HEX evidence from the frozen source only
+        // when an actual source change needs it. Do not decode every photo at launch.
+        final stamp = await PhotoSource.currentVersion(item.id);
+        if (stamp == null || stamp == item.sourceModified) continue;
+        if (!captured.containsKey(item.id)) { captured[item.id] = await PhotoSource.capture(item.id); }
+        final snapshot = captured[item.id];
+        if (snapshot == null) continue;
+        final oldEdit = item.edit, revision = item.sourceRevision;
+        final before = await PhotoSource.pixels(item.sourceId, 192);
+        final after = await PhotoSource.pixels('snapshot:${snapshot.revision}', 192);
+        if (generation != _generation || byKey(item.key) != item || item.edit != oldEdit ||
+            item.sourceRevision != revision || _held.contains(item.key) || _runs.containsKey(item.key)) { continue; }
+        if (before == null || after == null) continue;
+        item.sourceModified = snapshot.modified;
+        if (snapshot.revision == revision) {
+          item.pendingSource = null; item.pendingSize = null; item.pendingEdit = null; item.sourceReview = null;
+          _save(); continue;
+        }
+        final result = oldEdit == null ? const SourceTrackingResult(null, 'Review the updated photo.') :
+            await trackSourceAsync(before, after, oldEdit);
+        if (generation != _generation || byKey(item.key) != item || item.edit != oldEdit ||
+            item.sourceRevision != revision || _held.contains(item.key) || _runs.containsKey(item.key)) {
+          item.sourceModified = null; continue;
+        }
+        item.pendingSource = snapshot.revision;
+        item.pendingSize = snapshot.size;
+        item.pendingEdit = result.recipe;
+        item.sourceReview = result.reason;
+        changed.add(item);
+        if (followSourceChanges && result.canApply && openPhotoViews == 0) { applySourceUpdate(item); }
+        _save(); notifyListeners();
+      }
+      if (changed.isNotEmpty) {
+        final entry = _startActivity(ActivityKind.sourceUpdate, changed,
+          request: 'Changes from Photos · processed on this device');
+        for (final item in changed) { entry.finish(item.key, item.pendingSource == null ? ActivityOutcome.updated : ActivityOutcome.review); }
+        _save(); notifyListeners();
+      }
+    } finally { _checkingSources = false; }
+  }
+
+  bool applySourceUpdate(PhotoItem item) {
+    if (item.pendingSource == null || item.pendingEdit == null || _held.contains(item.key) ||
+        _runs.containsKey(item.key) || byKey(item.key) != item) { return false; }
+    item.previousSource = item.sourceRevision;
+    item.previousSize = item.sourceSize;
+    item.sourceSize = item.pendingSize;
+    item.previousEdit = item.edit?.copy();
+    item.sourceRevision = item.pendingSource;
+    item.edit = item.pendingEdit;
+    item.auto = null;
+    item.pendingSource = null; item.pendingSize = null; item.pendingEdit = null; item.sourceReview = null;
+    item.burstPrint = null;
+    _palette = null; _scheduleGrouping(); _save(); notifyListeners();
+    return true;
+  }
+
+  void keepSource(PhotoItem item) {
+    item.pendingSource = null; item.pendingSize = null; item.pendingEdit = null; item.sourceReview = null;
+    _save(); notifyListeners();
+  }
+
+  bool undoSourceUpdate(PhotoItem item) {
+    if (item.previousSource == null || _held.contains(item.key) || _runs.containsKey(item.key)) return false;
+    item.sourceRevision = item.previousSource;
+    item.sourceSize = item.previousSize;
+    item.previousSize = null;
+    item.edit = item.previousEdit;
+    item.previousSource = null; item.previousEdit = null;
+    item.pendingSource = null; item.pendingSize = null; item.pendingEdit = null; item.sourceReview = null;
+    item.auto = null; item.burstPrint = null;
+    _palette = null; _scheduleGrouping(); _save(); notifyListeners();
+    return true;
+  }
+
   final Map<String, Future<File?>> _renders = {};
+  final _renderWaiting = Queue<Completer<void>>();
+  int _renderRunning = 0;
 
   /// A rendered JPEG of the photo with its edit, long side [size].
   Future<File?> rendered(PhotoItem it, int size, {Recipe? recipe}) {
     final r = recipe ?? it.edit;
     if (r == null) return Future.value(null);
-    final key = '${it.id.replaceAll('/', '_')}_${r.signature}_$size';
-    return _renders[key] ??= _renderToFile(it.id, r, size, '${_dir.path}/renders/$key.jpg');
+    final key = '${it.sourceCacheId.replaceAll('/', '_')}_${r.signature}_$size';
+    return _renders[key] ??= _renderItemToFile(it, r, size, '${_dir.path}/renders/$key.jpg');
   }
 
-  static Future<File?> _renderToFile(String id, Recipe r, int size, String path) async {
+  Future<File?> _renderItemToFile(PhotoItem it, Recipe r, int size, String path) async {
     final f = File(path);
     if (await f.exists()) return f;
-    final px = await PhotoSource.pixels(id, size);
-    if (px == null) return null;
-    final bytes = await Isolate.run(() {
+    // Disk hits bypass the queue. Bound expensive cache misses so scrolling
+    // cannot launch a decoder + rendering isolate for every tile at once.
+    if (_renderRunning >= 2) {
+      final slot = Completer<void>();
+      _renderWaiting.add(slot);
+      await slot.future;
+    } else {
+      _renderRunning++;
+    }
+    try {
+      final px = await sourcePixels(it, size);
+      if (px == null) return null;
+      final bytes = await _renderJpeg(px, r);
+      await f.writeAsBytes(bytes);
+      return f;
+    } finally {
+      if (_renderWaiting.isNotEmpty) { _renderWaiting.removeFirst().complete(); }
+      else { _renderRunning--; }
+    }
+  }
+
+  static Future<Uint8List> _renderJpeg(Rgba px, Recipe r) => Isolate.run(() {
       final out = render(px, r).image;
       final im = img.Image.fromBytes(width: out.width, height: out.height, bytes: out.pixels.buffer, numChannels: 4)
           .convert(numChannels: 3);
       return Uint8List.fromList(img.encodeJpg(im, quality: 88));
     });
-    await f.writeAsBytes(bytes);
-    return f;
-  }
 
-  Future<Uint8List?> original(PhotoItem it, int size) => PhotoSource.jpeg(it.id, size);
+  // Display requests must not capture a full-size source. Unfrozen legacy
+  // items use the OS thumbnail until the background baseline is available.
+  Future<Uint8List?> original(PhotoItem it, int size) => PhotoSource.jpeg(it.sourceId, size);
 
   late PhotoPatchCache _patchCache;
 
   Future<ui.Image?> patch(PhotoItem it, KeptColor c, {bool light = false}) {
     if (swatches == SwatchStyle.flat) return SynchronousFuture(null);
-    return _patchCache.get(it.id, c, soft: swatches == SwatchStyle.soft, light: light);
+    return _patchCache.get(it.sourceCacheId, c, sourceId: it.sourceId, soft: swatches == SwatchStyle.soft, light: light);
   }
 
   ({ui.Image? image})? patchReady(PhotoItem it, KeptColor c) {
     if (swatches == SwatchStyle.flat) return (image: null);
-    return _patchCache.ready(it.id, c, soft: swatches == SwatchStyle.soft);
+    return _patchCache.ready(it.sourceCacheId, c, soft: swatches == SwatchStyle.soft);
   }
 
 }

@@ -1,5 +1,5 @@
-enum ActivityKind { importBatch, autoImport, editRequest, developBatch }
-enum ActivityOutcome { added, developed, skipped, failed, removed, cancelled }
+enum ActivityKind { importBatch, autoImport, editRequest, developBatch, sourceUpdate }
+enum ActivityOutcome { added, developed, skipped, failed, removed, cancelled, updated, review }
 
 /// One user-visible operation, not one notification per photograph.
 class ActivityEntry {
@@ -23,13 +23,16 @@ class ActivityEntry {
         ActivityKind.autoImport => 'Auto importing…',
         ActivityKind.editRequest => 'Agent editing…',
         ActivityKind.developBatch => 'Auto developing…',
+        ActivityKind.sourceUpdate => 'Checking updated originals…',
       };
     }
+    if (kind == ActivityKind.sourceUpdate) return count(ActivityOutcome.review) > 0 ? 'Originals updated · review' : 'Originals updated';
     final operation = switch (kind) {
       ActivityKind.importBatch => 'Import',
       ActivityKind.autoImport => 'Auto import',
       ActivityKind.editRequest => 'Agent edit',
       ActivityKind.developBatch => 'Auto develop',
+      ActivityKind.sourceUpdate => 'Original update',
     };
     final succeeded = count(ActivityOutcome.added) + count(ActivityOutcome.developed);
     final failed = count(ActivityOutcome.failed);
@@ -44,6 +47,7 @@ class ActivityEntry {
       ActivityKind.autoImport => 'Auto imported',
       ActivityKind.editRequest => 'Edited by agent',
       ActivityKind.developBatch => 'Auto developed',
+      ActivityKind.sourceUpdate => 'Originals updated',
     };
   }
   void finish(String key, ActivityOutcome outcome) {

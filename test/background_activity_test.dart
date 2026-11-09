@@ -29,6 +29,13 @@ class PendingAgent extends DevelopAgent {
 
 void main() {
   testWidgets('Done lets the revision finish, save and create a linked activity', (tester) async {
+    Future<void> until(bool Function() ready) async {
+      for (var i = 0; i < 250 && !ready(); i++) {
+        await tester.pump();
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      }
+      expect(ready(), isTrue);
+    }
     final folder = Directory.systemTemp.createTempSync('afterhue-background-');
     const paths = MethodChannel('plugins.flutter.io/path_provider');
     const channel = MethodChannel('com.fluttercandies/photo_manager');
@@ -51,10 +58,10 @@ void main() {
     late AgentRun run;
     await tester.runAsync(() async {
       run = store.reviseNow(item, before, const Revision(text: 'Keep the flower'));
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+
     });
     await tester.pump();
-    expect(agent.started.isCompleted, isTrue);
+    await until(() => agent.started.isCompleted);
     final finished = Completer<void>();
     run.changes.listen((_) {}, onDone: finished.complete);
     await tester.pumpWidget(MaterialApp(home: Builder(builder: (context) => Scaffold(body: TextButton(
@@ -82,12 +89,14 @@ void main() {
     expect(find.text('Agent is selecting the subject…'), findsOneWidget);
     await tester.runAsync(() async {
       agent.result.complete(Recipe(colors: [keptColorFromHex('#FF8822')!], ambience: .31));
-      await Future<void>.delayed(const Duration(milliseconds: 30));
+
     });
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
+    await until(() => finished.isCompleted);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.byType(AgentWorkStatus), findsNothing);
-    expect(finished.isCompleted, isTrue);
     expect(item.edit!.ambience, .31);
     expect(entry.complete, isTrue);
     expect(entry.title, 'Edited by agent');
@@ -102,10 +111,10 @@ void main() {
     late AgentRun removedRun;
     await tester.runAsync(() async {
       removedRun = store.reviseNow(item, item.edit!, const Revision(text: 'Another change'));
-      await Future<void>.delayed(const Duration(milliseconds: 30));
+
     });
     await tester.pump();
-    expect(lateAgent.started.isCompleted, isTrue);
+    await until(() => lateAgent.started.isCompleted);
     store.continueEditing(item, removedRun);
     final count = store.activity.length;
     store.continueEditing(item, removedRun);

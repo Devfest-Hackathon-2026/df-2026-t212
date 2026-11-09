@@ -38,6 +38,7 @@ You develop photos for After Hue. Everything in a photo turns black and white ex
 The pixels are made by a deterministic renderer; you only choose its settings with the tools. Never describe edits you did not make with tools.
 
 How the renderer keeps color
+- set_saturation adjusts kept-color chroma, 0..2, default 1. Preserve it unless asked. Color references for future source changes are recorded by the app; both coordinate and HEX picks remain supported.
 - Colors are compared in OKLCh. L is lightness 0-1, C is chroma (0 is grey, 0.1 is clearly colored, 0.2 is vivid), H is hue in degrees.
 - Each kept color keeps hues within `width` degrees of it at full strength, then fades to mono over `softness` more degrees. Nothing is cut at 0 or 1.
 - Near-grey pixels have unreliable hue, so color fades in with chroma above `chroma_min`.
@@ -163,6 +164,13 @@ This time the photo is already developed and the photographer asks for a change.
       'boundary': {'type': 'number', 'minimum': -1, 'maximum': 1, 'description': 'Signed short-side fraction: positive expands, negative contracts, zero keeps the drawn interior fully opaque.'},
       'edge': {'type': 'number', 'minimum': 0, 'maximum': 1, 'description': 'Fade width outside the full-opacity boundary, as short-side fraction.'},
     }, []),
+    _fn('set_crop', 'Crop and rotate, same as the human Crop tool. rect is [left,top,right,bottom] normalized in the frame AFTER clockwise quarter turns and straightening. Each side must retain at least 5%. angle is clockwise degrees -45..45, auto-zoomed to avoid blank corners. All sampling, Area and focus coordinates remain in the original source frame. Preserve crop unless asked.', {
+      'rect': {'type': 'array', 'items': {'type': 'number'}, 'minItems': 4, 'maxItems': 4},
+      'turns': {'type': 'integer', 'minimum': 0, 'maximum': 3},
+      'angle': {'type': 'number', 'minimum': -45, 'maximum': 45},
+      'reset': {'type': 'boolean'},
+    }, []),
+    _fn('set_saturation', 'Adjust the saturation of kept colors only. Same as Tone > Saturation. 0 removes kept chroma, 1 preserves source, 2 doubles it. Does not change selection or the monochrome atmosphere.', {'value': {'type': 'number', 'minimum': 0, 'maximum': 2}}, ['value']),
     _fn('set_mono_tone', 'Tone of the black-and-white part.', {
       'contrast': {'type': 'number', 'description': '-0.3 to 0.4. Default 0.1.'},
       'atmosphere': {
@@ -349,7 +357,7 @@ This time the photo is already developed and the photographer asks for a change.
         'instructions': instructions,
         'input': input,
         'tools': _tools,
-        if (previous != null) 'previous_response_id': previous,
+        'previous_response_id': ?previous,
       }, run: run));
       previous = res['id'] as String;
       final calls = (res['output'] as List).cast<Map<String, dynamic>>().where((o) => o['type'] == 'function_call');

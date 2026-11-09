@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -310,6 +311,11 @@ class _DevelopedImageState extends State<DevelopedImage> {
   File? _display;
   String? _sig, _base;
   int _request = 0;
+  Timer? _placeholderTimer;
+  bool _showPlaceholder = false;
+
+  @override
+  void dispose() { _placeholderTimer?.cancel(); super.dispose(); }
 
   @override
   void didChangeDependencies() {
@@ -325,13 +331,22 @@ class _DevelopedImageState extends State<DevelopedImage> {
 
   void _load() {
     final recipe = widget.recipe ?? widget.item.edit;
-    final base = '${widget.item.id}|${recipe?.signature}';
+    final base = '${widget.item.sourceCacheId}|${recipe?.signature}';
     final sig = '$base@${widget.size}';
     if (_sig == sig) return;
     final samePhoto = _base == base;
     _sig = sig;
     _base = base;
     final request = ++_request;
+    _placeholderTimer?.cancel();
+    _showPlaceholder = false;
+    // A cached render normally arrives immediately. Do not start a second,
+    // full-source read for a placeholder that would never become visible.
+    _placeholderTimer = Timer(const Duration(milliseconds: 150), () {
+      if (mounted && request == _request && _display == null) {
+        setState(() => _showPlaceholder = true);
+      }
+    });
     if (!samePhoto) _display = _thumbnails[base]?.file;
     if (recipe == null) { _display = null; return; }
     final cached = _ready.remove(sig);
@@ -350,6 +365,7 @@ class _DevelopedImageState extends State<DevelopedImage> {
       }
       while (_ready.length > 256) { _ready.remove(_ready.keys.first); }
       while (_thumbnails.length > 256) { _thumbnails.remove(_thumbnails.keys.first); }
+      _placeholderTimer?.cancel();
       setState(() => _display = file);
     }).catchError((Object _) {
       // Keep the already visible thumbnail if a larger render is unavailable.
@@ -359,7 +375,7 @@ class _DevelopedImageState extends State<DevelopedImage> {
   @override
   Widget build(BuildContext context) {
     final file = _display;
-    if (file == null) return widget.placeholder ?? const ColoredBox(color: Neutral.hairline, child: SizedBox.expand());
+    if (file == null) return (_showPlaceholder ? widget.placeholder : null) ?? const ColoredBox(color: Neutral.hairline, child: SizedBox.expand());
     return Image.file(
       file,
       // A new photo must never inherit a previous photo's decoded frame.
@@ -391,15 +407,18 @@ class OriginalImage extends StatefulWidget {
 
 class _OriginalImageState extends State<OriginalImage> {
   static final Map<String, Future<Uint8List?>> _cache = {};
+  String? _sourceKey;
   late Future<Uint8List?> _f = _load();
 
-  Future<Uint8List?> _load() =>
-      _cache['${widget.item.id}_${widget.size}'] ??= Store.instance.original(widget.item, widget.size);
+  Future<Uint8List?> _load() {
+    _sourceKey = '${widget.item.sourceCacheId}_${widget.size}';
+    return _cache[_sourceKey!] ??= Store.instance.original(widget.item, widget.size);
+  }
 
   @override
   void didUpdateWidget(OriginalImage old) {
     super.didUpdateWidget(old);
-    if (old.item.id != widget.item.id || old.size != widget.size) _f = _load();
+    if (_sourceKey != '${widget.item.sourceCacheId}_${widget.size}') _f = _load();
   }
 
   @override
@@ -428,7 +447,8 @@ class _OriginalImageState extends State<OriginalImage> {
 Alignment focusAlignment(PhotoItem it) {
   final f = it.edit?.focus;
   if (f == null || f.length < 2) return Alignment.center;
-  return Alignment((f[0].clamp(0.0, 1.0) * 2 - 1), (f[1].clamp(0.0, 1.0) * 2 - 1));
+  final (x, y) = it.edit?.crop?.outputPoint(f[0], f[1], it.width, it.height) ?? (f[0], f[1]);
+  return Alignment((x.clamp(0.0, 1.0) * 2 - 1), (y.clamp(0.0, 1.0) * 2 - 1));
 }
 
 /// Text-only button, achromatic.

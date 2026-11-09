@@ -1,7 +1,9 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:isolate';
 
 import 'recipe.dart';
+import 'crop.dart';
 
 /// Deterministic selective-color renderer.
 ///
@@ -28,6 +30,9 @@ class RenderResult {
   /// Mean weight over the photo, 0..1.
   final double keptShare;
 }
+
+Future<Rgba> renderUncroppedAsync(Rgba source, Recipe recipe) =>
+    Isolate.run(() => render(source, recipe, applyGeometry: false).image);
 
 // ------------------------------------------------------------ color math
 
@@ -122,7 +127,9 @@ KeptColor sampleColor(Lab lab, double x, double y, {double radiusFrac = 0.008}) 
     }
   }
   double med(List<double> v) => (v..sort())[v.length ~/ 2];
-  return KeptColor(l: med(ls), a: med(as), b: med(bs));
+  final l = med(ls), a = med(as), b = med(bs);
+  return KeptColor(l: l, a: a, b: b,
+    references: [[x.clamp(0, 1), y.clamp(0, 1), l, a, b]]);
 }
 
 class HuePeak {
@@ -486,7 +493,7 @@ double _tone(double L, double contrast) {
   return (x + 2.4 * contrast * math.sin(2 * math.pi * (x - 0.5)) / (2 * math.pi)).clamp(0.0, 1.0);
 }
 
-RenderResult render(Rgba src, Recipe recipe, {Lab? lab}) {
+RenderResult render(Rgba src, Recipe recipe, {Lab? lab, bool applyGeometry = true}) {
   final w = src.width, h = src.height, n = w * h;
   lab ??= toLab(src);
   final raw = keepWeight(lab, recipe.colors);
@@ -518,7 +525,7 @@ RenderResult render(Rgba src, Recipe recipe, {Lab? lab}) {
     final k = weight[i];
     sum += k;
     final tl = _tone(lab.l[i], recipe.contrast);
-    var a = lab.a[i] * k, b = lab.b[i] * k;
+    var a = lab.a[i] * k * recipe.saturation, b = lab.b[i] * k * recipe.saturation;
     if (amb > 0) {
       // The mono part, toned: the light's cast strongest in the midtones (as
       // in a toned print), plus a trace of each place's own color.
@@ -541,7 +548,8 @@ RenderResult render(Rgba src, Recipe recipe, {Lab? lab}) {
     out[o + 2] = _toSrgb8(rgb[2]);
     out[o + 3] = 255;
   }
-  return RenderResult(Rgba(w, h, out), weight, sum / n);
+  final image = Rgba(w, h, out);
+  return RenderResult(applyGeometry && recipe.crop != null ? cropImage(image, recipe.crop!) : image, weight, sum / n);
 }
 
 /// Grayscale image of the weight map, for the agent's self-check.
@@ -667,4 +675,25 @@ Rgba liftPatch(Rgba src, double minL) {
     out[i * 4 + 3] = 255;
   }
   return Rgba(src.width, src.height, out);
+}
+
+/// Bilinear resampling at pixel centers, shared by export and agent previews.
+Rgba cropImage(Rgba source, PhotoCrop crop) {
+  final w = math.max(1, (crop.rotatedWidth(source.width, source.height) * crop.width).round());
+  final h = math.max(1, (crop.rotatedHeight(source.width, source.height) * crop.height).round());
+  final bytes = Uint8List(w * h * 4);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      final (sx, sy) = crop.sourcePoint((x + .5) / w, (y + .5) / h, source.width, source.height);
+      final xx = (sx - .5).clamp(0.0, source.width - 1.0), yy = (sy - .5).clamp(0.0, source.height - 1.0);
+      final x0 = xx.floor(), y0 = yy.floor(), x1 = math.min(source.width - 1, xx.floor() + 1), y1 = math.min(source.height - 1, yy.floor() + 1);
+      final dx = xx - x0, dy = yy - y0;
+      for (var c = 0; c < 4; c++) {
+        double at(int a, int b) => source.pixels[(b * source.width + a) * 4 + c].toDouble();
+        bytes[(y * w + x) * 4 + c] = ((at(x0, y0) * (1 - dx) + at(x1, y0) * dx) * (1 - dy) +
+            (at(x0, y1) * (1 - dx) + at(x1, y1) * dx) * dy).round();
+      }
+    }
+  }
+  return Rgba(w, h, bytes);
 }

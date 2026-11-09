@@ -73,6 +73,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
 
   @override
   void dispose() {
+    s.openPhotoViews--;
     if (_bare.value > 0) SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _bare.dispose();
     _gone.dispose();
@@ -120,6 +121,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
   @override
   void initState() {
     super.initState();
+    s.openPhotoViews++;
     if (!_hintShown) {
       _hintShown = true;
       _hint = true;
@@ -438,7 +440,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
       padding: const EdgeInsets.symmetric(horizontal: _gap),
       child: Center(
         child: AspectRatio(
-          aspectRatio: it.width / it.height,
+          aspectRatio: _showOriginal ? it.width / it.height : (it.edit?.crop?.ratio(it.width, it.height) ?? it.width / it.height),
           child: Stack(
             fit: StackFit.expand,
             children: [

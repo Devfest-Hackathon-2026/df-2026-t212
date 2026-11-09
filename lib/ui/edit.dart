@@ -10,11 +10,12 @@ import 'package:flutter/material.dart';
 
 import '../agent/agent.dart';
 import '../core/recipe.dart';
+import '../core/crop.dart';
 import '../core/renderer.dart';
-import '../data/photo_source.dart';
 import '../data/store.dart';
 import '../data/subject.dart';
 import 'edit_preview.dart';
+import 'crop_editor.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 import 'widgets/controls.dart';
@@ -45,8 +46,9 @@ enum _Tool { accent, area, mono }
 /// If the agent is still developing the photo, its work shows here live; the
 /// first change the person makes stops the agent and keeps what it did.
 class EditScreen extends StatefulWidget {
-  const EditScreen({super.key, required this.item});
+  const EditScreen({super.key, required this.item, this.onSaved});
   final PhotoItem item;
+  final VoidCallback? onSaved;
 
   @override
   State<EditScreen> createState() => _EditScreenState();
@@ -163,7 +165,7 @@ class _EditScreenState extends State<EditScreen> {
   }
 
   Future<void> _load() async {
-    final px = await PhotoSource.pixels(_it.id, 900);
+    final px = await Store.instance.sourcePixels(_it, 900);
     if (px == null || !mounted) return;
     final workerF = PreviewWorker.start(px);
     final lab = await _labOf(px);
@@ -619,11 +621,13 @@ class _EditScreenState extends State<EditScreen> {
     final run = _run;
     if (run != null && !run.cancelled) {
       Store.instance.continueEditing(_it, run);
+      widget.onSaved?.call();
       Navigator.pop(context);
       return;
     }
     _takeOver();
     Store.instance.setEdit(_it, _r..why = _byHand ? 'Edited by hand.' : _r.why);
+    widget.onSaved?.call();
     Navigator.pop(context);
   }
 
@@ -688,10 +692,29 @@ class _EditScreenState extends State<EditScreen> {
 
   final _zoom = PhotoZoomController();
 
+  Future<void> _openCrop() async {
+    final px = _px;
+    if (px == null) return;
+    FocusScope.of(context).unfocus();
+    final recipe = _r.copy();
+    final image = await _toImage(await renderUncroppedAsync(px, recipe));
+    if (!mounted) { image.dispose(); return; }
+    final route = MaterialPageRoute<PhotoCrop>(builder: (_) => CropEditor(image: image, initial: recipe.crop));
+    final next = await Navigator.push<PhotoCrop>(context, route);
+    if (next != null && mounted) {
+      _change(() => _r.crop = next);
+      _zoom.value = Matrix4.identity();
+    }
+    await route.completed;
+    image.dispose();
+  }
+
   Widget _photo() {
     final it = _it;
     final px = _px;
-    final ratio = px != null ? px.width / px.height : it.width / it.height;
+    final sourceSize = Size((px?.width ?? it.width).toDouble(), (px?.height ?? it.height).toDouble());
+    final crop = _r.crop ?? const PhotoCrop();
+    final ratio = crop.ratio(sourceSize.width, sourceSize.height);
     final areaMode = _tool == _Tool.area && !_asking;
     final asking = _asking;
     return LayoutBuilder(
@@ -699,10 +722,12 @@ class _EditScreenState extends State<EditScreen> {
         // The photo, fitted with a margin; pinch zooms it over the whole area.
         const m = 16.0;
         final availW = outer.maxWidth - m * 2, availH = outer.maxHeight - m * 2;
-        final w = math.min(availW, availH * ratio), h = w / ratio;
+        final visibleWidth = math.min(availW, availH * ratio), visibleHeight = visibleWidth / ratio;
+        final sourceScale = visibleWidth / (crop.rotatedWidth(sourceSize.width, sourceSize.height) * crop.width);
+        final w = sourceSize.width * sourceScale, h = sourceSize.height * sourceScale;
         final size = Size(w, h);
         final viewport = Size(outer.maxWidth, outer.maxHeight);
-        final frame = Rect.fromCenter(center: viewport.center(Offset.zero), width: w, height: h);
+        final frame = Rect.fromCenter(center: viewport.center(Offset.zero), width: visibleWidth, height: visibleHeight);
         _zoom.setGeometry(viewport, frame);
         WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _zoom.settle(); });
         Offset norm(Offset p) => Offset((p.dx / w).clamp(0, 1), (p.dy / h).clamp(0, 1));
@@ -827,8 +852,9 @@ class _EditScreenState extends State<EditScreen> {
         // The loupe stays a fixed size whatever the zoom: place it in screen space.
         Widget? loupe;
         if (_loupe != null && _original != null) {
-          final origin = Offset((outer.maxWidth - w) / 2, (outer.maxHeight - h) / 2);
-          final at = MatrixUtils.transformPoint(_zoom.value, origin + Offset(_loupe!.dx * w, _loupe!.dy * h));
+          final origin = Offset((outer.maxWidth - visibleWidth) / 2, (outer.maxHeight - visibleHeight) / 2);
+          final point = MatrixUtils.transformPoint(CroppedPhoto.matrix(crop, sourceSize, sourceScale), Offset(_loupe!.dx * w, _loupe!.dy * h));
+          final at = MatrixUtils.transformPoint(_zoom.value, origin + point);
           loupe = _loupeWidget(at, outer);
         }
         return ClipRect(
@@ -851,7 +877,7 @@ class _EditScreenState extends State<EditScreen> {
                   child: SizedBox(
                     width: outer.maxWidth,
                     height: outer.maxHeight,
-                    child: Center(child: photo),
+                    child: Center(child: CroppedPhoto(crop: crop, sourceSize: sourceSize, width: visibleWidth, builder: (_) => photo)),
                   ),
                   ),
                 ),
@@ -1166,7 +1192,7 @@ class _EditScreenState extends State<EditScreen> {
               transitionBuilder: softSwitch,
               child: SizedBox(
                 key: ValueKey(_tool),
-                height: _tool == _Tool.area ? 182 : _showColorModes ? 174 : 138,
+                height: _tool == _Tool.mono ? 174 : _tool == _Tool.area ? 182 : _showColorModes ? 174 : 138,
                 child: _toolBody(),
               ),
             ),
@@ -1204,6 +1230,11 @@ class _EditScreenState extends State<EditScreen> {
                     ),
                   ),
                 ),
+              Expanded(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _openCrop,
+                child: Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Column(children: [
+                  Text('Crop', style: Txt.label.copyWith(color: Neutral.secondary)),
+                  const SizedBox(height: 7),
+                ])))),
             ],
           ),
         ],
@@ -1222,7 +1253,7 @@ class _EditScreenState extends State<EditScreen> {
         ? (_adding ? 'Tap a color to exclude' : 'Adjust the color to exclude')
         : (_adding ? 'Tap the photo to add a color' : 'Tap the photo to change this color'),
     _Tool.area => _erase ? 'Paint to take color away' : 'Tap a thing, or paint over it',
-    _Tool.mono => 'The black and white part',
+    _Tool.mono => 'Color and atmosphere',
   };
 
   Widget _colorMode(String label, int count, bool exclude) {
@@ -1316,6 +1347,13 @@ class _EditScreenState extends State<EditScreen> {
       case _Tool.mono:
         return Column(
           children: [
+            SliderRow(
+              height: 34,
+              label: 'Saturation',
+              value: _r.saturation * 100, min: 0, max: 200, defaultValue: 100,
+              advanced: _advanced, onStart: () => _push(_r.copy()), onEnd: () {},
+              onChanged: (v) => _change(() => _r.saturation = v / 100, record: false),
+            ),
             SliderRow(
               height: 34,
               label: 'Contrast',

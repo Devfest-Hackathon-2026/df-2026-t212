@@ -130,7 +130,7 @@ class PreviewWorker {
       final watch = Stopwatch()..start();
       final src = proxy ? small : full;
       final lab = proxy ? smallLab : fullLab;
-      final res = render(src, r, lab: lab);
+      final res = render(src, r, lab: lab, applyGeometry: false);
       final out = view == PreviewView.mask.index ? _maskImage(res, src) : res.image;
       reply.send((
         id,

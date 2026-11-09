@@ -35,11 +35,11 @@ class PhotoPatchCache {
     return (image: image);
   }
 
-  Future<ui.Image?> get(String id, KeptColor color, {bool soft = false, bool light = false}) {
+  Future<ui.Image?> get(String id, KeptColor color, {String? sourceId, bool soft = false, bool light = false}) {
     final key = _key(id, color, soft, light);
     final hit = ready(id, color, soft: soft, light: light);
     if (hit != null) return SynchronousFuture(hit.image);
-    return _pending.putIfAbsent(key, () => _load(key, id, color.copy(), soft, light).whenComplete(() { _pending.remove(key); }));
+    return _pending.putIfAbsent(key, () => _load(key, sourceId ?? id, color.copy(), soft, light).whenComplete(() { _pending.remove(key); }));
   }
 
   Future<ui.Image?> _load(String key, String id, KeptColor color, bool soft, bool light) async {
