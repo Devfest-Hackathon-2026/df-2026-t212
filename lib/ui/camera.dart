@@ -79,8 +79,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   bool _touching = false;
   DateTime _touchedAt = DateTime(0);
 
-  /// The person has chosen a color; nothing is chosen for them after that.
-  bool _chosen = false;
   Timer? _scan;
 
   Offset? _loupe; // normalized
@@ -577,7 +575,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
 
   /// Keeps [c]: in place of the chosen color, or as a new one.
   void _pick(KeptColor c, {Offset? at}) {
-    _chosen = true;
     Haptics.tick();
     setState(() {
       final cur = _cur;
@@ -613,7 +610,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   }
 
   void _remove(int i) {
-    _chosen = true;
     Haptics.light();
     setState(() {
       _r.colors.removeAt(i);
@@ -1220,17 +1216,19 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     LiveCamera.macro(on);
   }
 
-  /// Until a color is kept, upright, how to keep one, where Width and
-  /// Edge will be.
+  /// While the add slot is selected, explain how to pick from the preview.
   Widget _dock() {
-    final show = _feed != null && _cur == null && !_chosen && !_sideways;
+    final show = _feed != null && _addSlot >= 0 && _active == _addSlot &&
+        !_options && !_sideways && _loupe == null && _error == null;
     return IgnorePointer(
       child: AnimatedOpacity(
         opacity: show ? 1 : 0,
         duration: Duration(milliseconds: show ? 280 : 140),
         curve: show ? Motion.settle : Curves.easeInCubic,
         child: Center(
-          child: Text('Hold the view on a color to keep it', style: Txt.small.copyWith(color: _dim)),
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Text('Touch and hold a color in the preview to keep it', textAlign: TextAlign.center,
+              style: Txt.small.copyWith(color: _dim))),
         ),
       ),
     );
