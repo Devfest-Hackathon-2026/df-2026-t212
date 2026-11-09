@@ -281,7 +281,7 @@ class _MapScreenState extends State<MapScreen>
       case MapEventStyleLoaded():
         setState(() => _styled = true);
       case MapEventMoveCamera(:final camera):
-        if ((camera.zoom - _zoom).abs() > 0.25) {
+        if ((camera.zoom - _zoom).abs() > 0.15) {
           setState(() => _zoom = camera.zoom);
         }
       case MapEventClick():
@@ -291,14 +291,76 @@ class _MapScreenState extends State<MapScreen>
   }
 
   /// Screen-grid clustering. Colors are never blended.
+  /// Dots stay apart for as long as they can be counted. Overlap is fine,
+  /// even welcome: it says "these were close". Photos merge only where they
+  /// sit on the same spot, or where so many pile up that the eye can no
+  /// longer tell how many there are.
   List<_Cluster> _clusters(List<PhotoItem> items) {
-    final cell = 44 * 360 / (256 * math.pow(2, _zoom));
-    final map = <String, _Cluster>{};
-    for (final it in items) {
-      final k = '${(it.lng! / cell).floor()}:${(it.lat! / cell).floor()}';
-      map.putIfAbsent(k, () => _Cluster()).items.add(it);
+    if (items.isEmpty) return [];
+    // Screen points in Web Mercator at the current zoom (512 px tiles).
+    final world = 512 * math.pow(2, _zoom).toDouble();
+    final pts = [
+      for (final it in items)
+        Offset(
+          (it.lng! + 180) / 360 * world,
+          (1 -
+                  math.log(
+                        math.tan(it.lat! * math.pi / 180) +
+                            1 / math.cos(it.lat! * math.pi / 180),
+                      ) /
+                      math.pi) /
+              2 *
+              world,
+        ),
+    ];
+    const pile = 22.0; // about one dot across
+    const pileCount = 5; // past this, a heap of dots is unreadable
+    const same = 6.0; // centers this close are one spot
+    final n = items.length;
+    final near = List.generate(
+      n,
+      (i) => [
+        for (var j = 0; j < n; j++)
+          if ((pts[i] - pts[j]).distance <= pile) j,
+      ],
+    );
+    final taken = List.filled(n, false);
+    final out = <_Cluster>[];
+    // Densest heaps first.
+    final order = List.generate(n, (i) => i)
+      ..sort((a, b) => near[b].length.compareTo(near[a].length));
+    for (final i in order) {
+      if (taken[i]) continue;
+      final free = [
+        for (final j in near[i])
+          if (!taken[j]) j,
+      ];
+      if (free.length < pileCount) continue;
+      final c = _Cluster();
+      for (final j in free) {
+        taken[j] = true;
+        c.items.add(items[j]);
+      }
+      out.add(c);
     }
-    return map.values.toList();
+    // What is left stays single, unless it shares a spot.
+    for (final i in order) {
+      if (taken[i]) continue;
+      taken[i] = true;
+      final c = _Cluster()..items.add(items[i]);
+      for (var j = 0; j < n; j++) {
+        if (!taken[j] && (pts[i] - pts[j]).distance <= same) {
+          taken[j] = true;
+          c.items.add(items[j]);
+        }
+      }
+      out.add(c);
+    }
+    // Older below, newer on top.
+    int newest(_Cluster c) =>
+        c.items.map((e) => e.taken.millisecondsSinceEpoch).reduce(math.max);
+    out.sort((a, b) => newest(a).compareTo(newest(b)));
+    return out;
   }
 
   @override
