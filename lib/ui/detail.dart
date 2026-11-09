@@ -163,11 +163,13 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                 }),
                 row('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
                 row('Why this color?', _why),
-                const Hairline(),
-                row('Remove from After Hue only', () {
-                  s.remove(item);
-                  _leave();
-                }, quiet: true),
+                if (s.deletesFromLibrary(item)) ...[
+                  const Hairline(),
+                  row('Remove from After Hue only', () {
+                    s.remove(item);
+                    _leave();
+                  }, quiet: true),
+                ],
               ],
             ),
           ),
@@ -401,7 +403,11 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                             const SizedBox(width: 8),
                             IconAction(Icons.ios_share_rounded, label: 'Share', onTap: _share),
                             const SizedBox(width: 8),
-                            IconAction(Icons.delete_outline_rounded, label: 'Delete', onTap: _delete),
+                            IconAction(
+                              Icons.delete_outline_rounded,
+                              label: s.deletesFromLibrary(item) ? 'Delete' : 'Remove from After Hue',
+                              onTap: _delete,
+                            ),
                             const SizedBox(width: 8),
                             IconAction(Icons.more_horiz_rounded, label: 'More', onTap: _more),
                           ],

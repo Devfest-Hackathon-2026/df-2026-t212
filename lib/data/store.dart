@@ -40,7 +40,12 @@ class PhotoItem {
     this.asked = false,
     this.sceneOf,
     this.fingerprint,
+    this.captured = false,
   });
+
+  /// Taken with After Hue's camera. Only these leave the iPhone's library
+  /// when deleted here; any other photo is the person's own and stays there.
+  final bool captured;
 
   /// Library asset id. Duplicates share the asset and differ in [key].
   final String id;
@@ -111,6 +116,7 @@ class PhotoItem {
         if (asked) 'asked': true,
         if (sceneOf != null) 'sceneOf': sceneOf,
         if (fingerprint != null) 'print': base64Encode(fingerprint!),
+        if (captured) 'captured': true,
       };
 
   factory PhotoItem.fromJson(Map<String, dynamic> j) => PhotoItem(
@@ -133,6 +139,7 @@ class PhotoItem {
         asked: j['asked'] as bool? ?? false,
         sceneOf: j['sceneOf'] as String?,
         fingerprint: j['print'] == null ? null : base64Decode(j['print'] as String),
+        captured: j['captured'] as bool? ?? false,
       );
 }
 
@@ -504,6 +511,7 @@ class Store extends ChangeNotifier {
       picked: true,
       judged: true,
       seen: true,
+      captured: true,
     );
     final known = _byKey[id];
     if (known != null) {
@@ -855,14 +863,18 @@ class Store extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Deletes [its]. A copy whose photo another kept item still shows only
-  /// leaves After Hue; the rest leave the iPhone too (iOS asks first, and
-  /// they wait in Recently Deleted). Returns the items that went.
+  /// Whether deleting [it] here also deletes it from the iPhone: only a
+  /// photo After Hue's camera took, and only its last copy here.
+  bool deletesFromLibrary(PhotoItem it) => it.captured && !items.any((e) => e.id == it.id && e != it);
+
+  /// Deletes [its] from After Hue. Photos After Hue's camera took leave the
+  /// iPhone too (iOS asks first, and keeps them in Recently Deleted); the
+  /// person's own photos stay in their library. Returns the items that went.
   Future<List<PhotoItem>> delete(List<PhotoItem> its) async {
     final going = its.toSet();
     final shared = <PhotoItem>[], last = <PhotoItem>[];
     for (final it in going) {
-      (items.any((e) => e.id == it.id && !going.contains(e)) ? shared : last).add(it);
+      (!it.captured || items.any((e) => e.id == it.id && !going.contains(e)) ? shared : last).add(it);
     }
     final deleted = await PhotoSource.delete(last.map((e) => e.id).toSet().toList());
     final gone = [...shared, ...last.where((e) => deleted.contains(e.id))];
@@ -886,6 +898,7 @@ class Store extends ChangeNotifier {
       auto: it.auto?.copy(),
       state: it.state,
       seen: true,
+      captured: it.captured,
     );
     final i = items.indexOf(it);
     items.insert(i + 1, copy);
