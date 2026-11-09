@@ -138,60 +138,32 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
     }
   }
 
+  final _moreKey = GlobalKey();
+
   void _more() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Neutral.surface,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) {
-        Widget row(String label, VoidCallback? onTap, {bool quiet = false}) => GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onTap == null
-              ? null
-              : () {
-                  Haptics.tick();
-                  Navigator.pop(ctx);
-                  onTap();
-                },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 15),
-            child: Text(
-              label,
-              style: Txt.label.copyWith(
-                color: onTap == null ? Neutral.tertiary : (quiet ? Neutral.secondary : Neutral.primary),
-              ),
-            ),
-          ),
-        );
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                row('Duplicate', () {
-                  s.duplicate(item);
-                  _toast('Duplicated');
-                }),
-                row('Copy Edit', () {
-                  s.copyEdit(item);
-                  _toast('Edit copied');
-                }),
-                row('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
-                row('Why this color?', _why),
-                if (!widget.review) ...[
-                  const Hairline(),
-                  row('Remove from After Hue', () {
-                    s.remove(item);
-                    _leave();
-                  }, quiet: true),
-                ],
-              ],
-            ),
-          ),
-        );
-      },
+    final box = _moreKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final from = box.localToGlobal(Offset.zero) & box.size;
+    showPopMenu(
+      context,
+      from: from,
+      items: [
+        PopItem('Duplicate', () {
+          s.duplicate(item);
+          _toast('Duplicated');
+        }),
+        PopItem('Copy Edit', () {
+          s.copyEdit(item);
+          _toast('Edit copied');
+        }),
+        PopItem('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
+        PopItem('Why this color?', _why),
+        if (!widget.review)
+          PopItem('Remove from After Hue', () {
+            s.remove(item);
+            _leave();
+          }, quiet: true, divided: true),
+      ],
     );
   }
 
@@ -242,59 +214,38 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
     ),
   );
 
+  /// How far the photo stays from the top and the bottom. The same on
+  /// both sides, so the photo sits in the middle of the screen; and kept
+  /// while the bars are hidden, so hiding them does not move it.
+  double? _inset;
+
   @override
   Widget build(BuildContext context) {
     final pad = MediaQuery.paddingOf(context);
     final fade = (1 - (_drag.abs() / 400)).clamp(0.0, 1.0);
+    if (_inset == null || _bare.value == 0) {
+      final top = pad.top + 4 + 44;
+      final bottom = 14 + 24 + 14 + 58 + pad.bottom + 8;
+      _inset = top > bottom ? top : bottom;
+    }
+    final inset = _inset!;
     return ListenableBuilder(
       listenable: Listenable.merge([s, _bare]),
       builder: (context, _) {
         if (_items.isEmpty) return const SizedBox();
         final bare = Curves.easeInOut.transform(_bare.value);
-        // Bars fold away so the photo grows into the whole screen.
-        Widget fold(Widget child, Alignment from) => ClipRect(
-          child: Align(
-            alignment: from,
-            heightFactor: 1 - bare,
-            child: IgnorePointer(
-              ignoring: bare > 0,
-              child: Opacity(opacity: 1 - bare, child: child),
-            ),
-          ),
+        // Bars only fade: the photo under them never moves.
+        Widget bar(Widget child) => IgnorePointer(
+          ignoring: bare > 0,
+          child: Opacity(opacity: (1 - bare) * fade, child: child),
         );
         return Scaffold(
           backgroundColor: Color.lerp(Neutral.bg, Colors.black, bare)!.withValues(alpha: fade),
-          body: Column(
+          body: Stack(
             children: [
-              fold(
-                Column(
-                  children: [
-                    SizedBox(height: pad.top + 4),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: Row(
-                        children: [
-                          IconAction(G.close, label: 'Close', onTap: () => Navigator.pop(context)),
-                          Expanded(
-                            child: Opacity(
-                              opacity: fade,
-                              child: Text(
-                                '${_index + 1} / ${_items.length}',
-                                style: Txt.mono,
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          ),
-                          IconAction(G.more, label: 'More', onTap: _more),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Alignment.bottomCenter,
-              ),
-              Expanded(
+              Positioned.fill(
                 child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
                   onTap: _toggleBare,
                   onVerticalDragUpdate: (d) => setState(() => _drag += d.delta.dy),
                   onVerticalDragEnd: (d) {
@@ -312,102 +263,103 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                     });
                   },
                   onLongPressEnd: (_) => setState(() => _showOriginal = false),
-                  child: Transform.translate(
-                    offset: Offset(0, _drag),
-                    child: Transform.scale(
-                      scale: 1 - (_drag.abs() / 2000),
-                      child: PageView.builder(
-                        controller: _page,
-                        itemCount: _items.length,
-                        onPageChanged: (i) {
-                          setState(() => _index = i);
-                          s.markSeen(_items[i]);
-                        },
-                        itemBuilder: (context, i) {
-                          final it = _items[i];
-                          final page = Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 6),
-                            child: Center(
-                              child: AspectRatio(
-                                aspectRatio: it.width / it.height,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    Hero(
-                                      createRectTween: straightRect,
-                                      tag: 'photo-${it.key}',
-                                      child: DevelopedImage(
-                                        it,
-                                        size: 1600,
-                                        fit: BoxFit.contain,
-                                        alignment: Alignment.center,
-                                      ),
-                                    ),
-                                    if (i == _index)
-                                      AnimatedOpacity(
-                                        opacity: _showOriginal ? 1 : 0,
-                                        duration: const Duration(milliseconds: 180),
-                                        curve: Motion.settle,
-                                        child: _Original(it),
-                                      ),
-                                  ],
-                                ),
-                              ),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      // Wider than the screen by the gap between pages, so a
+                      // photo reaches both edges and still parts from the
+                      // next one while swiping.
+                      Positioned(
+                        left: -_gap,
+                        right: -_gap,
+                        top: inset,
+                        bottom: inset,
+                        child: Transform.translate(
+                          offset: Offset(0, _drag),
+                          child: Transform.scale(
+                            scale: 1 - (_drag.abs() / 2000),
+                            child: PageView.builder(
+                              controller: _page,
+                              itemCount: _items.length,
+                              onPageChanged: (i) {
+                                setState(() => _index = i);
+                                s.markSeen(_items[i]);
+                              },
+                              itemBuilder: _photo,
                             ),
-                          );
-                          if (i != _index) return page;
-                          return AnimatedBuilder(
-                            animation: _gone,
-                            builder: (_, child) {
-                              final t = _gone.value;
-                              return Opacity(
-                                opacity: (1 - t).clamp(0.0, 1.0),
-                                child: Transform.scale(scale: _rising ? 1 - 0.04 * t : 1 - 0.14 * t, child: child),
-                              );
-                            },
-                            child: page,
-                          );
-                        },
+                          ),
+                        ),
                       ),
+                    ],
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: bar(
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(8, pad.top + 4, 8, 0),
+                    child: Row(
+                      children: [
+                        IconAction(G.close, label: 'Close', onTap: () => Navigator.pop(context)),
+                        Expanded(
+                          child: Text(
+                            '${_index + 1} / ${_items.length}',
+                            style: Txt.mono,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        KeyedSubtree(
+                          key: _moreKey,
+                          child: IconAction(G.more, label: 'More', onTap: _more),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
-              fold(
-                Opacity(
-                  opacity: fade,
-                  child: Padding(
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: bar(
+                  Padding(
                     padding: EdgeInsets.fromLTRB(20, 14, 20, pad.bottom + 8),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 200),
-                          switchInCurve: Motion.settle,
-                          switchOutCurve: Curves.easeInCubic,
-                          transitionBuilder: softSwitch,
-                          child: Row(
-                            key: ValueKey('${item.key}$_hint$_showOriginal'),
-                            children: _hint
-                                ? [
-                                    Text(
-                                      'Press and hold to see the original',
-                                      style: Txt.mono.copyWith(color: Neutral.primary),
-                                    ),
-                                  ]
-                                : _showOriginal
-                                ? [Text('Original', style: Txt.mono.copyWith(color: Neutral.primary))]
-                                : [
-                                    for (final c in item.hues)
-                                      Padding(
-                                        padding: const EdgeInsets.only(right: 8),
-                                        child: Swatch(c, size: 24, from: item, onTap: () => _similar(c)),
+                        SizedBox(
+                          height: 24,
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            switchInCurve: Motion.settle,
+                            switchOutCurve: Curves.easeInCubic,
+                            transitionBuilder: softSwitch,
+                            child: Row(
+                              key: ValueKey('${item.key}$_hint$_showOriginal'),
+                              children: _hint
+                                  ? [
+                                      Text(
+                                        'Press and hold to see the original',
+                                        style: Txt.mono.copyWith(color: Neutral.primary),
                                       ),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(metaLine(item), style: Txt.mono, overflow: TextOverflow.ellipsis),
-                                    ),
-                                  ],
+                                    ]
+                                  : _showOriginal
+                                  ? [Text('Original', style: Txt.mono.copyWith(color: Neutral.primary))]
+                                  : [
+                                      for (final c in item.hues)
+                                        Padding(
+                                          padding: const EdgeInsets.only(right: 8),
+                                          child: Swatch(c, size: 24, from: item, onTap: () => _similar(c)),
+                                        ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(metaLine(item), style: Txt.mono, overflow: TextOverflow.ellipsis),
+                                      ),
+                                    ],
+                            ),
                           ),
                         ),
                         const SizedBox(height: 14),
@@ -439,12 +391,54 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                     ),
                   ),
                 ),
-                Alignment.topCenter,
               ),
             ],
           ),
         );
       },
+    );
+  }
+
+  static const double _gap = 6;
+
+  Widget _photo(BuildContext context, int i) {
+    final it = _items[i];
+    final page = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: _gap),
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: it.width / it.height,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Hero(
+                createRectTween: straightRect,
+                tag: 'photo-${it.key}',
+                child: DevelopedImage(it, size: 1600, fit: BoxFit.contain, alignment: Alignment.center),
+              ),
+              if (i == _index)
+                AnimatedOpacity(
+                  opacity: _showOriginal ? 1 : 0,
+                  duration: const Duration(milliseconds: 180),
+                  curve: Motion.settle,
+                  child: _Original(it),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (i != _index) return page;
+    return AnimatedBuilder(
+      animation: _gone,
+      builder: (_, child) {
+        final t = _gone.value;
+        return Opacity(
+          opacity: (1 - t).clamp(0.0, 1.0),
+          child: Transform.scale(scale: _rising ? 1 - 0.04 * t : 1 - 0.14 * t, child: child),
+        );
+      },
+      child: page,
     );
   }
 
@@ -464,7 +458,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
   }
 }
 
-/// The one filled control on the screen, so the eye lands on it.
+/// The one ringed control on the screen, larger than the rest.
 class _EditButton extends StatefulWidget {
   const _EditButton({required this.onTap});
   final VoidCallback onTap;
@@ -495,12 +489,14 @@ class _EditButtonState extends State<_EditButton> {
             child: Container(
               width: 58,
               height: 58,
-              decoration: const BoxDecoration(
-                color: Neutral.primary,
+              // White, drawn round with a line: first among the three by
+              // its size, without a black mass pulling the eye off the photo.
+              decoration: BoxDecoration(
+                color: Neutral.surface,
                 shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: Color(0x26000000), blurRadius: 12, offset: Offset(0, 4))],
+                border: Border.all(color: Neutral.primary, width: 1.4),
               ),
-              child: const Center(child: Glyph(G.edit, size: 24, color: Neutral.surface)),
+              child: const Center(child: Glyph(G.edit, size: 24, color: Neutral.primary)),
             ),
           ),
         ),

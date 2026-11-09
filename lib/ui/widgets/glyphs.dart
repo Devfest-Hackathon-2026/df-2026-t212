@@ -187,7 +187,7 @@ class _GlyphPainter extends CustomPainter {
         seg(18.4, 5.6, 5.6, 18.4);
       case G.more:
         for (final x in [5.0, 12.0, 19.0]) {
-          canvas.drawCircle(Offset(x, 12), 2.05, fill);
+          canvas.drawCircle(Offset(x, 12), 1.85, fill);
         }
       case G.share:
         seg(12, 3.4, 12, 14.4);

@@ -738,3 +738,118 @@ class PiePainter extends CustomPainter {
   @override
   bool shouldRepaint(PiePainter old) => !listEquals(old.colors, colors) || !listEquals(old.images, images);
 }
+
+/// One row of a [showPopMenu].
+class PopItem {
+  const PopItem(this.label, this.onTap, {this.quiet = false, this.divided = false});
+  final String label;
+
+  /// Null greys the row out.
+  final VoidCallback? onTap;
+
+  /// Said softer: for the row that takes something away.
+  final bool quiet;
+
+  /// A hairline above this row.
+  final bool divided;
+}
+
+/// A small menu that grows out of the control at [from], top right to top
+/// right, instead of rising from the bottom of the screen.
+Future<void> showPopMenu(BuildContext context, {required Rect from, required List<PopItem> items}) {
+  return Navigator.of(context).push(_PopRoute(from, items));
+}
+
+class _PopRoute extends PopupRoute<void> {
+  _PopRoute(this.from, this.items);
+  final Rect from;
+  final List<PopItem> items;
+
+  @override
+  Color? get barrierColor => const Color(0x14000000);
+  @override
+  bool get barrierDismissible => true;
+  @override
+  String? get barrierLabel => 'Close menu';
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 240);
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 160);
+
+  @override
+  Widget buildPage(BuildContext context, Animation<double> a, Animation<double> b) {
+    final size = MediaQuery.sizeOf(context);
+    return Stack(
+      children: [
+        Positioned(
+          top: from.bottom + 2,
+          right: math.max(12, size.width - from.right + 4),
+          child: FadeTransition(
+            opacity: CurvedAnimation(parent: a, curve: Motion.settle, reverseCurve: Curves.easeInCubic),
+            child: ScaleTransition(
+              alignment: Alignment.topRight,
+              scale: Tween(
+                begin: 0.86,
+                end: 1.0,
+              ).animate(CurvedAnimation(parent: a, curve: Motion.settle, reverseCurve: Curves.easeInCubic)),
+              child: _PopCard(items: items),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PopCard extends StatelessWidget {
+  const _PopCard({required this.items});
+  final List<PopItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      type: MaterialType.transparency,
+      child: Container(
+        width: 232,
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(
+          color: Neutral.surface,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: const [
+            BoxShadow(color: Color(0x1F000000), blurRadius: 30, offset: Offset(0, 10)),
+            BoxShadow(color: Color(0x0F000000), blurRadius: 3, offset: Offset(0, 1)),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final it in items) ...[
+              if (it.divided)
+                const Padding(padding: EdgeInsets.symmetric(vertical: 4, horizontal: 18), child: Hairline()),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: it.onTap == null
+                    ? null
+                    : () {
+                        Haptics.tick();
+                        Navigator.pop(context);
+                        it.onTap!();
+                      },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  child: Text(
+                    it.label,
+                    style: Txt.label.copyWith(
+                      color: it.onTap == null ? Neutral.tertiary : (it.quiet ? Neutral.secondary : Neutral.primary),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
