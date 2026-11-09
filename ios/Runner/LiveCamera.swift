@@ -437,13 +437,17 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   /// Zooms to a factor as shown (0.5, 1, 2…), smoothly when [ramp]. Returns
   /// the factor it reached.
   private func zoom(to shown: Double, ramp: Bool) -> Double? {
-    // Macro off is the main lens alone; past it either way, the phone's own
-    // lens comes back, at that zoom.
-    if !macroOn, shown < 0.99 || shown > 2.01 {
-      setMacro(true, zoom: shown)
+    if swapping {
+      swapZoom = shown
       return shown
     }
     guard let camera else { return nil }
+    // Macro off is one lens on its own: a zoom that wants another lens
+    // changes to that lens, and macro stays off.
+    if !macroOn, !front, let want = Self.singleLens(for: shown), want.uniqueID != camera.uniqueID {
+      swap(to: want, at: shown)
+      return shown
+    }
     let mult = Self.multiplier(camera)
     let top = min(camera.maxAvailableVideoZoomFactor, CGFloat(15 / mult))
     let f = min(max(CGFloat(shown / mult), camera.minAvailableVideoZoomFactor), top)
@@ -589,10 +593,20 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     lens.constituentDevices.first { $0.deviceType == type }
   }
 
-  /// The back main lens on its own, for macro off: on it the phone cannot
-  /// go to the ultra wide however near the subject is.
-  private static func mainLens() -> AVCaptureDevice? {
-    AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+  /// For macro off, the one lens for the zoom [shown], on its own: on a
+  /// single lens the phone cannot go to the ultra wide however near the
+  /// subject is. The zoom picks the lens as the phone's own would; macro
+  /// stays off at any zoom.
+  private static func singleLens(for shown: Double) -> AVCaptureDevice? {
+    guard let all = lens(front: false) else { return nil }
+    let mult = multiplier(all)
+    let over = all.virtualDeviceSwitchOverVideoZoomFactors.map { $0.doubleValue * mult }
+    var types: [AVCaptureDevice.DeviceType] = []
+    if all.constituentDevices.contains(where: { $0.deviceType == .builtInUltraWideCamera }) { types.append(.builtInUltraWideCamera) }
+    types.append(.builtInWideAngleCamera)
+    if all.constituentDevices.contains(where: { $0.deviceType == .builtInTelephotoCamera }) { types.append(.builtInTelephotoCamera) }
+    let i = min(over.filter { $0 <= shown + 0.01 }.count, types.count - 1)
+    return AVCaptureDevice.default(types[i], for: .video, position: .back)
   }
 
   /// Watches [lens] for macro. The phone's own lens (virtual) is macro on:
@@ -606,7 +620,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       macroOn = true
       macroWatch.append(lens.observe(\.activePrimaryConstituent) { _, _ in again() })
       macroWatch.append(lens.observe(\.videoZoomFactor) { _, _ in again() })
-    } else if !macroOn, !front, lens.deviceType == .builtInWideAngleCamera {
+    } else if !macroOn, !front, !lens.isVirtualDevice {
       macroWatch.append(lens.observe(\.lensPosition) { _, _ in again() })
       // Once it has found its nearest focus, that is where "still close" is
       // measured from.
@@ -628,13 +642,21 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     return Double(lens.videoZoomFactor) >= first - 0.01
   }
 
-  /// Puts in the phone's own lens (on) or the main lens alone (off), at the
-  /// zoom shown now.
-  private func setMacro(_ on: Bool, zoom: Double? = nil) {
+  /// Puts in the phone's own lens (on) or the one lens for the zoom on its
+  /// own (off), at the zoom shown now.
+  private func setMacro(_ on: Bool) {
     guard configured, !front, on != macroOn, let now = camera else { return }
-    let shown = zoom ?? Double(now.videoZoomFactor) * Self.multiplier(now)
-    guard let lens = on ? Self.lens(front: false) : Self.mainLens() else { return }
+    let shown = Double(now.videoZoomFactor) * Self.multiplier(now)
+    guard let lens = on ? Self.lens(front: false) : Self.singleLens(for: shown) else { return }
     macroOn = on
+    swap(to: lens, at: shown)
+  }
+
+  /// Puts [lens] in at the zoom [shown], keeping macro as it is. A zoom
+  /// asked for while the lens is going in is taken up once it is in.
+  private func swap(to lens: AVCaptureDevice, at shown: Double) {
+    swapping = true
+    swapZoom = nil
     queue.async {
       self.session.beginConfiguration()
       do {
@@ -653,11 +675,19 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       self.lock.lock()
       self.look.castStale = true
       self.lock.unlock()
-      DispatchQueue.main.async { self.reportMacro() }
+      DispatchQueue.main.async {
+        self.swapping = false
+        if let z = self.swapZoom { _ = self.zoom(to: z, ramp: false) }
+        self.reportMacro()
+      }
     }
   }
 
+  private var swapping = false
+  private var swapZoom: Double?
+
   private func reportMacro() {
+    if swapping { return }
     var shown = false
     if let lens = camera, !front {
       if macroOn {
