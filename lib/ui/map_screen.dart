@@ -1490,11 +1490,12 @@ class _Pin extends StatelessWidget {
         // a blur eased toward zero breaks into stray edges. So the glass
         // keeps its full frost and only grows out of its point and draws
         // back into it; the photo fades on it in the meantime. Arriving,
-        // the glass opens first; leaving, the photo goes first.
+        // the glass opens a little ahead of the photo; leaving, the photo
+        // starts to go first and is drawn in with the glass as it fades.
         final glass = Curves.easeInOutCubic.transform(
-          (presence / 0.5).clamp(0.0, 1.0),
+          (presence / 0.7).clamp(0.0, 1.0),
         );
-        final ink = ((presence - 0.45) / 0.55).clamp(0.0, 1.0);
+        final ink = ((presence - 0.25) / 0.7).clamp(0.0, 1.0);
         if (glass < 0.01) return const SizedBox.shrink();
         return Transform.scale(
           scale: glass,
