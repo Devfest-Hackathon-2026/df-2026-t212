@@ -1375,21 +1375,21 @@ class _BubblePaint extends CustomPainter {
       ),
     );
     canvas.drawPath(
-      path.shift(const Offset(0, 3)),
+      path.shift(const Offset(0, 4)),
       Paint()
-        ..color = Color.fromRGBO(0, 0, 0, 0.13 * presence)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
+        ..color = Color.fromRGBO(0, 0, 0, 0.2 * presence)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 9),
     );
     canvas.restore();
     canvas.drawPath(
       path,
-      Paint()..color = Color.fromRGBO(250, 250, 249, 0.62 * presence),
+      Paint()..color = Color.fromRGBO(250, 250, 249, 0.72 * presence),
     );
     // The tail has no frost behind it, and a native blur cannot be
     // feathered, so where it leaves the body it is near opaque in the
     // frost's own tone: the map's detail must not start at the body's
     // edge. Toward the point it thins to glass again.
-    const frost = Color(0xFFF4F4F3);
+    const frost = Color(0xFFF6F6F5);
     canvas.drawPath(
       tail(size),
       Paint()
