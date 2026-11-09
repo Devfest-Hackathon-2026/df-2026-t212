@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:maplibre/maplibre.dart'
@@ -54,6 +55,16 @@ class _MapScreenState extends State<MapScreen>
   double _w0 = 0, _w1 = 1;
   bool _playing = false;
   bool _presenting = false;
+
+  /// Photos currently held up on a card in playback.
+  Set<String> _pinned = {};
+
+  /// Markers that have already made their entrance.
+  final Set<String> _risen = {};
+  // Which photos were inside and outside the window on the last build, so a
+  // photo crossing the window's edge can turn from one look into the other.
+  Set<String> _wasInside = {}, _wasOutside = {};
+  Set<String> _covered = {}; // photos whose places sit under a card
   double _speed = 1;
   int _playbackLayout = 0;
   (double, double)? _beforePlayback;
@@ -128,6 +139,8 @@ class _MapScreenState extends State<MapScreen>
     setState(() {
       _playing = false;
       _presenting = false;
+      _pinned = {};
+      _covered = {};
       if (_beforePlayback case final range?) {
         _w0 = range.$1;
         _w1 = range.$2;
@@ -383,10 +396,22 @@ class _MapScreenState extends State<MapScreen>
         _fit(located);
         final inside = located.where(_inWindow).toList();
         final outside = located.where((e) => !_inWindow(e)).toList();
-        final clusters = _clusters(inside);
+        final clusters = _clusters(
+          _presenting
+              ? inside.where((e) => !_pinned.contains(e.key)).toList()
+              : inside,
+        );
         if (_playing) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _follow(inside));
         }
+        // A marker that leaves rises anew when it comes back.
+        _risen.retainAll({
+          for (final c in clusters) c.key,
+          for (final k in _pinned) 'dot$k',
+        });
+        final wasInside = _wasInside, wasOutside = _wasOutside;
+        _wasInside = {for (final e in inside) e.key};
+        _wasOutside = {for (final e in outside) e.key};
         return Stack(
           children: [
             MapLibreMap(
@@ -412,10 +437,15 @@ class _MapScreenState extends State<MapScreen>
                       Marker(
                         point: Geographic(lon: it.lng!, lat: it.lat!),
                         size: const Size(6, 6),
-                        child: Container(
-                          decoration: const BoxDecoration(
-                            color: Color(0x33161616),
-                            shape: BoxShape.circle,
+                        child: AnimatedOpacity(
+                          key: ValueKey(it.key),
+                          opacity: _presenting && _covered.contains(it.key)
+                              ? 0
+                              : 1,
+                          duration: const Duration(milliseconds: 220),
+                          child: _Fall(
+                            it.hues,
+                            animate: wasInside.contains(it.key),
                           ),
                         ),
                       ),
@@ -424,15 +454,62 @@ class _MapScreenState extends State<MapScreen>
                 WidgetLayer(
                   allowInteraction: true,
                   markers: [
+                    for (final c in clusters)
+                      Marker(
+                        point: c.center,
+                        size: Size.square(
+                          c.items.length == 1 ? 22 : c.diameter + 14,
+                        ),
+                        child: GestureDetector(
+                          key: ValueKey(c.key),
+                          onTap: () {
+                            Haptics.tick();
+                            if (c.items.length > 1 && _zoom < 17 && c.spread) {
+                              // Open the group up so every photo in it gets its own place.
+                              setState(() => _card = null);
+                              _frame(
+                                c.items,
+                                duration: const Duration(milliseconds: 520),
+                              );
+                            } else {
+                              _open(c);
+                            }
+                          },
+                          child: AnimatedOpacity(
+                            // Under a card's glass, out of the way.
+                            opacity:
+                                _presenting &&
+                                    c.items.every(
+                                      (e) => _covered.contains(e.key),
+                                    )
+                                ? 0
+                                : 1,
+                            duration: const Duration(milliseconds: 220),
+                            child: _Rise(
+                              animate: _risen.add(c.key),
+                              fromDot:
+                                  c.items.length == 1 &&
+                                  wasOutside.contains(c.items.first.key),
+                              child: c.items.length == 1
+                                  ? SplitSwatch(c.items.first.hues, size: 20)
+                                  : _Stack(c),
+                            ),
+                          ),
+                        ),
+                      ),
+
                     // In playback the photos speak for themselves; their
                     // places are plain points for the cards to stand on.
                     if (_presenting)
-                      for (final it in inside)
+                      for (final it in inside.where(
+                        (e) => _pinned.contains(e.key),
+                      ))
                         Marker(
                           point: Geographic(lon: it.lng!, lat: it.lat!),
                           size: const Size.square(_dotR * 2 + 2),
                           child: _Rise(
                             key: ValueKey('dot${it.key}'),
+                            animate: _risen.add('dot${it.key}'),
                             child: Container(
                               decoration: BoxDecoration(
                                 color: Neutral.primary,
@@ -445,38 +522,6 @@ class _MapScreenState extends State<MapScreen>
                             ),
                           ),
                         ),
-                    if (!_presenting)
-                      for (final c in clusters)
-                        Marker(
-                          point: c.center,
-                          size: Size.square(
-                            c.items.length == 1 ? 22 : c.diameter + 14,
-                          ),
-                          child: GestureDetector(
-                            key: ValueKey(c.key),
-                            onTap: () {
-                              Haptics.tick();
-                              if (c.items.length > 1 &&
-                                  _zoom < 17 &&
-                                  c.spread) {
-                                // Open the group up so every photo in it gets its own place.
-                                setState(() => _card = null);
-                                _frame(
-                                  c.items,
-                                  duration: const Duration(milliseconds: 520),
-                                );
-                              } else {
-                                _open(c);
-                              }
-                            },
-                            child: _Rise(
-                              child: c.items.length == 1
-                                  ? SplitSwatch(c.items.first.hues, size: 20)
-                                  : _Stack(c),
-                            ),
-                          ),
-                        ),
-
                     if (_card != null && !_presenting)
                       Marker(
                         point: _card!.center,
@@ -500,9 +545,21 @@ class _MapScreenState extends State<MapScreen>
                   _PlaybackPhotos(
                     key: ValueKey(_playbackLayout),
                     items: inside,
+                    faint: outside,
                     norm: _norm,
                     w0: _w0,
                     w1: _w1,
+                    onPinned: (keys, covered) {
+                      if (!mounted ||
+                          (setEquals(keys, _pinned) &&
+                              setEquals(covered, _covered))) {
+                        return;
+                      }
+                      setState(() {
+                        _pinned = keys;
+                        _covered = covered;
+                      });
+                    },
                   ),
               ],
             ),
@@ -632,14 +689,21 @@ class _MapScreenState extends State<MapScreen>
 class _PlaybackPhotos extends StatefulWidget {
   const _PlaybackPhotos({
     super.key,
+    required this.onPinned,
     required this.items,
+    required this.faint,
     required this.norm,
     required this.w0,
     required this.w1,
   });
   final List<PhotoItem> items;
+  final List<PhotoItem> faint; // outside the window, drawn as faint dots
   final double Function(DateTime) norm;
   final double w0, w1;
+
+  /// The photos on cards, and the photos whose places sit under a card's
+  /// body, after each layout.
+  final void Function(Set<String> pinned, Set<String> covered) onPinned;
 
   @override
   State<_PlaybackPhotos> createState() => _PlaybackPhotosState();
@@ -675,13 +739,18 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
           box.maxHeight - pad.bottom - 150,
         );
         final used = <Rect>[];
+        final bodies = <Rect>[];
         final children = <Widget>[];
         final visibleKeys = <String>{};
         final w0 = widget.w0, w1 = widget.w1;
         for (var i = 0; i < picks.length; i++) {
           final point = offsets[i];
           if (!safe.contains(point)) continue;
-          final left = (point.dx - 66)
+          // A card stands a little to one side of its place, leaning in
+          // toward the middle of the screen, so its tail comes down at a
+          // slant as a hand-drawn balloon's would, not plumb.
+          final lean = point.dx < box.maxWidth / 2 ? 30.0 : -30.0;
+          final left = (point.dx - 66 + lean)
               .clamp(safe.left, math.max(safe.left, safe.right - 132))
               .toDouble();
           final below = point.dy - _pinH < safe.top;
@@ -701,6 +770,14 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
               ? 1.0
               : ((w1 - n) / fade).clamp(0.0, 1.0);
           used.add(rect);
+          bodies.add(
+            Rect.fromLTWH(
+              rect.left,
+              below ? rect.top + _tailH + _dotR : rect.top,
+              rect.width,
+              _bodyH,
+            ),
+          );
           visibleKeys.add(it.key);
           children.add(
             Positioned(
@@ -724,7 +801,29 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
           if (children.length == 4) break;
         }
         _visibleKeys = visibleKeys;
-        return Stack(clipBehavior: Clip.none, children: children);
+        // The map's native blur frosts only the tiles, not the markers drawn
+        // over them, so markers under a card would show through it sharp.
+        // Name them, so they can step aside while the card is up.
+        final others = controller.toScreenLocations(
+          widget.faint
+              .map((it) => Geographic(lon: it.lng!, lat: it.lat!))
+              .toList(),
+        );
+        bool under(Offset p) => bodies.any((r) => r.inflate(8).contains(p));
+        final covered = <String>{
+          for (var i = 0; i < picks.length; i++)
+            if (!visibleKeys.contains(picks[i].key) && under(offsets[i]))
+              picks[i].key,
+          for (var i = 0; i < widget.faint.length; i++)
+            if (under(others[i])) widget.faint[i].key,
+        };
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => widget.onPinned(visibleKeys, covered),
+        );
+        // One backdrop capture shared by every card's frost.
+        return BackdropGroup(
+          child: Stack(clipBehavior: Clip.none, children: children),
+        );
       },
     );
   }
@@ -772,14 +871,61 @@ class _Cluster {
 }
 
 /// A marker settles into place without an overshoot.
+const _faintDot = BoxDecoration(
+  color: Color(0x33161616),
+  shape: BoxShape.circle,
+);
+
 class _Rise extends StatelessWidget {
-  const _Rise({super.key, required this.child});
+  const _Rise({
+    super.key,
+    required this.child,
+    this.animate = true,
+    this.fromDot = false,
+  });
   final Widget child;
+
+  /// The photo was a faint dot outside the time window a moment ago: the
+  /// same dot grows into its colors, rather than one thing replacing another.
+  final bool fromDot;
+
+  /// False for a marker that has risen before. The map's marker layer keeps
+  /// markers by position, so one shifting in the list is built anew; it
+  /// should not rise a second time.
+  final bool animate;
 
   @override
   Widget build(BuildContext context) {
+    if (animate && fromDot) {
+      return TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: Duration(
+          milliseconds: MediaQuery.disableAnimationsOf(context) ? 120 : 520,
+        ),
+        curve: Curves.easeInOutCubic,
+        builder: (_, t, c) => t >= 1
+            ? c!
+            : Transform.scale(
+                scale: 6 / 20 + (1 - 6 / 20) * t,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Opacity(opacity: t, child: c),
+                    Opacity(
+                      opacity: 1 - t,
+                      child: const SizedBox.square(
+                        dimension: 20,
+                        child: DecoratedBox(decoration: _faintDot),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        child: child,
+      );
+    }
     return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
+      tween: Tween(begin: animate ? 0 : 1, end: 1),
       duration: Duration(
         milliseconds: MediaQuery.disableAnimationsOf(context) ? 120 : 360,
       ),
@@ -792,6 +938,46 @@ class _Rise extends StatelessWidget {
         ),
       ),
       child: child,
+    );
+  }
+}
+
+/// A photo leaving the time window: its colors draw back into a faint dot.
+class _Fall extends StatelessWidget {
+  const _Fall(this.hues, {required this.animate});
+  final List<KeptColor> hues;
+  final bool animate;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: animate ? 0 : 1, end: 1),
+      duration: Duration(
+        milliseconds: MediaQuery.disableAnimationsOf(context) ? 120 : 520,
+      ),
+      curve: Curves.easeInOutCubic,
+      builder: (_, t, _) => t >= 1
+          ? const DecoratedBox(decoration: _faintDot)
+          : OverflowBox(
+              minWidth: 20,
+              maxWidth: 20,
+              minHeight: 20,
+              maxHeight: 20,
+              child: Transform.scale(
+                scale: 1 - (1 - 6 / 20) * t,
+                child: Stack(
+                  children: [
+                    Opacity(opacity: 1 - t, child: SplitSwatch(hues, size: 20)),
+                    Opacity(
+                      opacity: t,
+                      child: const SizedBox.expand(
+                        child: DecoratedBox(decoration: _faintDot),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
     );
   }
 }
@@ -971,32 +1157,48 @@ class _Pin extends StatelessWidget {
     final bodyTop = below ? _tailH + _dotR : 0.0;
     final tipY = below ? _dotR : _bodyH + _tailH;
     Path shape(Size s) => _bubble(s.width, bodyTop, tipX, tipY);
+    // The part of the tail outside the body.
+    Path tailOnly(Size s) => Path.combine(
+      PathOperation.difference,
+      _tail(s.width, bodyTop, tipX, tipY),
+      Path()..addRRect(
+        RRect.fromLTRBR(
+          0,
+          bodyTop,
+          s.width,
+          bodyTop + _bodyH,
+          const Radius.circular(16),
+        ),
+      ),
+    );
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: Duration(milliseconds: reduceMotion ? 160 : 560),
       curve: Curves.easeOutQuint,
       builder: (_, entrance, content) {
         final presence = math.min(entrance, visibility);
-        // The paper stays solid while the photo fades on it, and only at the
-        // very end gives way, as the card draws back into its point. A
-        // half-clear card would show the dots beneath it unblurred.
-        final paper = Curves.easeOut.transform(
-          (presence / 0.35).clamp(0.0, 1.0),
+        // Glass cannot fade: a backdrop blur under Opacity sees nothing, and
+        // a blur eased toward zero breaks into stray edges. So the glass
+        // keeps its full frost and only grows out of its point and draws
+        // back into it; the photo fades on it in the meantime. Arriving,
+        // the glass opens first; leaving, the photo goes first.
+        final glass = Curves.easeInOutCubic.transform(
+          (presence / 0.5).clamp(0.0, 1.0),
         );
-        // No Opacity around the glass: a backdrop blur inside an offscreen
-        // layer sees nothing and lets the map through unfrosted. The glass
-        // fades by its own fill and blur; only the contents use Opacity.
+        final ink = ((presence - 0.45) / 0.55).clamp(0.0, 1.0);
+        if (glass < 0.01) return const SizedBox.shrink();
         return Transform.scale(
-          scale: reduceMotion ? 1 : 0.7 + 0.3 * presence,
+          scale: glass,
           alignment: Alignment(
             (tipX / 132 * 2 - 1).clamp(-1.0, 1.0),
             below ? -1 : 1,
           ),
-          // The blur is clipped to the rounded body (a path clip does not
-          // bound a backdrop filter); the fill then covers body and tail
-          // in one pass, so the two read as one piece of glass.
           child: Stack(
             children: [
+              // Frost under the body only. Over the map's native view a path
+              // clip does not bound a backdrop blur (it frosts the whole
+              // bounding box), and strips of blur read as steps; the slim
+              // tail is denser glass instead, painted below.
               Positioned(
                 left: 0,
                 right: 0,
@@ -1004,20 +1206,23 @@ class _Pin extends StatelessWidget {
                 height: _bodyH,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(16),
-                  child: BackdropFilter(
-                    filter: ui.ImageFilter.blur(
-                      sigmaX: 20 * paper,
-                      sigmaY: 20 * paper,
-                    ),
+                  child: BackdropFilter.grouped(
+                    filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
                     child: const SizedBox.expand(),
                   ),
                 ),
               ),
               Positioned.fill(
                 child: CustomPaint(
-                  painter: _BubblePaint(shape, paper),
+                  painter: _BubblePaint(
+                    shape,
+                    tailOnly,
+                    below ? bodyTop : bodyTop + _bodyH,
+                    tipY,
+                    1,
+                  ),
                   child: Opacity(
-                    opacity: presence,
+                    opacity: ink,
                     child: ImageFiltered(
                       enabled: !reduceMotion && entrance < 1,
                       imageFilter: ui.ImageFilter.blur(
@@ -1108,19 +1313,31 @@ class _Pin extends StatelessWidget {
 
 /// Rounded body plus a tail that narrows with concave sides to the tip.
 Path _bubble(double w, double bodyTop, double tipX, double tipY) {
-  const r = 16.0, half = 11.0;
   final body = RRect.fromLTRBR(
     0,
     bodyTop,
     w,
     bodyTop + _bodyH,
-    const Radius.circular(r),
+    const Radius.circular(16),
   );
+  return Path.combine(
+    PathOperation.union,
+    Path()..addRRect(body),
+    _tail(w, bodyTop, tipX, tipY),
+  );
+}
+
+Path _tail(double w, double bodyTop, double tipX, double tipY) {
+  const r = 16.0, half = 11.0;
   final up = tipY < bodyTop; // tail points up when the card sits below
   final baseY = up ? bodyTop + 2 : bodyTop + _bodyH - 2;
-  final bx = tipX.clamp(r + half, w - r - half).toDouble();
+  // The tail leaves the body between the card's middle and the point, so
+  // it leans by about half of the card's offset.
+  final bx = (tipX + (w / 2 - tipX) * 0.5)
+      .clamp(r + half, w - r - half)
+      .toDouble();
   double lerp(double a, double b, double t) => a + (b - a) * t;
-  final tail = Path()
+  return Path()
     ..moveTo(bx - half, baseY)
     ..quadraticBezierTo(
       lerp(bx - half, tipX, 0.8),
@@ -1135,14 +1352,14 @@ Path _bubble(double w, double bodyTop, double tipX, double tipY) {
       baseY,
     )
     ..close();
-  return Path.combine(PathOperation.union, Path()..addRRect(body), tail);
 }
 
 /// A soft shadow outside the shape only, so it never greys the glass, and
 /// the fill of body and tail together.
 class _BubblePaint extends CustomPainter {
-  _BubblePaint(this.shape, this.presence);
-  final Path Function(Size) shape;
+  _BubblePaint(this.shape, this.tail, this.edge, this.tipY, this.presence);
+  final Path Function(Size) shape, tail;
+  final double edge, tipY; // where the tail leaves the body, and its point
   final double presence;
 
   @override
@@ -1166,7 +1383,31 @@ class _BubblePaint extends CustomPainter {
     canvas.restore();
     canvas.drawPath(
       path,
-      Paint()..color = Color.fromRGBO(250, 250, 249, 0.96 * presence),
+      Paint()..color = Color.fromRGBO(250, 250, 249, 0.62 * presence),
+    );
+    // The tail has no frost behind it, and a native blur cannot be
+    // feathered, so where it leaves the body it is near opaque in the
+    // frost's own tone: the map's detail must not start at the body's
+    // edge. Toward the point it thins to glass again.
+    const frost = Color(0xFFF4F4F3);
+    canvas.drawPath(
+      tail(size),
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, edge),
+          Offset(0, edge + (tipY - edge).sign * 26),
+          [
+            frost.withValues(alpha: 0.9 * presence),
+            frost.withValues(alpha: 0.5 * presence),
+          ],
+        ),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.6
+        ..color = Color.fromRGBO(255, 255, 255, 0.7 * presence),
     );
   }
 
