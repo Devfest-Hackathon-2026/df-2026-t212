@@ -697,7 +697,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   // After the camera in the reference: a dark room, the view in the middle,
   // everything that shapes the look laid on the view itself.
 
-  static const _bg = Color(0xFF232323);
+  static const _bg = Color(0xFF000000);
   static const _ink = Color(0xFFF2F2F0);
   // Quieter text over the blurred view stays white and only grows fainter:
   // gray goes muddy over a blur.
@@ -2098,7 +2098,7 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
                               Path()..addRRect(RRect.fromRectAndRadius(g.capsule, const Radius.circular(22))),
                             ),
                             child: BackdropFilter(
-                              filter: ui.ImageFilter.blur(sigmaX: 14 * (1 - t), sigmaY: 14 * (1 - t)),
+                              filter: ui.ImageFilter.blur(sigmaX: 9 * (1 - t), sigmaY: 9 * (1 - t)),
                               child: const SizedBox.expand(),
                             ),
                           ),
@@ -2111,7 +2111,7 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
                           child: ClipPath(
                             clipper: _PathClip(g.disc(t)),
                             child: BackdropFilter(
-                              filter: ui.ImageFilter.blur(sigmaX: 18 * t, sigmaY: 18 * t),
+                              filter: ui.ImageFilter.blur(sigmaX: 12 * t, sigmaY: 12 * t),
                               child: const SizedBox.expand(),
                             ),
                           ),

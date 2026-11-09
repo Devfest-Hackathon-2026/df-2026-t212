@@ -60,7 +60,7 @@ class Glass extends StatelessWidget {
       child: ClipRRect(
         borderRadius: r,
         child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          filter: ui.ImageFilter.blur(sigmaX: dark ? 12 : 24, sigmaY: dark ? 12 : 24),
           blendMode: BlendMode.src,
           child: Container(
             padding: padding,
