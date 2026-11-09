@@ -85,6 +85,7 @@ class _MapScreenState extends State<MapScreen>
 
   late final Ticker _ticker = createTicker(_tick);
   Duration _last = Duration.zero;
+  double _clock = 0; // seconds of playback actually run
   // How fast playback runs right now, as a share of the chosen speed. It
   // rises from rest when playback starts and follows speed changes softly.
   double _rate = 0;
@@ -209,6 +210,7 @@ class _MapScreenState extends State<MapScreen>
     final landing = math.sqrt((left / 0.04).clamp(0.0, 1.0)).clamp(0.12, 1.0);
     // A complete journey takes 24 seconds at 1×, independent of window width.
     setState(() {
+      _clock += dt;
       _w0 = (_w0 + dt * _rate * landing * (1 - len) / 24).clamp(0.0, 1 - len);
       _w1 = _w0 + len;
       if (_w1 >= 1 - 1e-6) {
@@ -719,6 +721,9 @@ class _MapScreenState extends State<MapScreen>
                     norm: _norm,
                     w0: _w0,
                     w1: _w1,
+                    clock: _clock,
+                    playing: _playing,
+                    pace: _speed * (1 - (_w1 - _w0)) / 24,
                     onPinned: (keys, covered) {
                       if (!mounted ||
                           (setEquals(keys, _pinned) &&
@@ -871,11 +876,21 @@ class _PlaybackPhotos extends StatefulWidget {
     required this.norm,
     required this.w0,
     required this.w1,
+    required this.clock,
+    required this.playing,
+    required this.pace,
   });
   final List<PhotoItem> items;
   final List<PhotoItem> faint; // outside the window, drawn as faint dots
   final double Function(DateTime) norm;
   final double w0, w1;
+
+  /// Seconds of playback run so far; still while paused or scrubbing.
+  final double clock;
+  final bool playing;
+
+  /// How far the window moves per second, in the same 0..1 units as [w0].
+  final double pace;
 
   /// The photos on cards, and the photos whose places sit under a card's
   /// body, after each layout.
@@ -886,7 +901,15 @@ class _PlaybackPhotos extends StatefulWidget {
 }
 
 class _PlaybackPhotosState extends State<_PlaybackPhotos> {
+  // A card is worth putting up only if it can stay long enough to be read,
+  // and no card holds its place so long that the photos behind it never
+  // get a turn.
+  static const _shortest = 1.8, _longest = 4.5, _bow = 0.5;
+
   Set<String> _visibleKeys = {};
+  final Map<String, double> _born = {}; // when each card came up
+  final Set<String> _spent = {}; // cards that had their turn this pass
+  double _lastW0 = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -918,10 +941,30 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
         final bodies = <Rect>[];
         final children = <Widget>[];
         final visibleKeys = <String>{};
-        final w0 = widget.w0, w1 = widget.w1;
+        final w0 = widget.w0, w1 = widget.w1, clock = widget.clock;
+        // Going back in time gives every photo a fresh turn.
+        if (w0 < _lastW0 - 1e-6) _spent.clear();
+        _lastW0 = w0;
+        // In a window that passes quicker than a card can be read, settle
+        // for most of the time it is there.
+        final pace = math.max(widget.pace, 1e-6);
+        final shortest = math.min(_shortest, (w1 - w0) / pace * 0.6);
         for (var i = 0; i < picks.length; i++) {
           final point = offsets[i];
           if (!safe.contains(point)) continue;
+          final key = picks[i].key;
+          if (_spent.contains(key)) continue;
+          final born = _born[key];
+          if (born == null &&
+              widget.playing &&
+              (widget.norm(picks[i].taken) - w0) / pace < shortest) {
+            continue; // It would be gone before it could be read.
+          }
+          final age = born == null ? 0.0 : clock - born;
+          if (age >= _longest) {
+            _spent.add(key);
+            continue;
+          }
           // A card stands a little to one side of its place, leaning in
           // toward the middle of the screen, so its tail comes down at a
           // slant as a hand-drawn balloon's would, not plumb.
@@ -945,6 +988,8 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
           final leaving = w1 >= 1 - 1e-6
               ? 1.0
               : ((w1 - n) / fade).clamp(0.0, 1.0);
+          // A card that has had its time bows out on its own clock.
+          final bow = ((_longest - age) / _bow).clamp(0.0, 1.0);
           used.add(rect);
           bodies.add(
             Rect.fromLTWH(
@@ -955,6 +1000,7 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
             ),
           );
           visibleKeys.add(it.key);
+          _born.putIfAbsent(it.key, () => clock);
           children.add(
             Positioned(
               key: ValueKey(it.key),
@@ -966,7 +1012,7 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
                 child: _Pin(
                   it,
                   visibility: Curves.easeInOut.transform(
-                    math.min(entering, leaving),
+                    math.min(math.min(entering, leaving), bow),
                   ),
                   below: below,
                   tipX: point.dx - left,
@@ -977,6 +1023,7 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
           if (children.length == 4) break;
         }
         _visibleKeys = visibleKeys;
+        _born.removeWhere((k, _) => !visibleKeys.contains(k));
         // The map's native blur frosts only the tiles, not the markers drawn
         // over them, so markers under a card would show through it sharp.
         // Name them, so they can step aside while the card is up.
