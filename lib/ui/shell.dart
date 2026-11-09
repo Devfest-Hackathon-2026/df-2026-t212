@@ -25,7 +25,7 @@ class _ShellState extends State<Shell> {
   int _tab = 0;
 
   void _camera() {
-    Haptics.firm();
+    Haptics.light();
     Navigator.push(context, CameraRoute());
   }
 

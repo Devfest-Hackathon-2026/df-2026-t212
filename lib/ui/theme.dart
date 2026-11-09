@@ -25,14 +25,36 @@ String? get uiFamily => _isApple ? 'Helvetica Neue' : null;
 String get monoFamily => _isApple ? 'Menlo' : 'monospace';
 
 class Txt {
-  static TextStyle get display =>
-      TextStyle(fontFamily: uiFamily, fontSize: 30, fontWeight: FontWeight.w500, letterSpacing: -0.6, color: Neutral.primary, height: 1.1);
-  static TextStyle get title =>
-      TextStyle(fontFamily: uiFamily, fontSize: 20, fontWeight: FontWeight.w500, letterSpacing: -0.3, color: Neutral.primary);
-  static TextStyle get body =>
-      TextStyle(fontFamily: uiFamily, fontSize: 16, fontWeight: FontWeight.w400, letterSpacing: -0.1, color: Neutral.primary, height: 1.45);
-  static TextStyle get label =>
-      TextStyle(fontFamily: uiFamily, fontSize: 15, fontWeight: FontWeight.w500, letterSpacing: -0.1, color: Neutral.primary);
+  static TextStyle get display => TextStyle(
+    fontFamily: uiFamily,
+    fontSize: 30,
+    fontWeight: FontWeight.w500,
+    letterSpacing: -0.6,
+    color: Neutral.primary,
+    height: 1.1,
+  );
+  static TextStyle get title => TextStyle(
+    fontFamily: uiFamily,
+    fontSize: 20,
+    fontWeight: FontWeight.w500,
+    letterSpacing: -0.3,
+    color: Neutral.primary,
+  );
+  static TextStyle get body => TextStyle(
+    fontFamily: uiFamily,
+    fontSize: 16,
+    fontWeight: FontWeight.w400,
+    letterSpacing: -0.1,
+    color: Neutral.primary,
+    height: 1.45,
+  );
+  static TextStyle get label => TextStyle(
+    fontFamily: uiFamily,
+    fontSize: 15,
+    fontWeight: FontWeight.w500,
+    letterSpacing: -0.1,
+    color: Neutral.primary,
+  );
   static TextStyle get small =>
       TextStyle(fontFamily: uiFamily, fontSize: 13, fontWeight: FontWeight.w400, color: Neutral.secondary);
   static TextStyle get mono =>
@@ -54,15 +76,19 @@ ThemeData buildTheme() {
     fontFamily: uiFamily,
     splashFactory: NoSplash.splashFactory,
     highlightColor: Colors.transparent,
-    pageTransitionsTheme: const PageTransitionsTheme(builders: {
-      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-      TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-    }),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {
+        TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+        TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+      },
+    ),
   );
   return base.copyWith(
     textSelectionTheme: const TextSelectionThemeData(cursorColor: Neutral.primary),
     switchTheme: SwitchThemeData(
-      trackColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? Neutral.primary : Neutral.hairline),
+      trackColor: WidgetStateProperty.resolveWith(
+        (s) => s.contains(WidgetState.selected) ? Neutral.primary : Neutral.hairline,
+      ),
       thumbColor: const WidgetStatePropertyAll(Neutral.surface),
       trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
     ),
@@ -98,8 +124,35 @@ class Springs {
   static const gentle = SpringDescription(mass: 1, stiffness: 180, damping: 24);
 }
 
+/// One vocabulary of touch for the whole app, so the same kind of moment
+/// always feels the same:
+///
+/// - [tick]: a value moved one step (a dial, a slider, a segment).
+/// - [light]: something opened, closed or was picked up.
+/// - [firm]: a choice was made or reset.
+/// - [snap]: a value landed on a mark (a lens, a default).
+/// - [shutter]: a photo was taken.
+/// - [success] / [warning]: something finished, or could not.
+///
+/// On iOS these come from the system's prepared generators, so they are
+/// on time and as crisp as the system camera's; elsewhere Flutter's own.
 class Haptics {
-  static void tick() => HapticFeedback.selectionClick();
-  static void light() => HapticFeedback.lightImpact();
-  static void firm() => HapticFeedback.mediumImpact();
+  static const _ch = MethodChannel('afterhue/haptics');
+  static final bool _native = !kIsWeb && Platform.isIOS;
+
+  static void _play(String kind, VoidCallback fallback) {
+    if (_native) {
+      _ch.invokeMethod('play', kind).catchError((_) => fallback());
+    } else {
+      fallback();
+    }
+  }
+
+  static void tick() => _play('tick', HapticFeedback.selectionClick);
+  static void light() => _play('light', HapticFeedback.lightImpact);
+  static void firm() => _play('firm', HapticFeedback.mediumImpact);
+  static void snap() => _play('snap', HapticFeedback.heavyImpact);
+  static void shutter() => _play('shutter', HapticFeedback.mediumImpact);
+  static void success() => _play('success', HapticFeedback.mediumImpact);
+  static void warning() => _play('warning', HapticFeedback.heavyImpact);
 }

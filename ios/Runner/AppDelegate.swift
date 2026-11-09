@@ -19,6 +19,66 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "LiveCamera") {
       LiveCamera.register(registrar: registrar)
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "Haptics") {
+      Haptics.register(messenger: registrar.messenger())
+    }
+  }
+}
+
+/// The app's touch vocabulary on the system's generators, kept prepared so
+/// each one lands on the frame it belongs to.
+enum Haptics {
+  static let selection = UISelectionFeedbackGenerator()
+  static let light = UIImpactFeedbackGenerator(style: .light)
+  static let medium = UIImpactFeedbackGenerator(style: .medium)
+  static let rigid = UIImpactFeedbackGenerator(style: .rigid)
+  static let soft = UIImpactFeedbackGenerator(style: .soft)
+  static let notice = UINotificationFeedbackGenerator()
+
+  static func register(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: "afterhue/haptics", binaryMessenger: messenger)
+    [selection, light, medium, rigid, soft, notice].forEach { $0.prepare() }
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "play", let kind = call.arguments as? String else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      play(kind)
+      result(nil)
+    }
+  }
+
+  static func play(_ kind: String) {
+    switch kind {
+    case "tick":
+      selection.selectionChanged()
+      selection.prepare()
+    case "light":
+      light.impactOccurred(intensity: 0.8)
+      light.prepare()
+    case "firm":
+      medium.impactOccurred()
+      medium.prepare()
+    case "snap":
+      rigid.impactOccurred(intensity: 0.9)
+      rigid.prepare()
+    case "shutter":
+      // The shutter: a firm press, then the curtain's softer return.
+      rigid.impactOccurred(intensity: 1)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.07) {
+        soft.impactOccurred(intensity: 0.55)
+        rigid.prepare()
+        soft.prepare()
+      }
+    case "success":
+      notice.notificationOccurred(.success)
+      notice.prepare()
+    case "warning":
+      notice.notificationOccurred(.warning)
+      notice.prepare()
+    default:
+      break
+    }
   }
 }
 

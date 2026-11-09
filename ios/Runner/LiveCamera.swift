@@ -1,5 +1,6 @@
 import AVFoundation
 import AVKit
+import CoreMotion
 import CoreLocation
 import CoreVideo
 import Flutter
@@ -50,9 +51,15 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   private var resolution = 0  // megapixels; 0 is the largest
   private var locked = false
   private var subjectObserver: NSObjectProtocol?
-  private var rotation: AnyObject?  // AVCaptureDevice.RotationCoordinator
-  private var rotationWatch: NSKeyValueObservation?
-  private var captureAngle: CGFloat = 90
+  private let motion = CMMotionManager()
+  /// How the phone is held, as the back camera's rotation: 90 upright, 0
+  /// top to the left, 180 top to the right, 270 upside down.
+  private var held: CGFloat = 90
+  /// The rotation a photo needs to come out level.
+  private var captureAngle: CGFloat {
+    // The front camera faces the other way: its sideways turns swap.
+    front && (held == 0 || held == 180) ? 180 - held : held
+  }
   private var volume: AnyObject?  // AVCaptureEventInteraction
 
   // GPU
@@ -82,6 +89,10 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   /// Photos still being saved, by their settings' id.
   private var pending: [Int64: FlutterResult] = [:]
   private var warnedFormat = false
+
+  /// Held on one frame while a color is picked from it, as Accent does: the
+  /// spot under the finger stays put while the hand moves.
+  private var frozen = false
 
   init(textures: FlutterTextureRegistry, channel: FlutterMethodChannel) {
     self.textures = textures
@@ -139,6 +150,11 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     case "resolution":
       resolution = args["mp"] as? Int ?? 0
       result(nil)
+    case "freeze":
+      lock.lock()
+      frozen = args["on"] as? Bool ?? false
+      lock.unlock()
+      result(nil)
     case "flip":
       flip(result)
     default:
@@ -171,6 +187,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
             DispatchQueue.main.async {
               self.registerTexture()
               self.watchVolume(true)
+              self.watchMotion(true)
               result(self.feedInfo())
             }
           } catch {
@@ -192,6 +209,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     stillTimer = nil
     location.stopUpdatingLocation()
     watchVolume(false)
+    watchMotion(false)
     queue.async {
       if self.session.isRunning { self.session.stopRunning() }
     }
@@ -321,7 +339,6 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       conn.automaticallyAdjustsVideoMirroring = false
       conn.isVideoMirrored = front
     }
-    watchRotation(camera)
   }
 
   /// The upright size of the frames, the long side as the height.
@@ -487,20 +504,33 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     }
   }
 
-  /// Which way the phone is held, for the photo and for the controls.
-  private func watchRotation(_ lens: AVCaptureDevice) {
-    guard #available(iOS 17.0, *) else { return }
-    let coordinator = AVCaptureDevice.RotationCoordinator(device: lens, previewLayer: nil)
-    rotation = coordinator
-    rotationWatch = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) {
-      [weak self] c, _ in
-      guard let self else { return }
-      let angle = c.videoRotationAngleForHorizonLevelCapture
-      self.captureAngle = angle
-      // Told as the back camera counts it: the front one, facing the other
-      // way, turns its sideways frames the other way round.
-      let shown = self.front && (angle == 0 || angle == 180) ? 180 - angle : angle
-      self.emit("orientation", Double(shown))
+  /// Which way the phone is held, for the photo and for the controls. Read
+  /// from gravity, as the system camera does: the screen stays upright and
+  /// the rotation lock does not matter.
+  private func watchMotion(_ on: Bool) {
+    guard on else {
+      motion.stopAccelerometerUpdates()
+      return
+    }
+    guard motion.isAccelerometerAvailable, !motion.isAccelerometerActive else { return }
+    motion.accelerometerUpdateInterval = 0.1
+    motion.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
+      guard let self, let g = data?.acceleration else { return }
+      // Lying flat says nothing; keep what it was.
+      if abs(g.z) > 0.85 { return }
+      let next: CGFloat
+      // A clear lean only, so it does not flicker at the diagonal.
+      if abs(g.y) > abs(g.x) + 0.25 {
+        next = g.y < 0 ? 90 : 270
+      } else if abs(g.x) > abs(g.y) + 0.25 {
+        next = g.x > 0 ? 0 : 180
+      } else {
+        return
+      }
+      if next != self.held {
+        self.held = next
+        self.emit("orientation", Double(next))
+      }
     }
   }
 
@@ -596,6 +626,10 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       }
       return
     }
+    lock.lock()
+    let still = frozen
+    lock.unlock()
+    if still { return }
     process(pixels)
   }
 

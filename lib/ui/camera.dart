@@ -12,6 +12,9 @@ import '../core/renderer.dart';
 import '../data/live_camera.dart';
 import '../data/photo_source.dart';
 import '../data/store.dart';
+
+import 'dart:isolate';
+
 import 'edit.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
@@ -42,7 +45,7 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> {
+class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMixin {
   LiveFeed? _feed;
   String? _error;
   final Recipe _r = Recipe();
@@ -90,6 +93,38 @@ class _CameraScreenState extends State<CameraScreen> {
   /// How far the controls turn to stay upright as the phone turns.
   double _turns = 0;
 
+  /// Quarter turns of the controls: 0 upright, -1 and 1 on its side, 2
+  /// upside down.
+  int get _quarter => (_turns * 4).round();
+
+  // One finger on the view: from the focus box it moves the exposure;
+  // elsewhere, up opens the options and down pulls the camera away.
+  bool _biasDrag = false;
+  bool _swiping = false;
+  double _swipeX = 0, _swipeY = 0;
+  double _pull = 0;
+  late final AnimationController _pullBack = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  );
+  double _pullFrom = 0;
+
+  /// The dial open under the finger: 'width', 'edge' or 'zoom'.
+  String? _dial;
+  double _dialAcc = 0;
+  Timer? _dialHide;
+
+  // The photo just taken: its frame flies to the corner in black and white
+  // and develops there.
+  ui.Image? _shotOrig, _shotDev;
+  Rect? _viewRect, _thumbRect;
+  late final AnimationController _fly = AnimationController(vsync: this, duration: const Duration(milliseconds: 560));
+  late final AnimationController _develop = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  );
+  ui.Image? _flyOrig, _flyDev;
+
   int get _addSlot => _r.colors.length < Recipe.maxColors ? _r.colors.length : -1;
   KeptColor? get _cur => _active < _r.colors.length ? _r.colors[_active] : null;
 
@@ -100,6 +135,9 @@ class _CameraScreenState extends State<CameraScreen> {
     // turn instead.
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     LiveCamera.listen(_onEvent);
+    _pullBack.addListener(() {
+      setState(() => _pull = _pullFrom * (1 - Motion.settle.transform(_pullBack.value)));
+    });
     _start();
   }
 
@@ -108,6 +146,10 @@ class _CameraScreenState extends State<CameraScreen> {
     _scan?.cancel();
     _focusFade?.cancel();
     _countdown?.cancel();
+    _dialHide?.cancel();
+    _pullBack.dispose();
+    _fly.dispose();
+    _develop.dispose();
     _loupeImage?.dispose();
     LiveCamera.listen(null);
     LiveCamera.stop();
@@ -214,8 +256,9 @@ class _CameraScreenState extends State<CameraScreen> {
       case 'orientation':
         // Upright is 90; on its side, 0 or 180. The controls turn back.
         final t = switch ((args as num).round()) {
-          0 => 0.25,
-          180 => -0.25,
+          // The top to the left: the controls turn back to the right.
+          0 => -0.25,
+          180 => 0.25,
           270 => 0.5,
           _ => 0.0,
         };
@@ -229,8 +272,12 @@ class _CameraScreenState extends State<CameraScreen> {
     final f = _feed;
     if (f == null || !f.live) return;
     final v = z.clamp(f.minZoom, f.maxZoom);
-    // A tick on passing a lens.
-    if (f.stops.any((s) => (s - _zoom) * (s - v) < 0 || (v == s && _zoom != s))) Haptics.tick();
+    // A snap on passing a lens; a tick on each half step of the dial.
+    if (f.stops.any((s) => (s - _zoom) * (s - v) < 0 || (v == s && _zoom != s))) {
+      Haptics.snap();
+    } else if (_dial == 'zoom' && (_zoom * 2).floor() != (v * 2).floor()) {
+      Haptics.tick();
+    }
     setState(() => _zoom = v);
     LiveCamera.zoom(v, ramp: ramp);
   }
@@ -261,7 +308,7 @@ class _CameraScreenState extends State<CameraScreen> {
   void _setBias(double ev) {
     final m = _feed?.maxBias ?? 0;
     final v = ev.clamp(-m, m);
-    if (_bias != 0 && (v == 0 || v.sign != _bias.sign)) Haptics.tick();
+    if (_bias != 0 && (v == 0 || v.sign != _bias.sign)) Haptics.snap();
     setState(() => _bias = v);
     LiveCamera.bias(v);
     _wakeFocus();
@@ -413,14 +460,16 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Future<void> _shoot() async {
     if (_feed == null) return;
-    Haptics.firm();
+    Haptics.shutter();
     final look = _r.copy();
     setState(() => _blink = true);
     Future.delayed(const Duration(milliseconds: 90), () {
       if (mounted) setState(() => _blink = false);
     });
+    final frame = LiveCamera.thumb(width: 240);
     try {
       final s = await LiveCamera.capture();
+      unawaited(_flyShot(await frame, look));
       final it = Store.instance.addCaptured(
         id: s.id,
         taken: s.taken,
@@ -448,6 +497,82 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  /// The frame just taken goes to the corner in black and white, and there
+  /// its kept colors come up, as a print does in the developer.
+  Future<void> _flyShot(Rgba? frame, Recipe look) async {
+    if (frame == null || !mounted) return;
+    final dev = await Isolate.run(() => render(frame, look).image);
+    final orig = await _image(frame);
+    final developed = await _image(dev);
+    if (!mounted) return;
+    setState(() {
+      _flyOrig = orig;
+      _flyDev = developed;
+    });
+    await _fly.forward(from: 0);
+    if (!mounted) return;
+    final oldOrig = _shotOrig, oldDev = _shotDev;
+    setState(() {
+      _shotOrig = orig;
+      _shotDev = developed;
+      _flyOrig = null;
+      _flyDev = null;
+    });
+    if (oldOrig != orig) oldOrig?.dispose();
+    if (oldDev != developed) oldDev?.dispose();
+    Haptics.light();
+    await _develop.forward(from: 0);
+  }
+
+  static Future<ui.Image> _image(Rgba p) {
+    final c = Completer<ui.Image>();
+    ui.decodeImageFromPixels(p.pixels, p.width, p.height, ui.PixelFormat.rgba8888, c.complete);
+    return c.future;
+  }
+
+  /// The developing picture: black and white, its colors rising with [t].
+  Widget _print(ui.Image orig, ui.Image dev, double t) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColorFiltered(
+          colorFilter: const ColorFilter.matrix(<double>[
+            0.2126, 0.7152, 0.0722, 0, 0, //
+            0.2126, 0.7152, 0.0722, 0, 0,
+            0.2126, 0.7152, 0.0722, 0, 0,
+            0, 0, 0, 1, 0,
+          ]),
+          child: RawImage(image: orig, fit: BoxFit.cover),
+        ),
+        Opacity(
+          opacity: t.clamp(0.0, 1.0),
+          child: RawImage(image: dev, fit: BoxFit.cover),
+        ),
+      ],
+    );
+  }
+
+  Widget _flight() {
+    final from = _viewRect, to = _thumbRect, orig = _flyOrig, dev = _flyDev;
+    if (from == null || to == null || orig == null || dev == null) return const SizedBox();
+    return AnimatedBuilder(
+      animation: _fly,
+      builder: (context, _) {
+        final t = Motion.travel.transform(_fly.value);
+        final r = Rect.lerp(from, to, t)!;
+        return Positioned.fromRect(
+          rect: r,
+          child: IgnorePointer(
+            child: Transform.rotate(
+              angle: _turns * 2 * math.pi * t,
+              child: ClipRRect(borderRadius: BorderRadius.circular(10 * t), child: _print(orig, dev, 0)),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   // ------------------------------------------------------------ layout
   //
   // After the camera in the reference: a dark room, the view in the middle,
@@ -464,34 +589,48 @@ class _CameraScreenState extends State<CameraScreen> {
       value: systemBarsDark,
       child: Scaffold(
         backgroundColor: _bg,
-        body: Padding(
-          padding: EdgeInsets.only(top: pad.top, bottom: pad.bottom),
-          child: LayoutBuilder(
-            builder: (context, box) {
-              const top = 60.0, hint = 44.0, bottom = 110.0;
-              final aspect = _feed?.aspect ?? 3 / 4;
-              final w = box.maxWidth - 12;
-              final h = math.min(w / aspect, box.maxHeight - top - hint - bottom);
-              // Where the view sits, so the loupe can leave it.
-              final view = Offset((box.maxWidth - h * aspect) / 2, top);
-              final at = _loupe;
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Column(
+        body: Transform.translate(
+          offset: Offset(0, _pull * 0.9),
+          child: Transform.scale(
+            scale: 1 - (_pull / 3000).clamp(0.0, 0.08),
+            child: Padding(
+              padding: EdgeInsets.only(top: pad.top, bottom: pad.bottom),
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  const top = 60.0, hint = 44.0, bottom = 110.0;
+                  final aspect = _feed?.aspect ?? 3 / 4;
+                  final w = box.maxWidth - 12;
+                  final h = math.min(w / aspect, box.maxHeight - top - hint - bottom);
+                  // Where the view sits, so the loupe can leave it.
+                  final view = Offset((box.maxWidth - h * aspect) / 2, top);
+                  _viewRect = view & Size(h * aspect, h);
+                  // The last shot's corner: the middle of the left of the shutter.
+                  _thumbRect = Rect.fromCenter(
+                    center: Offset((box.maxWidth / 2 - 38) / 2, box.maxHeight - bottom / 2),
+                    width: 48,
+                    height: 48,
+                  );
+                  final at = _loupe;
+                  return Stack(
+                    clipBehavior: Clip.none,
                     children: [
-                      SizedBox(height: top, width: double.infinity, child: _topBar()),
-                      SizedBox(height: h, width: h * aspect, child: _viewfinder()),
-                      SizedBox(height: hint, child: _hint()),
-                      const Spacer(),
-                      SizedBox(height: bottom, child: _bottom()),
+                      Column(
+                        children: [
+                          SizedBox(height: top, width: double.infinity, child: _topBar()),
+                          SizedBox(height: h, width: h * aspect, child: _viewfinder()),
+                          SizedBox(height: hint, child: _hint()),
+                          const Spacer(),
+                          SizedBox(height: bottom, child: _bottom()),
+                        ],
+                      ),
+                      if (at != null)
+                        _loupeWidget(view + Offset(at.dx * h * aspect, at.dy * h), width: box.maxWidth, ceiling: 0),
+                      _flight(),
                     ],
-                  ),
-                  if (at != null)
-                    _loupeWidget(view + Offset(at.dx * h * aspect, at.dy * h), width: box.maxWidth, ceiling: 0),
-                ],
-              );
-            },
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ),
@@ -751,6 +890,17 @@ class _CameraScreenState extends State<CameraScreen> {
               : (d) {
                   _pinchFrom = _zoom;
                   _pinching = d.pointerCount >= 2;
+                  // Exposure only from the box and its sun, so a drag
+                  // elsewhere is never mistaken for it.
+                  final at = _focusAt;
+                  _biasDrag =
+                      !_pinching &&
+                      at != null &&
+                      feed.maxBias > 0 &&
+                      Rect.fromLTRB(at.dx - 50, at.dy - 64, at.dx + 92, at.dy + 64).contains(d.localFocalPoint);
+                  _swiping = false;
+                  _swipeX = 0;
+                  _swipeY = 0;
                 },
           onScaleUpdate: feed == null
               ? null
@@ -759,15 +909,48 @@ class _CameraScreenState extends State<CameraScreen> {
                   if (d.pointerCount >= 2) _pinching = true;
                   if (_pinching) {
                     if (d.pointerCount >= 2) _setZoom((_pinchFrom ?? _zoom) * d.scale);
-                  } else if (_focusAt != null && feed.maxBias > 0) {
+                    return;
+                  }
+                  if (_biasDrag) {
                     _setBias(_bias - d.focalPointDelta.dy / 110);
+                    return;
+                  }
+                  _swipeX += d.focalPointDelta.dx;
+                  _swipeY += d.focalPointDelta.dy;
+                  if (!_swiping && _swipeY.abs() > 14 && _swipeY.abs() > _swipeX.abs() * 1.4) _swiping = true;
+                  if (_swiping && _swipeY > 0) {
+                    _pullBack.stop();
+                    setState(() => _pull = _swipeY);
                   }
                 },
-          onScaleEnd: (_) => _pinching = false,
+          onScaleEnd: (d) {
+            if (_swiping) {
+              final v = d.velocity.pixelsPerSecond.dy;
+              if (_swipeY > 0) {
+                if (_swipeY > 140 || v > 900) {
+                  Haptics.light();
+                  Navigator.pop(context);
+                } else {
+                  _pullFrom = _pull;
+                  _pullBack.forward(from: 0);
+                }
+              } else if (_swipeY < -44 || v < -600) {
+                if (!_options) Haptics.tick();
+                setState(() {
+                  _options = true;
+                  _panel = false;
+                });
+              }
+            }
+            _pinching = false;
+            _biasDrag = false;
+            _swiping = false;
+          },
           onLongPressStart: feed == null
               ? null
               : (d) {
                   Haptics.light();
+                  LiveCamera.freeze(true);
                   setState(() {
                     _panel = false;
                     _loupe = norm(d.localPosition);
@@ -782,6 +965,7 @@ class _CameraScreenState extends State<CameraScreen> {
             _sampleLoupe(size);
           },
           onLongPressEnd: (d) {
+            LiveCamera.freeze(false);
             final c = _loupeColor;
             final old = _loupeImage;
             setState(() {
@@ -859,14 +1043,21 @@ class _CameraScreenState extends State<CameraScreen> {
                   ),
                 ),
                 for (final p in _pings) _PingRing(key: ValueKey(p.id), ping: p),
-                Positioned(left: 0, right: 0, bottom: 0, child: _reachPanel()),
-                Positioned(left: 0, right: 0, bottom: 12, child: Center(child: _zoomRow())),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: (_feed?.stops.length ?? 0) > 1 ? 60 : 14,
-                  child: Center(child: _reachPill()),
+                Positioned(left: 0, right: 0, bottom: 12, child: Center(child: _zoomRow(size.width - 24))),
+                _onPersonsBottom(
+                  size,
+                  (width) => Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _reachDial(),
+                      Padding(
+                        padding: EdgeInsets.only(bottom: _quarter == 0 && (_feed?.stops.length ?? 0) > 1 ? 60 : 14),
+                        child: _reachPill(),
+                      ),
+                    ],
+                  ),
                 ),
+                _onPersonsBottom(size, (width) => SizedBox(width: width, child: _reachPanel())),
               ],
             ),
           ),
@@ -875,20 +1066,126 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  /// Lays [child] along the edge that is at the bottom for the person, the
+  /// way they hold the phone, turned to read upright. [child] gets the
+  /// width of that edge.
+  Widget _onPersonsBottom(Size view, Widget Function(double width) child) {
+    final q = _quarter;
+    final align = switch (q) {
+      -1 => Alignment.centerRight,
+      1 => Alignment.centerLeft,
+      2 => Alignment.topCenter,
+      _ => Alignment.bottomCenter,
+    };
+    final width = q.isOdd ? view.height : view.width;
+    return Positioned.fill(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 360),
+        switchInCurve: Motion.settle,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (c, a) => FadeTransition(opacity: a, child: c),
+        child: Align(
+          key: ValueKey(q),
+          alignment: align,
+          child: RotatedBox(quarterTurns: q == -1 ? 3 : q, child: child(width)),
+        ),
+      ),
+    );
+  }
+
+  /// Opens a dial for [key] under the finger, or keeps it open.
+  void _openDial(String key, double from) {
+    _dialHide?.cancel();
+    if (_dial != key) Haptics.light();
+    _dialAcc = from;
+    setState(() => _dial = key);
+  }
+
+  /// Lets the dial go a moment after the finger leaves.
+  void _closeDial() {
+    _dialHide?.cancel();
+    _dialHide = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() => _dial = null);
+    });
+  }
+
   /// The lenses, as the system camera shows them: .5, 1, 2, 3, the one in
-  /// use with its exact factor.
-  Widget _zoomRow() {
+  /// use with its exact factor. Held or slid, it opens into a dial.
+  Widget _zoomRow(double width) {
     final f = _feed;
     if (f == null || f.stops.length < 2) return const SizedBox();
+    final dial = _dial == 'zoom';
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPressStart: (_) => _openDial('zoom', math.log(_zoom)),
+      onLongPressMoveUpdate: (d) {
+        _dialAcc = math.log(_zoom) - d.offsetFromOrigin.dx / 600;
+        _setZoom(math.exp(_dialAcc));
+      },
+      onLongPressEnd: (_) => _closeDial(),
+      onHorizontalDragStart: (_) => _openDial('zoom', math.log(_zoom)),
+      onHorizontalDragUpdate: (d) {
+        // The scale moves with the finger: left brings longer lenses in.
+        _dialAcc -= d.delta.dx / 150;
+        _setZoom(math.exp(_dialAcc));
+      },
+      onHorizontalDragEnd: (_) => _closeDial(),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        switchInCurve: Motion.settle,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (c, a) => FadeTransition(
+          opacity: a,
+          child: ScaleTransition(scale: Tween(begin: 0.92, end: 1.0).animate(a), child: c),
+        ),
+        child: dial ? KeyedSubtree(key: const ValueKey('dial'), child: _zoomDial(f, width)) : _zoomStops(f),
+      ),
+    );
+  }
+
+  String _factor(double v) {
+    final r = (v * 10).round() / 10;
+    final t = r == r.roundToDouble() ? r.toStringAsFixed(0) : r.toStringAsFixed(1);
+    return t.startsWith('0.') ? t.substring(1) : t;
+  }
+
+  Widget _zoomDial(LiveFeed f, double width) {
+    return Glass(
+      dark: true,
+      radius: 18,
+      padding: const EdgeInsets.fromLTRB(0, 6, 0, 4),
+      child: SizedBox(
+        width: math.min(width, 340),
+        height: 50,
+        child: Column(
+          children: [
+            AnimatedRotation(
+              turns: _turns,
+              duration: const Duration(milliseconds: 320),
+              curve: Motion.settle,
+              child: Text(
+                '${_factor(_zoom)}×',
+                style: Txt.small.copyWith(color: _ink, fontSize: 12.5, fontWeight: FontWeight.w600),
+              ),
+            ),
+            Expanded(
+              child: CustomPaint(
+                size: Size.infinite,
+                painter: _ZoomScalePainter(zoom: _zoom, min: f.minZoom, max: f.maxZoom, stops: f.stops, label: _factor),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _zoomStops(LiveFeed f) {
     var cur = 0;
     for (var i = 0; i < f.stops.length; i++) {
       if (_zoom >= f.stops[i] - 0.05) cur = i;
     }
-    String n(double v) {
-      final r = (v * 10).round() / 10;
-      final t = r == r.roundToDouble() ? r.toStringAsFixed(0) : r.toStringAsFixed(1);
-      return t.startsWith('0.') ? t.substring(1) : t;
-    }
+    String n(double v) => _factor(v);
 
     final hidden = _panel;
     return IgnorePointer(
@@ -898,6 +1195,7 @@ class _CameraScreenState extends State<CameraScreen> {
         opacity: hidden ? 0 : 1,
         duration: const Duration(milliseconds: 220),
         child: Glass(
+          key: const ValueKey('stops'),
           dark: true,
           radius: 22,
           padding: const EdgeInsets.all(3),
@@ -1009,32 +1307,127 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
-  /// How far the chosen color reaches, at a glance; opens the panel.
+  /// How far the chosen color reaches, at a glance. Each half is a dial:
+  /// slide it to change, hold it to go back to the default; a tap opens the
+  /// colors in view.
   Widget _reachPill() {
     final c = _cur;
-    final hidden = _feed == null || _panel;
+    final hidden = _feed == null || _panel || _dial == 'zoom';
+    void openPanel() {
+      Haptics.light();
+      setState(() => _panel = true);
+    }
+
     return IgnorePointer(
       ignoring: hidden,
       child: AnimatedOpacity(
         curve: Motion.settle,
         opacity: hidden ? 0 : 1,
         duration: const Duration(milliseconds: 220),
-        child: GestureDetector(
-          onTap: () {
-            Haptics.tick();
-            setState(() => _panel = true);
-          },
-          child: Glass(
-            dark: true,
-            radius: 16,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Text(
-              c == null ? 'Colors in view' : 'Width ${c.width.round()}  ·  Edge ${c.softness.round()}',
-              style: Txt.small.copyWith(color: _ink, fontSize: 12.5),
-            ),
-          ),
+        child: Glass(
+          dark: true,
+          radius: 16,
+          child: c == null
+              ? GestureDetector(
+                  onTap: openPanel,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    child: Text('Colors in view', style: Txt.small.copyWith(color: _ink, fontSize: 12.5)),
+                  ),
+                )
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _pillPart('width', 'Width', c.width, 16, (v) => c.width = v, openPanel),
+                    Container(width: 1, height: 14, color: const Color(0x33FFFFFF)),
+                    _pillPart('edge', 'Edge', c.softness, 20, (v) => c.softness = v, openPanel),
+                  ],
+                ),
         ),
       ),
+    );
+  }
+
+  Widget _pillPart(String key, String label, double value, double def, void Function(double) set, VoidCallback tap) {
+    final on = _dial == key;
+    void to(double v) {
+      final next = v.clamp(0.0, 60.0).roundToDouble();
+      if (next == value) return;
+      if (next == def) {
+        Haptics.snap();
+      } else {
+        Haptics.tick();
+      }
+      setState(() => set(next));
+      _look();
+    }
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: tap,
+      onLongPress: () {
+        // Back to where it started.
+        Haptics.firm();
+        setState(() => set(def));
+        _look();
+      },
+      onHorizontalDragStart: (_) => _openDial(key, value),
+      onHorizontalDragUpdate: (d) {
+        // The scale moves with the finger: left brings larger values in.
+        _dialAcc -= d.delta.dx / 6;
+        to(_dialAcc);
+      },
+      onHorizontalDragEnd: (_) => _closeDial(),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Motion.settle,
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+        decoration: BoxDecoration(
+          color: on ? const Color(0x24FFFFFF) : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text('$label ${value.round()}', style: Txt.small.copyWith(color: _ink, fontSize: 12.5)),
+      ),
+    );
+  }
+
+  /// The scale above the pill while one of its halves is slid.
+  Widget _reachDial() {
+    final c = _cur;
+    final key = _dial;
+    final open = c != null && (key == 'width' || key == 'edge');
+    final value = !open ? 0.0 : (key == 'width' ? c.width : c.softness);
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 280),
+      curve: Motion.settle,
+      child: !open
+          ? const SizedBox(width: 0, height: 0)
+          : Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Glass(
+                dark: true,
+                radius: 16,
+                padding: const EdgeInsets.fromLTRB(0, 6, 0, 4),
+                child: SizedBox(
+                  width: 250,
+                  height: 46,
+                  child: Column(
+                    children: [
+                      Text(
+                        '${key == 'width' ? 'Width' : 'Edge'} ${value.round()}',
+                        style: Txt.small.copyWith(color: _ink, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      Expanded(
+                        child: CustomPaint(
+                          size: Size.infinite,
+                          painter: _ScalePainter(value: value, min: 0, max: 60, def: key == 'width' ? 16 : 20),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
     );
   }
 
@@ -1201,7 +1594,13 @@ class _CameraScreenState extends State<CameraScreen> {
                           ),
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(9),
-                            child: DevelopedImage(last, size: 160),
+                            child: _shotOrig != null && _shotDev != null
+                                ? AnimatedBuilder(
+                                    animation: _develop,
+                                    builder: (context, _) =>
+                                        _print(_shotOrig!, _shotDev!, Motion.settle.transform(_develop.value)),
+                                  )
+                                : DevelopedImage(last, size: 160),
                           ),
                         ),
                       ),
@@ -1321,6 +1720,96 @@ class _LoupePainter extends CustomPainter {
   bool shouldRepaint(_LoupePainter o) => o.image != image;
 }
 
+/// A dial's scale under a fixed mark: a tick a unit, longer every five,
+/// a dot at the default.
+class _ScalePainter extends CustomPainter {
+  _ScalePainter({required this.value, required this.min, required this.max, required this.def});
+  final double value, min, max, def;
+  static const step = 6.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final mid = size.width / 2;
+    final p = Paint()..strokeCap = StrokeCap.round;
+    for (var v = min; v <= max; v++) {
+      final x = mid + (v - value) * step;
+      if (x < 0 || x > size.width) continue;
+      // Fades toward the ends, as a drum turning away.
+      final fade = 1 - ((x - mid).abs() / mid).clamp(0.0, 1.0);
+      final major = v % 5 == 0;
+      p
+        ..color = Color.fromRGBO(242, 242, 240, (major ? 0.75 : 0.35) * fade)
+        ..strokeWidth = major ? 1.4 : 1;
+      final h = major ? 12.0 : 7.0;
+      canvas.drawLine(Offset(x, size.height - 4 - h), Offset(x, size.height - 4), p);
+      if (v == def) {
+        canvas.drawCircle(Offset(x, size.height - 22), 1.8, Paint()..color = Color.fromRGBO(242, 242, 240, 0.8 * fade));
+      }
+    }
+    canvas.drawLine(
+      Offset(mid, size.height - 20),
+      Offset(mid, size.height - 2),
+      Paint()
+        ..color = const Color(0xFFF2F2F0)
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ScalePainter o) => o.value != value;
+}
+
+/// The zoom dial: factors on a log scale under a fixed mark, the lenses
+/// named.
+class _ZoomScalePainter extends CustomPainter {
+  _ZoomScalePainter({
+    required this.zoom,
+    required this.min,
+    required this.max,
+    required this.stops,
+    required this.label,
+  });
+  final double zoom, min, max;
+  final List<double> stops;
+  final String Function(double) label;
+  static const perE = 150.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final mid = size.width / 2;
+    double xOf(double v) => mid + (math.log(v) - math.log(zoom)) * perE;
+    final p = Paint()..strokeCap = StrokeCap.round;
+    final marks = <double>[];
+    for (var v = (min * 10).ceil() / 10; v <= max + 1e-6; v += v < 2 ? 0.1 : (v < 5 ? 0.25 : 0.5)) {
+      marks.add((v * 100).round() / 100);
+    }
+    for (final v in marks) {
+      final x = xOf(v);
+      if (x < 0 || x > size.width) continue;
+      final fade = 1 - ((x - mid).abs() / mid).clamp(0.0, 1.0);
+      final lens = stops.any((s) => (s - v).abs() < 0.01);
+      final whole = (v - v.roundToDouble()).abs() < 0.01;
+      p
+        ..color = Color.fromRGBO(242, 242, 240, (lens ? 0.9 : (whole ? 0.6 : 0.3)) * fade)
+        ..strokeWidth = lens ? 1.6 : 1;
+      final h = lens ? 12.0 : (whole ? 9.0 : 6.0);
+      canvas.drawLine(Offset(x, size.height - 4 - h), Offset(x, size.height - 4), p);
+    }
+    canvas.drawLine(
+      Offset(mid, size.height - 20),
+      Offset(mid, size.height - 2),
+      Paint()
+        ..color = const Color(0xFFF2F2F0)
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ZoomScalePainter o) => o.zoom != zoom;
+}
+
 /// Thirds, as the system camera's grid.
 class _GridPainter extends CustomPainter {
   const _GridPainter();
@@ -1384,7 +1873,7 @@ class _DarkSlider extends StatelessWidget {
         final w = box.maxWidth;
         void set(double dx) {
           final t = (dx / w).clamp(0.0, 1.0);
-          if ((value - def).sign != (t - def).sign) Haptics.tick();
+          if ((value - def).sign != (t - def).sign) Haptics.snap();
           onChanged(t);
         }
 

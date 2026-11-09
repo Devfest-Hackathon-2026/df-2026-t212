@@ -346,7 +346,7 @@ class _EditScreenState extends State<EditScreen> {
           _marks.clear();
           _active = _active.clamp(0, _addSlot);
         });
-        ok ? Haptics.firm() : Haptics.tick();
+        ok ? Haptics.success() : Haptics.warning();
         _request();
       },
     );

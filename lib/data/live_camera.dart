@@ -85,6 +85,9 @@ class LiveCamera {
   /// Focuses and exposes for a normalized point of the view.
   static Future<void> focus(double x, double y) => _ch.invokeMethod('focus', {'x': x, 'y': y});
 
+  /// Holds the view on the frame it shows, or lets it run again.
+  static Future<void> freeze(bool on) => _ch.invokeMethod('freeze', {'on': on});
+
   /// Holds focus and exposure where they are.
   static Future<void> lock(bool on) => _ch.invokeMethod('lock', {'on': on});
 

@@ -137,7 +137,7 @@ class _ThinSliderState extends State<ThinSlider> {
           final v =
               widget.min + (dx / w).clamp(0.0, 1.0) * (widget.max - widget.min);
           final before = widget.value, d = widget.defaultValue;
-          if ((before - d).sign != (v - d).sign) Haptics.tick();
+          if ((before - d).sign != (v - d).sign) Haptics.snap();
           widget.onChanged(v);
         }
 
