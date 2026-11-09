@@ -113,9 +113,9 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   Timer? _countdown;
 
   /// Close up on the ultra wide, or kept off it: shown while it matters,
-  /// a moment longer, and named for a moment when it is turned.
+  /// and named for a moment when it is turned.
   bool _macro = false, _macroOn = true;
-  Timer? _macroLinger, _macroNoteTimer;
+  Timer? _macroNoteTimer;
   String? _macroNote;
   bool _grid = false;
   int _mp = 0;
@@ -176,7 +176,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   void dispose() {
     _scan?.cancel();
     _focusFade?.cancel();
-    _macroLinger?.cancel();
     _macroNoteTimer?.cancel();
     _countdown?.cancel();
     _pullBack.dispose();
@@ -415,18 +414,12 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         final m = (args as Map?) ?? const {};
         final shown = m['shown'] == true;
         final on = m['on'] != false;
-        _macroLinger?.cancel();
-        if (shown) {
-          setState(() {
-            _macro = true;
-            _macroOn = on;
-          });
-        } else {
-          setState(() => _macroOn = on);
-          _macroLinger = Timer(const Duration(milliseconds: 1200), () {
-            if (mounted) setState(() => _macro = false);
-          });
-        }
+        // The phone takes its own time to change lenses; the button follows
+        // it the moment it does, with no wait of its own.
+        setState(() {
+          _macro = shown;
+          _macroOn = on;
+        });
       case 'focusReset':
         if (!_locked && _focusAt != null) {
           setState(() {
@@ -1135,8 +1128,9 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   }
 
   /// Macro, by the zoom, as the system camera's: a tulip that shows up close,
-  /// solid while the phone is on the ultra wide, struck through while it is
-  /// kept off; tapped, it turns, and says which for a moment.
+  /// solid while the phone is on the ultra wide, struck through and left
+  /// in sight for as long as it is kept off; tapped, it turns, and says
+  /// which for a moment.
   Widget _macroButton() {
     final show = _macro && _dial != 'zoom' && _dial != 'reach' && !_panel;
     final on = _macroOn;
@@ -1211,7 +1205,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   void _toggleMacro() {
     Haptics.tick();
     final on = !_macroOn;
-    _macroLinger?.cancel();
     setState(() {
       _macroOn = on;
       _macroNote = on ? 'Macro' : 'Macro Off';

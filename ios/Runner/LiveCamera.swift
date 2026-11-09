@@ -53,12 +53,9 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   private var subjectObserver: NSObjectProtocol?
 
   /// Macro, as the system camera's: on, the phone moves to the ultra wide
-  /// by itself close up; off, it stays on the main lens until the subject
-  /// is left behind.
+  /// by itself close up; off, it never does, until it is turned back on.
   private var macroOn = true
   private var macroWatch: [NSKeyValueObservation] = []
-  /// Where the main lens focused once macro was turned off, close up.
-  private var macroRef: Float?
   private var macroSent: (Bool, Bool)?
   private let motion = CMMotionManager()
   /// How the phone is held, as the back camera's rotation: 90 upright, 0
@@ -614,21 +611,13 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   /// macro off. Called as a lens goes in.
   private func watchMacro(_ lens: AVCaptureDevice) {
     macroWatch = []
-    macroRef = nil
     let again: () -> Void = { [weak self] in DispatchQueue.main.async { self?.reportMacro() } }
     if lens.isVirtualDevice, Self.constituent(lens, .builtInUltraWideCamera) != nil {
       macroOn = true
       macroWatch.append(lens.observe(\.activePrimaryConstituent) { _, _ in again() })
       macroWatch.append(lens.observe(\.videoZoomFactor) { _, _ in again() })
     } else if !macroOn, !front, !lens.isVirtualDevice {
-      macroWatch.append(lens.observe(\.lensPosition) { _, _ in again() })
-      // Once it has found its nearest focus, that is where "still close" is
-      // measured from.
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
-        guard let self, !self.macroOn, let camera = self.camera else { return }
-        self.macroRef = camera.lensPosition
-        self.reportMacro()
-      }
+      // Off stays off until it is turned back on.
     } else {
       macroOn = true
     }
@@ -693,13 +682,8 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       if macroOn {
         shown = !macroWatch.isEmpty && atMain(lens)
           && lens.activePrimaryConstituent?.deviceType == .builtInUltraWideCamera
-      } else if let ref = macroRef {
-        // Off, the main lens holds as near as it can focus; once its focus
-        // moves well away, the subject has been left behind, and macro is
-        // back on, as the system camera's.
-        shown = abs(lens.lensPosition - ref) < 0.2
-        if !shown { setMacro(true) }
       } else {
+        // Off is shown for as long as it lasts, so it is never a surprise.
         shown = true
       }
     }
