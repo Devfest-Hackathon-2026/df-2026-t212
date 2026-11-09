@@ -50,16 +50,15 @@ class _GlyphPainter extends CustomPainter {
   final Color color;
   final double weight;
 
-  /// Where each glyph's ink sits off the middle, measured, so it is moved
-  /// back: a heart is heavy at the top, a camera at the bottom.
+  /// Nudges set by eye with the glyphs side by side, so a row reads level.
   static const _optical = <G, Offset>{
-    G.heart: Offset(0, 0.95),
-    G.heartFill: Offset(0, 0.85),
-    G.share: Offset(0, -0.9),
-    G.up: Offset(0, 1.3),
-    G.camera: Offset(0, -1.2),
-    G.flashAuto: Offset(0.4, -1.0),
-    G.back: Offset(0.55, 0),
+    G.heart: Offset(0, 0.35),
+    G.heartFill: Offset(0, 0.35),
+    G.share: Offset(0, 0.2),
+    G.up: Offset(0, 0.6),
+    G.camera: Offset(0, -0.3),
+    G.flashAuto: Offset(0.4, -0.6),
+    G.back: Offset(0.5, 0),
     G.timer: Offset(-0.25, 0),
   };
 
@@ -95,20 +94,20 @@ class _GlyphPainter extends CustomPainter {
           ..blendMode = BlendMode.clear
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
-          ..strokeWidth = line.strokeWidth + 1.8,
+          ..strokeWidth = line.strokeWidth + 1.2,
       );
       canvas.drawLine(const Offset(4.2, 4.2), const Offset(19.8, 19.8), line);
       canvas.restore();
     }
 
     Path heart() => Path()
-      ..moveTo(12, 20.3)
-      ..cubicTo(6.6, 16.6, 3.2, 13.3, 3.2, 9.2)
-      ..cubicTo(3.2, 6.4, 5.3, 4.4, 7.8, 4.4)
-      ..cubicTo(9.6, 4.4, 11.1, 5.4, 12, 7)
-      ..cubicTo(12.9, 5.4, 14.4, 4.4, 16.2, 4.4)
-      ..cubicTo(18.7, 4.4, 20.8, 6.4, 20.8, 9.2)
-      ..cubicTo(20.8, 13.3, 17.4, 16.6, 12, 20.3)
+      ..moveTo(12.0, 19.47)
+      ..cubicTo(7.14, 16.14, 4.08, 13.17, 4.08, 9.48)
+      ..cubicTo(4.08, 6.96, 5.97, 5.16, 8.22, 5.16)
+      ..cubicTo(9.84, 5.16, 11.19, 6.06, 12.0, 7.5)
+      ..cubicTo(12.81, 6.06, 14.16, 5.16, 15.78, 5.16)
+      ..cubicTo(18.03, 5.16, 19.92, 6.96, 19.92, 9.48)
+      ..cubicTo(19.92, 13.17, 16.86, 16.14, 12.0, 19.47)
       ..close();
 
     Path bolt(double dx) => Path()
@@ -142,8 +141,8 @@ class _GlyphPainter extends CustomPainter {
         canvas.drawPath(heart(), fill);
         canvas.drawPath(heart(), line);
       case G.close:
-        seg(6, 6, 18, 18);
-        seg(18, 6, 6, 18);
+        seg(5.6, 5.6, 18.4, 18.4);
+        seg(18.4, 5.6, 5.6, 18.4);
       case G.more:
         for (final x in [5.0, 12.0, 19.0]) {
           canvas.drawCircle(Offset(x, 12), 2.05, fill);
@@ -253,9 +252,9 @@ class _GlyphPainter extends CustomPainter {
       case G.back:
         canvas.drawPath(
           Path()
-            ..moveTo(14.6, 5.4)
-            ..lineTo(8, 12)
-            ..lineTo(14.6, 18.6),
+            ..moveTo(15, 4.6)
+            ..lineTo(7.6, 12)
+            ..lineTo(15, 19.4),
           line,
         );
       case G.up:
