@@ -39,6 +39,7 @@ class PhotoItem {
     this.picked = false,
     this.asked = false,
     this.sceneOf,
+    this.fingerprint,
   });
 
   /// Library asset id. Duplicates share the asset and differ in [key].
@@ -75,6 +76,9 @@ class PhotoItem {
   /// that one; its edit is applied here.
   String? sceneOf;
 
+  /// The photo shrunk to 16×16 grey, to tell the same picture saved twice.
+  Uint8List? fingerprint;
+
   /// In the library. Photos the agent was not going to develop on its own
   /// stay out until a person picks them.
   bool get shown => switch (state) {
@@ -106,6 +110,7 @@ class PhotoItem {
         if (picked) 'picked': true,
         if (asked) 'asked': true,
         if (sceneOf != null) 'sceneOf': sceneOf,
+        if (fingerprint != null) 'print': base64Encode(fingerprint!),
       };
 
   factory PhotoItem.fromJson(Map<String, dynamic> j) => PhotoItem(
@@ -127,6 +132,7 @@ class PhotoItem {
         picked: j['picked'] as bool? ?? false,
         asked: j['asked'] as bool? ?? false,
         sceneOf: j['sceneOf'] as String?,
+        fingerprint: j['print'] == null ? null : base64Decode(j['print'] as String),
       );
 }
 
@@ -189,6 +195,14 @@ class Store extends ChangeNotifier {
   final List<PhotoItem> items = [];
   final Map<String, PhotoItem> _byKey = {};
 
+  /// Library photos the person removed from After Hue. They stay in the
+  /// photo library, so a later scan would bring them back; it passes them
+  /// by instead. Picking one by hand lets it in again.
+  final Set<String> _removed = {};
+
+  /// The pictures of removed photos, so a copy of one stays out as well.
+  final List<Uint8List> _removedPrints = [];
+
   // Shared between Photos and Map.
   final Set<int> paletteFilter = {};
   SortMode sort = SortMode.time;
@@ -212,6 +226,8 @@ class Store extends ChangeNotifier {
         autoSince = since == null ? null : DateTime.fromMillisecondsSinceEpoch(since);
         _day = j['day'] as String? ?? '';
         _today = j['today'] as int? ?? 0;
+        _removed.addAll(((j['removed'] as List?) ?? const []).cast<String>());
+        _removedPrints.addAll(((j['removedPrints'] as List?) ?? const []).cast<String>().map(base64Decode));
         for (final it in (j['items'] as List).cast<Map<String, dynamic>>()) {
           _add(PhotoItem.fromJson(it));
         }
@@ -259,6 +275,8 @@ class Store extends ChangeNotifier {
       _held.clear();
       items.clear();
       _byKey.clear();
+      _removed.clear();
+      _removedPrints.clear();
       paletteFilter.clear();
       _palette = null;
       sort = SortMode.time;
@@ -295,6 +313,8 @@ class Store extends ChangeNotifier {
         'day': _day,
         'today': _today,
         'items': items.map((e) => e.toJson()).toList(),
+        'removed': _removed.toList(),
+        'removedPrints': _removedPrints.map(base64Encode).toList(),
       };
       final previous = _saving;
       final saving = () async {
@@ -372,8 +392,26 @@ class Store extends ChangeNotifier {
     bool auto(DateTime taken) => autoDevelop && !taken.isBefore(autoSince!);
     var changed = false;
     final scenes = _SceneBuilder();
+    final moments = {for (final e in items) _moment(e.taken, e.width, e.height)};
     for (final r in refs) {
-      if (_byKey.containsKey(r.id)) continue;
+      if (_byKey.containsKey(r.id) || _removed.contains(r.id)) continue;
+      // The same photo saved twice (Duplicate in Photos keeps its moment):
+      // known, but never queued or shown on its own.
+      if (!moments.add(_moment(r.taken, r.width, r.height))) {
+        _add(PhotoItem(
+          id: r.id,
+          taken: r.taken,
+          lat: r.lat,
+          lng: r.lng,
+          width: r.width,
+          height: r.height,
+          state: Develop.manual,
+          judged: true,
+          note: _sameNote,
+        ));
+        changed = true;
+        continue;
+      }
       final it = PhotoItem(
         id: r.id,
         taken: r.taken,
@@ -417,6 +455,7 @@ class Store extends ChangeNotifier {
   Future<List<PhotoItem>> importRefs(List<PhotoRef> refs) async {
     final added = <PhotoItem>[];
     for (final r in refs) {
+      _removed.remove(r.id);
       final known = _byKey[r.id];
       if (known != null) {
         // Already known but kept out of the library: bring it in.
@@ -471,6 +510,7 @@ class Store extends ChangeNotifier {
       items.remove(known);
       _byKey.remove(id);
     }
+    _removed.remove(id);
     _add(it);
     _sortItems();
     _save();
@@ -612,6 +652,32 @@ class Store extends ChangeNotifier {
     }
   }
 
+  /// Another photo with the same picture: the same shape, and grey
+  /// thumbnails that differ by no more than re-saving would make.
+  /// Names the twin, or 'a removed photo'.
+  String? _twinOf(PhotoItem it) {
+    final a = it.fingerprint;
+    if (a == null) return null;
+    bool same(Uint8List b) {
+      if (b.length != a.length) return false;
+      var diff = 0;
+      for (var i = 0; i < a.length; i++) {
+        diff += (a[i] - b[i]).abs();
+      }
+      return diff / a.length < 2.0;
+    }
+
+    final ratio = it.width / it.height;
+    for (final e in items) {
+      final b = e.fingerprint;
+      if (identical(e, it) || e.id == it.id || b == null) continue;
+      if ((e.width / e.height - ratio).abs() > 0.01) continue;
+      if (same(b)) return e.id.substring(0, 6);
+    }
+    if (_removedPrints.any(same)) return 'a removed photo';
+    return null;
+  }
+
   void _log(String s) {
     agentLog.add(s);
     if (agentLog.length > 400) agentLog.removeRange(0, 100);
@@ -625,6 +691,16 @@ class Store extends ChangeNotifier {
     try {
       final px = await run.guard(PhotoSource.pixels(it.id, 768));
       if (px == null) throw StateError('could not read photo');
+      it.fingerprint ??= _fingerprintOf(px);
+      // The same picture already went through: once is enough.
+      final twin = queued ? _twinOf(it) : null;
+      if (twin != null) {
+        it.judged = true;
+        it.state = Develop.manual;
+        it.note = _sameNote;
+        _log('${it.id.substring(0, 6)} skipped: same as $twin');
+        throw _Skipped();
+      }
       if (queued && !it.judged) {
         final v = await run.guard(_judge(it, px));
         it.judged = true;
@@ -765,8 +841,15 @@ class Store extends ChangeNotifier {
   }
 
   void remove(PhotoItem it) {
+    _runs.remove(it.key)?.cancel();
     items.remove(it);
     _byKey.remove(it.key);
+    // The last of this photo gone (copies share its id): keep it out.
+    if (!items.any((e) => e.id == it.id)) {
+      _removed.add(it.id);
+      final f = it.fingerprint;
+      if (f != null) _removedPrints.add(f);
+    }
     _palette = null;
     _save();
     notifyListeners();
@@ -958,6 +1041,32 @@ class Store extends ChangeNotifier {
 }
 
 class _Skipped implements Exception {}
+
+const _sameNote = 'Same as another photo';
+
+String _moment(DateTime taken, int w, int h) => '${taken.millisecondsSinceEpoch}:${math.min(w, h)}x${math.max(w, h)}';
+
+/// The picture at 16×16 in grey, each cell the mean of its area.
+Uint8List _fingerprintOf(Rgba px) {
+  const n = 16;
+  final out = Uint8List(n * n);
+  for (var cy = 0; cy < n; cy++) {
+    final y0 = cy * px.height ~/ n, y1 = math.max(y0 + 1, (cy + 1) * px.height ~/ n);
+    for (var cx = 0; cx < n; cx++) {
+      final x0 = cx * px.width ~/ n, x1 = math.max(x0 + 1, (cx + 1) * px.width ~/ n);
+      var sum = 0, count = 0;
+      for (var y = y0; y < y1; y += 2) {
+        for (var x = x0; x < x1; x += 2) {
+          final o = (y * px.width + x) * 4;
+          sum += (px.pixels[o] * 299 + px.pixels[o + 1] * 587 + px.pixels[o + 2] * 114) ~/ 1000;
+          count++;
+        }
+      }
+      out[cy * n + cx] = count == 0 ? 0 : sum ~/ count;
+    }
+  }
+  return out;
+}
 
 /// Groups photos, newest first, into scenes: frames taken within 20 seconds
 /// of each other at the same place. The first of each scene stands for it.
