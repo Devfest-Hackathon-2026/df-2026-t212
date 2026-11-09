@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -649,10 +650,19 @@ class Hairline extends StatelessWidget {
 }
 
 /// A split swatch for photos with several kept colors (map markers, grid dots).
+/// Given the photo each color came [from], every slice is a piece of that
+/// photo, as a [Swatch] is; flat colors show while the pieces are cut.
 class SplitSwatch extends StatelessWidget {
-  const SplitSwatch(this.colors, {super.key, this.size = 18, this.border = 2});
+  const SplitSwatch(
+    this.colors, {
+    super.key,
+    this.size = 18,
+    this.border = 2,
+    this.from,
+  }) : assert(from == null || from.length == colors.length);
   final List<KeptColor> colors;
   final double size, border;
+  final List<PhotoItem>? from;
 
   @override
   Widget build(BuildContext context) {
@@ -673,17 +683,83 @@ class SplitSwatch extends StatelessWidget {
         ],
       ),
       padding: EdgeInsets.all(border),
-      child: CustomPaint(
-        size: Size.square(size - border * 2),
-        painter: PiePainter([for (final c in colors) colorOf(c)]),
+      child: from == null
+          ? CustomPaint(
+              size: Size.square(size - border * 2),
+              painter: PiePainter([for (final c in colors) colorOf(c)]),
+            )
+          : _PhotoPie(colors, from!, size: size - border * 2),
+    );
+  }
+}
+
+/// A pie whose slices are pieces of their photos. The pieces are cut once
+/// and kept, so a marker redrawn every frame of playback never waits on them.
+class _PhotoPie extends StatefulWidget {
+  const _PhotoPie(this.colors, this.from, {required this.size});
+  final List<KeptColor> colors;
+  final List<PhotoItem> from;
+  final double size;
+
+  @override
+  State<_PhotoPie> createState() => _PhotoPieState();
+}
+
+class _PhotoPieState extends State<_PhotoPie> {
+  bool _asked = false;
+
+  @override
+  void didUpdateWidget(_PhotoPie old) {
+    super.didUpdateWidget(old);
+    if (!listEquals(old.from, widget.from) ||
+        !listEquals(old.colors, widget.colors)) {
+      _asked = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = Store.instance;
+    final ready = [
+      for (var i = 0; i < widget.colors.length; i++)
+        store.patchReady(widget.from[i], widget.colors[i]),
+    ];
+    if (!_asked && ready.contains(null)) {
+      _asked = true;
+      Future.wait([
+        for (var i = 0; i < widget.colors.length; i++)
+          store.patch(widget.from[i], widget.colors[i]),
+      ]).then((_) {
+        if (mounted) setState(() {});
+      });
+    }
+    final flat = [for (final c in widget.colors) colorOf(c)];
+    final images = [for (final r in ready) r?.image];
+    final textured = ready.every((r) => r != null) && images.any((i) => i != null);
+    return SizedBox.square(
+      dimension: widget.size,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          CustomPaint(painter: PiePainter(flat)),
+          AnimatedOpacity(
+            opacity: textured ? 1 : 0,
+            duration: const Duration(milliseconds: 200),
+            curve: Motion.settle,
+            child: CustomPaint(painter: PiePainter(flat, images: images)),
+          ),
+        ],
       ),
     );
   }
 }
 
 class PiePainter extends CustomPainter {
-  PiePainter(this.colors);
+  PiePainter(this.colors, {this.images});
   final List<Color> colors;
+
+  /// A piece of the photo for each slice, where there is one.
+  final List<ui.Image?>? images;
 
   @override
   void paint(Canvas canvas, Size s) {
@@ -693,6 +769,27 @@ class PiePainter extends CustomPainter {
     final p = Paint()..isAntiAlias = true;
     for (var i = 0; i < colors.length; i++) {
       p.color = colors[i];
+      p.shader = null;
+      final image = images?[i];
+      if (image != null) {
+        // The piece covers the whole dot, as a photo fills its frame.
+        final k = math.max(s.width / image.width, s.height / image.height);
+        final m = Matrix4.identity()
+          ..translateByDouble(
+            (s.width - image.width * k) / 2,
+            (s.height - image.height * k) / 2,
+            0,
+            1,
+          )
+          ..scaleByDouble(k, k, 1, 1);
+        p.shader = ImageShader(
+          image,
+          TileMode.clamp,
+          TileMode.clamp,
+          m.storage,
+          filterQuality: FilterQuality.medium,
+        );
+      }
       // Overlap a hair so no seam of white shows between slices.
       canvas.drawArc(
         rect,
@@ -705,5 +802,6 @@ class PiePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(PiePainter old) => !listEquals(old.colors, colors);
+  bool shouldRepaint(PiePainter old) =>
+      !listEquals(old.colors, colors) || !listEquals(old.images, images);
 }

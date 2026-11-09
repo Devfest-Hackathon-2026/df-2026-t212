@@ -877,10 +877,30 @@ class Store extends ChangeNotifier {
   /// sit on a darkened corner (the favorite heart).
   Future<ui.Image?> patch(PhotoItem it, KeptColor c, {bool light = false}) {
     if (swatches == SwatchStyle.flat) return Future.value(null);
-    final soft = swatches == SwatchStyle.soft;
+    final key = _patchKey(it, c, light);
+    return _patches[key] ??= _makePatch(
+      it.id,
+      c.copy(),
+      swatches == SwatchStyle.soft,
+      light,
+    ).then((im) => _patchesDone[key] = im);
+  }
+
+  final Map<String, ui.Image?> _patchesDone = {};
+
+  /// The patch [patch] would give, if it is already cut: for marks redrawn
+  /// every frame, which cannot wait a frame for a future. Null while it is
+  /// still being cut; a null image when there is none to cut.
+  ({ui.Image? image})? patchReady(PhotoItem it, KeptColor c) {
+    if (swatches == SwatchStyle.flat) return (image: null);
+    final key = _patchKey(it, c, false);
+    return _patchesDone.containsKey(key) ? (image: _patchesDone[key]) : null;
+  }
+
+  String _patchKey(PhotoItem it, KeptColor c, bool light) {
     String f(double v) => v.toStringAsFixed(3);
-    final key = '${it.id}|${f(c.l)},${f(c.a)},${f(c.b)}|$soft|$light';
-    return _patches[key] ??= _makePatch(it.id, c.copy(), soft, light);
+    final soft = swatches == SwatchStyle.soft;
+    return '${it.id}|${f(c.l)},${f(c.a)},${f(c.b)}|$soft|$light';
   }
 
   static Future<ui.Image?> _makePatch(String id, KeptColor c, bool soft, bool light) async {

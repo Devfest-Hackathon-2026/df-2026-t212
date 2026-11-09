@@ -64,6 +64,7 @@ class _MapScreenState extends State<MapScreen>
   // photo crossing the window's edge can turn from one look into the other.
   Set<String> _wasInside = {}, _wasOutside = {};
   Set<String> _covered = {}; // photos whose places sit under a card
+  Set<String> _bowed = {}; // photos whose card has had its turn this pass
   Set<String> _unpinned = {}; // photos whose card has just gone
   Map<String, (double, double, int)> _home = {};
   double _speed = 1;
@@ -191,6 +192,7 @@ class _MapScreenState extends State<MapScreen>
       _presenting = false;
       _pinned = {};
       _covered = {};
+      _bowed = {};
       _unpinned = {};
     });
     if (_beforePlayback case final range?) _slideWindow(range.$1, range.$2);
@@ -532,17 +534,19 @@ class _MapScreenState extends State<MapScreen>
         final outside = located.where((e) => !_inWindow(e)).toList();
         final clusters = _clusters(
           _presenting
-              ? inside.where((e) => !_pinned.contains(e.key)).toList()
+              ? inside
+                    .where(
+                      (e) =>
+                          !_pinned.contains(e.key) && !_bowed.contains(e.key),
+                    )
+                    .toList()
               : inside,
         );
         if (_playing) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _follow(inside));
         }
         // A marker that leaves rises anew when it comes back.
-        _risen.retainAll({
-          for (final c in clusters) c.key,
-          for (final k in _pinned) 'dot$k',
-        });
+        _risen.retainAll({for (final c in clusters) c.key});
         final wasInside = _wasInside, wasOutside = _wasOutside;
         // Where each photo's marker stood on the last build, and how many it
         // held, so a group that splits can open out from where it was.
@@ -591,9 +595,20 @@ class _MapScreenState extends State<MapScreen>
               onEvent: _onEvent,
               children: [
                 // Photos outside the time window: faint dots, not tappable.
+                // In playback a photo under a card, or whose card has had its
+                // turn, is a faint dot too: the card's black point stands on
+                // it, and fades back to it as the card goes.
                 WidgetLayer(
                   markers: [
-                    for (final it in outside)
+                    for (final it in [
+                      ...outside,
+                      if (_presenting)
+                        ...inside.where(
+                          (e) =>
+                              _pinned.contains(e.key) ||
+                              _bowed.contains(e.key),
+                        ),
+                    ])
                       Marker(
                         point: Geographic(lon: it.lng!, lat: it.lat!),
                         size: const Size(6, 6),
@@ -605,11 +620,12 @@ class _MapScreenState extends State<MapScreen>
                           duration: const Duration(milliseconds: 220),
                           curve: Motion.settle,
                           child: _Fall(
-                            it.hues,
-                            animate: wasInside.contains(it.key),
-                            // A photo leaving its card was a black point,
-                            // not colors: it fades from that.
-                            fromPoint: _pinned.contains(it.key),
+                            it,
+                            // A photo whose card went is faint already.
+                            animate:
+                                wasInside.contains(it.key) &&
+                                !_pinned.contains(it.key) &&
+                                !_bowed.contains(it.key),
                           ),
                         ),
                       ),
@@ -661,37 +677,13 @@ class _MapScreenState extends State<MapScreen>
                                   c.items.length == 1 &&
                                   _unpinned.contains(c.items.first.key),
                               child: c.items.length == 1
-                                  ? SplitSwatch(c.items.first.hues, size: 20)
+                                  ? _single(c.items.first)
                                   : _Stack(c),
                             ),
                           ),
                         ),
                       ),
 
-                    // In playback the photos speak for themselves; their
-                    // places are plain points for the cards to stand on.
-                    if (_presenting)
-                      for (final it in inside.where(
-                        (e) => _pinned.contains(e.key),
-                      ))
-                        Marker(
-                          point: Geographic(lon: it.lng!, lat: it.lat!),
-                          size: const Size.square(_dotR * 2 + 2),
-                          child: _Rise(
-                            key: ValueKey('dot${it.key}'),
-                            animate: _risen.add('dot${it.key}'),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Neutral.primary,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Neutral.surface,
-                                  width: 1,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
                     if (_card != null && !_presenting)
                       Marker(
                         point: _card!.center,
@@ -724,13 +716,15 @@ class _MapScreenState extends State<MapScreen>
                     clock: _clock,
                     playing: _playing,
                     pace: _speed * (1 - (_w1 - _w0)) / 24,
-                    onPinned: (keys, covered) {
+                    onPinned: (keys, covered, bowed) {
                       if (!mounted ||
                           (setEquals(keys, _pinned) &&
-                              setEquals(covered, _covered))) {
+                              setEquals(covered, _covered) &&
+                              setEquals(bowed, _bowed))) {
                         return;
                       }
                       setState(() {
+                        _bowed = bowed;
                         // A photo whose card went while it is still in the
                         // window turns from its black point into colors.
                         _unpinned = _pinned.difference(keys);
@@ -892,9 +886,10 @@ class _PlaybackPhotos extends StatefulWidget {
   /// How far the window moves per second, in the same 0..1 units as [w0].
   final double pace;
 
-  /// The photos on cards, and the photos whose places sit under a card's
-  /// body, after each layout.
-  final void Function(Set<String> pinned, Set<String> covered) onPinned;
+  /// The photos on cards, the photos whose places sit under a card's body,
+  /// and the photos whose card has had its time, after each layout.
+  final void Function(Set<String> pinned, Set<String> covered, Set<String> bowed)
+  onPinned;
 
   @override
   State<_PlaybackPhotos> createState() => _PlaybackPhotosState();
@@ -1041,7 +1036,7 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
             if (under(others[i])) widget.faint[i].key,
         };
         WidgetsBinding.instance.addPostFrameCallback(
-          (_) => widget.onPinned(visibleKeys, covered),
+          (_) => widget.onPinned(visibleKeys, covered, {..._spent}),
         );
         // One backdrop capture shared by every card's frost.
         return BackdropGroup(
@@ -1109,22 +1104,36 @@ class _Cluster {
     return Geographic(lon: lng, lat: lat);
   }
 
-  /// Distinct colors, never mixed.
-  List<KeptColor> get colors {
-    final out = <KeptColor>[];
+  /// Distinct colors, never mixed, each with the photo it came from.
+  List<(KeptColor, PhotoItem)> get colors {
+    final out = <(KeptColor, PhotoItem)>[];
     for (final it in items) {
       for (final c in it.hues) {
         if (out.every(
-          (o) => (o.hue - c.hue).abs() > 12 || (o.l - c.l).abs() > 0.15,
+          (o) => (o.$1.hue - c.hue).abs() > 12 || (o.$1.l - c.l).abs() > 0.15,
         )) {
-          out.add(c);
+          out.add((c, it));
         }
       }
     }
-    out.sort((a, b) => a.hue.compareTo(b.hue));
+    out.sort((a, b) => a.$1.hue.compareTo(b.$1.hue));
     return out.take(8).toList();
   }
 }
+
+/// One photo's marker: its colors, each a piece of the photo.
+Widget _single(PhotoItem it) => SplitSwatch(
+  it.hues,
+  from: [for (final _ in it.hues) it],
+  size: 20,
+);
+
+/// The plain point a playback card stands on.
+const _pinDot = BoxDecoration(
+  color: Neutral.primary,
+  shape: BoxShape.circle,
+  border: Border.fromBorderSide(BorderSide(color: Neutral.surface)),
+);
 
 /// A marker settles into place without an overshoot.
 const _faintDot = BoxDecoration(
@@ -1134,7 +1143,6 @@ const _faintDot = BoxDecoration(
 
 class _Rise extends StatelessWidget {
   const _Rise({
-    super.key,
     required this.child,
     this.animate = true,
     this.fromDot = false,
@@ -1235,9 +1243,9 @@ class _Rise extends StatelessWidget {
 
 /// A photo leaving the time window: its colors draw back into a faint dot.
 class _Fall extends StatelessWidget {
-  const _Fall(this.hues, {required this.animate, this.fromPoint = false});
-  final List<KeptColor> hues;
-  final bool animate, fromPoint;
+  const _Fall(this.item, {required this.animate});
+  final PhotoItem item;
+  final bool animate;
 
   @override
   Widget build(BuildContext context) {
@@ -1255,27 +1263,13 @@ class _Fall extends StatelessWidget {
               minHeight: 20,
               maxHeight: 20,
               child: Transform.scale(
-                // From the colors (20 pt) or the black point (10 pt) down
-                // to the faint dot (6 pt).
-                scale:
-                    (fromPoint ? 0.5 : 1) +
-                    (6 / 20 - (fromPoint ? 0.5 : 1)) * t,
+                // From the colors (20 pt) down to the faint dot (6 pt).
+                scale: 1 + (6 / 20 - 1) * t,
                 child: Stack(
                   children: [
                     Opacity(
                       opacity: 1 - t,
-                      child: fromPoint
-                          ? Container(
-                              decoration: BoxDecoration(
-                                color: Neutral.primary,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Neutral.surface,
-                                  width: 2,
-                                ),
-                              ),
-                            )
-                          : SplitSwatch(hues, size: 20),
+                      child: _single(item),
                     ),
                     Opacity(
                       opacity: t,
@@ -1322,7 +1316,17 @@ class _Stack extends StatelessWidget {
             ),
           ),
         ),
-        SplitSwatch(c.colors.take(6).toList(), size: c.diameter, border: 2.2),
+        Builder(
+          builder: (_) {
+            final colors = c.colors.take(6).toList();
+            return SplitSwatch(
+              [for (final e in colors) e.$1],
+              from: [for (final e in colors) e.$2],
+              size: c.diameter,
+              border: 2.2,
+            );
+          },
+        ),
         Positioned(
           right: -5,
           top: -5,
@@ -1497,7 +1501,19 @@ class _Pin extends StatelessWidget {
         );
         final ink = ((presence - 0.25) / 0.7).clamp(0.0, 1.0);
         if (glass < 0.01) return const SizedBox.shrink();
-        return Transform.scale(
+        // The black point the tail stands on comes and goes with the card,
+        // over the faint dot the place returns to.
+        final point = Positioned(
+          left: tipX - _dotR - 1,
+          top: tipY - _dotR - 1,
+          width: _dotR * 2 + 2,
+          height: _dotR * 2 + 2,
+          child: Opacity(
+            opacity: glass,
+            child: const DecoratedBox(decoration: _pinDot),
+          ),
+        );
+        final card = Transform.scale(
           scale: glass,
           alignment: Alignment(
             (tipX / 132 * 2 - 1).clamp(-1.0, 1.0),
@@ -1546,6 +1562,11 @@ class _Pin extends StatelessWidget {
               ),
             ],
           ),
+        );
+        return Stack(
+          clipBehavior: Clip.none,
+          fit: StackFit.expand,
+          children: [card, point],
         );
       },
       child: Padding(
