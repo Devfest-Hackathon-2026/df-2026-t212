@@ -424,32 +424,56 @@ class _MapScreenState extends State<MapScreen>
                 WidgetLayer(
                   allowInteraction: true,
                   markers: [
-                    for (final c in clusters)
-                      Marker(
-                        point: c.center,
-                        size: Size.square(c.items.length == 1 ? 22 : 38),
-                        child: GestureDetector(
-                          key: ValueKey(c.key),
-                          onTap: () {
-                            Haptics.tick();
-                            if (c.items.length > 1 && _zoom < 17 && c.spread) {
-                              // Open the group up so every photo in it gets its own place.
-                              setState(() => _card = null);
-                              _frame(
-                                c.items,
-                                duration: const Duration(milliseconds: 520),
-                              );
-                            } else {
-                              _open(c);
-                            }
-                          },
+                    // In playback the photos speak for themselves; their
+                    // places are plain points for the cards to stand on.
+                    if (_presenting)
+                      for (final it in inside)
+                        Marker(
+                          point: Geographic(lon: it.lng!, lat: it.lat!),
+                          size: const Size.square(_dotR * 2 + 2),
                           child: _Rise(
-                            child: c.items.length == 1
-                                ? SplitSwatch(c.items.first.hues, size: 20)
-                                : _Stack(c),
+                            key: ValueKey('dot${it.key}'),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Neutral.primary,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Neutral.surface,
+                                  width: 1,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                    if (!_presenting)
+                      for (final c in clusters)
+                        Marker(
+                          point: c.center,
+                          size: Size.square(c.items.length == 1 ? 22 : 38),
+                          child: GestureDetector(
+                            key: ValueKey(c.key),
+                            onTap: () {
+                              Haptics.tick();
+                              if (c.items.length > 1 &&
+                                  _zoom < 17 &&
+                                  c.spread) {
+                                // Open the group up so every photo in it gets its own place.
+                                setState(() => _card = null);
+                                _frame(
+                                  c.items,
+                                  duration: const Duration(milliseconds: 520),
+                                );
+                              } else {
+                                _open(c);
+                              }
+                            },
+                            child: _Rise(
+                              child: c.items.length == 1
+                                  ? SplitSwatch(c.items.first.hues, size: 20)
+                                  : _Stack(c),
+                            ),
+                          ),
+                        ),
 
                     if (_card != null && !_presenting)
                       Marker(
@@ -690,7 +714,7 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
                     math.min(entering, leaving),
                   ),
                   below: below,
-                  anchor: ((point.dx - left) / 132 * 2 - 1).clamp(-0.85, 0.85),
+                  tipX: point.dx - left,
                 ),
               ),
             ),
@@ -740,7 +764,7 @@ class _Cluster {
 
 /// A marker settles into place without an overshoot.
 class _Rise extends StatelessWidget {
-  const _Rise({required this.child});
+  const _Rise({super.key, required this.child});
   final Widget child;
 
   @override
@@ -914,124 +938,231 @@ class _Card extends StatelessWidget {
 }
 
 /// Glass bubble with a photo, pinned to where it was taken.
-const _pinGap = 15.0;
-const _pinH = 156 + 10 + _pinGap;
+const _bodyH = 156.0;
+const _tailH = 30.0;
+const _dotR = 4.0;
+const _pinH = _bodyH + _tailH + _dotR;
 
+/// A photo held above its place. Body and tail are one shape, so the
+/// frosting, the fill and the shadow are continuous from corner to tip.
 class _Pin extends StatelessWidget {
   const _Pin(
     this.item, {
     required this.below,
-    required this.anchor,
+    required this.tipX,
     required this.visibility,
   });
   final PhotoItem item;
   final bool below;
-  final double anchor, visibility;
+  final double tipX, visibility;
 
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    // The geographical point stays fixed while the memory resolves above it.
-    final origin = Alignment(anchor, below ? -1 : 1);
+    final bodyTop = below ? _tailH + _dotR : 0.0;
+    final tipY = below ? _dotR : _bodyH + _tailH;
+    Path shape(Size s) => _bubble(s.width, bodyTop, tipX, tipY);
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: Duration(milliseconds: reduceMotion ? 160 : 560),
       curve: Curves.easeOutQuint,
-      builder: (_, entrance, child) {
+      builder: (_, entrance, content) {
         final presence = math.min(entrance, visibility);
-        return Opacity(
-          opacity: presence,
-          child: Transform.scale(
-            scale: reduceMotion ? 1 : 0.84 + 0.16 * presence,
-            alignment: origin,
-            // Keep the loaded photo mounted when the blur finishes.
-            child: ImageFiltered(
-              enabled: !reduceMotion && entrance < 1,
-              imageFilter: ui.ImageFilter.blur(
-                sigmaX: (1 - entrance) * 2,
-                sigmaY: (1 - entrance) * 2,
+        // The paper stays solid while the photo fades on it, and only at the
+        // very end gives way, as the card draws back into its point. A
+        // half-clear card would show the dots beneath it unblurred.
+        final paper = Curves.easeOut.transform(
+          (presence / 0.35).clamp(0.0, 1.0),
+        );
+        // No Opacity around the glass: a backdrop blur inside an offscreen
+        // layer sees nothing and lets the map through unfrosted. The glass
+        // fades by its own fill and blur; only the contents use Opacity.
+        return Transform.scale(
+          scale: reduceMotion ? 1 : 0.7 + 0.3 * presence,
+          alignment: Alignment(
+            (tipX / 132 * 2 - 1).clamp(-1.0, 1.0),
+            below ? -1 : 1,
+          ),
+          // The blur is clipped to the rounded body (a path clip does not
+          // bound a backdrop filter); the fill then covers body and tail
+          // in one pass, so the two read as one piece of glass.
+          child: Stack(
+            children: [
+              Positioned(
+                left: 0,
+                right: 0,
+                top: bodyTop,
+                height: _bodyH,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(
+                      sigmaX: 20 * paper,
+                      sigmaY: 20 * paper,
+                    ),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
               ),
-              child: child,
-            ),
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _BubblePaint(shape, paper),
+                  child: Opacity(
+                    opacity: presence,
+                    child: ImageFiltered(
+                      enabled: !reduceMotion && entrance < 1,
+                      imageFilter: ui.ImageFilter.blur(
+                        sigmaX: (1 - entrance) * 2,
+                        sigmaY: (1 - entrance) * 2,
+                      ),
+                      child: content,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
-      child: Column(
-        verticalDirection: below
-            ? VerticalDirection.up
-            : VerticalDirection.down,
-        children: [
-          SizedBox(
-            height: 156,
-            child: Glass(
-              radius: 16,
-              padding: const EdgeInsets.all(4),
+      child: Padding(
+        padding: EdgeInsets.only(top: bodyTop),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            height: _bodyH,
+            child: Padding(
+              padding: const EdgeInsets.all(5),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
                 children: [
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(11),
                     child: SizedBox(
-                      width: 116,
-                      height: 100,
+                      width: 122,
+                      height: 98,
                       child: DevelopedImage(item, size: 320),
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 5, 4, 2),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (placeNear(item.lat, item.lng) case final name?)
-                          Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Txt.label.copyWith(fontSize: 11.5),
+                    padding: const EdgeInsets.fromLTRB(4, 6, 2, 0),
+                    child: SizedBox(
+                      width: 116,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  placeNear(item.lat, item.lng) ?? ' ',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Txt.label.copyWith(fontSize: 11.5),
+                                ),
+                                const SizedBox(height: 1),
+                                Text(
+                                  metaLine(item).split('  ·  ').first,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.fade,
+                                  softWrap: false,
+                                  style: Txt.mono.copyWith(fontSize: 8.5),
+                                ),
+                              ],
+                            ),
                           ),
-                        Text(
-                          metaLine(item).split('  ·  ').first,
-                          style: Txt.mono.copyWith(fontSize: 8.5),
-                        ),
-                      ],
+                          // The kept colors, as on the gallery tile.
+                          for (final c in item.hues.take(3))
+                            Padding(
+                              padding: const EdgeInsets.only(left: 3, top: 2),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(3.5),
+                                  boxShadow: const [tileShadow],
+                                ),
+                                child: Swatch(c, size: 10, from: item),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
           ),
-          Align(
-            alignment: Alignment(anchor, 0),
-            child: Transform.rotate(
-              angle: below ? math.pi : 0,
-              child: CustomPaint(
-                size: const Size(14, 10),
-                painter: _TailPainter(),
-              ),
-            ),
-          ),
-          // The marker itself marks the place; the tail stops just short of it.
-          const SizedBox(height: _pinGap),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _TailPainter extends CustomPainter {
+/// Rounded body plus a tail that narrows with concave sides to the tip.
+Path _bubble(double w, double bodyTop, double tipX, double tipY) {
+  const r = 16.0, half = 11.0;
+  final body = RRect.fromLTRBR(
+    0,
+    bodyTop,
+    w,
+    bodyTop + _bodyH,
+    const Radius.circular(r),
+  );
+  final up = tipY < bodyTop; // tail points up when the card sits below
+  final baseY = up ? bodyTop + 2 : bodyTop + _bodyH - 2;
+  final bx = tipX.clamp(r + half, w - r - half).toDouble();
+  double lerp(double a, double b, double t) => a + (b - a) * t;
+  final tail = Path()
+    ..moveTo(bx - half, baseY)
+    ..quadraticBezierTo(
+      lerp(bx - half, tipX, 0.8),
+      lerp(baseY, tipY, 0.3),
+      tipX,
+      tipY,
+    )
+    ..quadraticBezierTo(
+      lerp(bx + half, tipX, 0.8),
+      lerp(baseY, tipY, 0.3),
+      bx + half,
+      baseY,
+    )
+    ..close();
+  return Path.combine(PathOperation.union, Path()..addRRect(body), tail);
+}
+
+/// A soft shadow outside the shape only, so it never greys the glass, and
+/// the fill of body and tail together.
+class _BubblePaint extends CustomPainter {
+  _BubblePaint(this.shape, this.presence);
+  final Path Function(Size) shape;
+  final double presence;
+
   @override
-  void paint(Canvas canvas, Size s) {
-    final p = Path()
-      ..moveTo(0, 0)
-      ..lineTo(s.width, 0)
-      ..lineTo(s.width / 2, s.height)
-      ..close();
-    canvas.drawPath(p, Paint()..color = Neutral.glass);
+  void paint(Canvas canvas, Size size) {
+    if (presence <= 0) return;
+    final path = shape(size);
+    canvas.save();
+    canvas.clipPath(
+      Path.combine(
+        PathOperation.difference,
+        Path()..addRect((Offset.zero & size).inflate(40)),
+        path,
+      ),
+    );
+    canvas.drawPath(
+      path.shift(const Offset(0, 3)),
+      Paint()
+        ..color = Color.fromRGBO(0, 0, 0, 0.13 * presence)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
+    );
+    canvas.restore();
+    canvas.drawPath(
+      path,
+      Paint()..color = Color.fromRGBO(250, 250, 249, 0.96 * presence),
+    );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(_BubblePaint old) => old.presence != presence;
 }
 
 /// Time axis with a window. Drag the middle to move, the ends to resize.
