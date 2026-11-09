@@ -28,6 +28,7 @@ class PhotosScreen extends StatefulWidget {
 }
 
 class _PhotosScreenState extends State<PhotosScreen> {
+  static const _headerExtent = 60.0;
   final s = Store.instance;
   int _columns = 3;
   double _scaleStart = 1;
@@ -66,7 +67,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
     },
     insets: () {
       final pad = MediaQuery.paddingOf(context);
-      return EdgeInsets.only(top: pad.top + 70, bottom: pad.bottom + 72);
+      return EdgeInsets.only(top: pad.top + _headerExtent, bottom: pad.bottom + 72);
     },
   );
 
@@ -152,10 +153,10 @@ class _PhotosScreenState extends State<PhotosScreen> {
               onLongPressMoveUpdate: (d) => _sweep.move(d.globalPosition),
               onLongPressEnd: (_) => _sweep.end(),
               onLongPressCancel: _sweep.end,
-              child: CustomScrollView(
+              child: _fadeUnderHeader(pad, CustomScrollView(
                 controller: _scroll,
                 slivers: [
-                  SliverToBoxAdapter(child: SizedBox(height: pad.top + 70)),
+                  SliverToBoxAdapter(child: SizedBox(height: pad.top + _headerExtent)),
                   SliverToBoxAdapter(child: _status()),
                   if (s.palette.isNotEmpty) SliverToBoxAdapter(child: _paletteRow()),
                   if (list.isEmpty)
@@ -167,7 +168,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                   if (list.isNotEmpty) SliverToBoxAdapter(child: _more()),
                   SliverToBoxAdapter(child: SizedBox(height: pad.bottom + (hasDevelopment ? 156 : 96))),
                 ],
-              ),
+              )),
             ),
             _topBar(pad),
             if (!_selecting)
@@ -184,6 +185,26 @@ class _PhotosScreenState extends State<PhotosScreen> {
     );
   }
 
+  /// Fade the moving content itself, leaving the header and its actions crisp.
+  Widget _fadeUnderHeader(EdgeInsets pad, Widget child) {
+    return ValueListenableBuilder<double>(
+      valueListenable: _offset,
+      child: child,
+      builder: (context, offset, content) {
+        final strength = (offset / 24).clamp(0.0, 1.0);
+        return ShaderMask(
+          blendMode: BlendMode.dstIn,
+          shaderCallback: (rect) => LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.black.withValues(alpha: 1 - strength), Colors.black],
+          ).createShader(Rect.fromLTWH(rect.left, rect.top + pad.top + _headerExtent - 12, rect.width, 32)),
+          child: content,
+        );
+      },
+    );
+  }
+
   /// Keep the same title and actions in place while photos pass underneath.
   Widget _topBar(EdgeInsets pad) {
     return Positioned(
@@ -194,7 +215,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
         child: ValueListenableBuilder<double>(
           valueListenable: _offset,
           child: Padding(
-            padding: EdgeInsets.only(top: pad.top + 10),
+            padding: EdgeInsets.only(top: pad.top),
             child: _header(),
           ),
           builder: (context, offset, header) {
