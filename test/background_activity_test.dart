@@ -128,6 +128,9 @@ void main() {
 
   testWidgets('confirmed Remove swaps the visible photo without waiting for an exit animation', (tester) async {
     final folder = Directory.systemTemp.createTempSync('afterhue-remove-');
+    const photos = MethodChannel('com.fluttercandies/photo_manager');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(photos, (_) async => null);
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(photos, null));
     const paths = MethodChannel('plugins.flutter.io/path_provider');
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(paths, (_) async => folder.path);
     final store = Store.instance;

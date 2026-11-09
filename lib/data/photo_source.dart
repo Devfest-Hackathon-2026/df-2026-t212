@@ -1,5 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:io';
+import 'package:flutter/services.dart';
+import 'package:crypto/crypto.dart';
 import 'dart:ui' as ui;
 
 import 'package:photo_manager/photo_manager.dart';
@@ -183,6 +185,35 @@ class PhotoSource {
       _pixelBytes -= _pixels.remove(_pixels.keys.first)!.pixels.lengthInBytes;
     }
     return pixels;
+  }
+
+  static final _originalHashes = <String, String>{};
+  static final _hashingOriginals = <String, Future<String?>>{};
+
+  /// Exact original bytes, never a thumbnail or developed image. Do not
+  /// download an iCloud original just to decide whether it is a duplicate.
+  static Future<String?> originalHash(String id) {
+    final cached = _originalHashes[id];
+    if (cached != null) return Future.value(cached);
+    return _hashingOriginals.putIfAbsent(id, () => _readOriginalHash(id)
+      .whenComplete(() { _hashingOriginals.remove(id); }));
+  }
+
+  static Future<String?> _readOriginalHash(String id) async {
+    try {
+      if (Platform.isIOS) {
+        final hash = await const MethodChannel('afterhue/original_hash').invokeMethod<String>('sha256', id);
+        if (hash != null) _originalHashes[id] = hash;
+        return hash;
+      }
+      final entity = await _entity(id);
+      if (entity == null || !await entity.isLocallyAvailable(isOrigin: true)) return null;
+      final file = await entity.originFile;
+      if (file == null || !await file.exists()) return null;
+      final hash = (await sha256.bind(file.openRead()).first).toString();
+      _originalHashes[id] = hash;
+      return hash;
+    } catch (_) { return null; }
   }
 
   /// The original file, for sharing.

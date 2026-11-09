@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  crypto: ^3.0.8
   http: ^1.6.0
   image: ^4.12.0
   maplibre: ^0.3.7

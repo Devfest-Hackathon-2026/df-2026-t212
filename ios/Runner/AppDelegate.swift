@@ -1,3 +1,5 @@
+import CryptoKit
+import Photos
 import Flutter
 import FoundationModels
 import UIKit
@@ -22,6 +24,9 @@ import Vision
     }
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "Haptics") {
       Haptics.register(messenger: registrar.messenger())
+    }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "OriginalHash") {
+      OriginalHash.register(messenger: registrar.messenger())
     }
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "Subject") {
       Subject.register(messenger: registrar.messenger())
@@ -255,5 +260,51 @@ enum Subject {
       out.append(poly)
     }
     return out
+  }
+}
+
+
+/// Hash original resources in chunks: no full-size bitmap decoding, temporary
+/// original copies, or iCloud downloads for duplicate detection.
+enum OriginalHash {
+  static func register(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: "afterhue/original_hash", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "sha256", let id = call.arguments as? String else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      DispatchQueue.global(qos: .utility).async {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject,
+              let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .photo }) else {
+          DispatchQueue.main.async { result(nil) }
+          return
+        }
+        let digest = OriginalDigest()
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = false
+        PHAssetResourceManager.default().requestData(for: resource, options: options,
+          dataReceivedHandler: { digest.update($0) },
+          completionHandler: { error in
+            let value = error == nil ? digest.finish() : nil
+            DispatchQueue.main.async { result(value) }
+          })
+      }
+    }
+  }
+}
+
+private final class OriginalDigest: @unchecked Sendable {
+  private let lock = NSLock()
+  private var hasher = SHA256()
+  func update(_ data: Data) {
+    lock.lock()
+    defer { lock.unlock() }
+    hasher.update(data: data)
+  }
+  func finish() -> String {
+    lock.lock()
+    defer { lock.unlock() }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
   }
 }
