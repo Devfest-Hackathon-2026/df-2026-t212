@@ -1025,13 +1025,12 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
             )
           : palette;
     } else {
-      final w = side ? 82.0 : 106.0;
       final parts = [
-        _reachCell('width', 'Width', c.width, 16, (v) => c.width = v, openPanel, w),
+        _reachCell('width', 'Width', c.width, 16, (v) => c.width = v, openPanel, side),
         side
             ? Container(height: 1, width: 28, color: const Color(0x33FFFFFF))
             : Container(width: 1, height: 24, color: const Color(0x33FFFFFF)),
-        _reachCell('edge', 'Edge', c.softness, 20, (v) => c.softness = v, openPanel, w),
+        _reachCell('edge', 'Edge', c.softness, 20, (v) => c.softness = v, openPanel, side),
       ];
       body = Glass(
         dark: true,
@@ -1075,9 +1074,11 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// One half of Width/Edge, [w] wide. Slid, its name and number rise and
-  /// a scale shows beneath them, moving exactly with the finger, then
-  /// springs onto the number it lands on.
+  /// One half of Width/Edge. Slid, its name and number step aside and a
+  /// scale shows beside them, running the way the half is slid and moving
+  /// exactly with the finger, then springs onto the number it lands on.
+  /// Upright the scale runs across; sideways, along the room by the
+  /// shutter, up and down for the person.
   Widget _reachCell(
     String key,
     String label,
@@ -1085,23 +1086,42 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     double def,
     void Function(double) set,
     VoidCallback tap,
-    double w,
+    bool vertical,
   ) {
     final on = _dial == key;
+    final number = Text('${value.round()}', textAlign: TextAlign.right, style: _figures);
+    final name = Text(vertical ? label : '$label ', style: Txt.small.copyWith(color: _ink, fontSize: 12.5));
+    final ticks = AnimatedOpacity(
+      opacity: on ? 1 : 0,
+      duration: Duration(milliseconds: on ? 200 : 140),
+      curve: on ? Motion.settle : Curves.easeInCubic,
+      child: AnimatedBuilder(
+        animation: _dialPos,
+        builder: (context, _) => CustomPaint(
+          painter: _CellTicks(value: _dialPos.value, def: def, vertical: vertical),
+        ),
+      ),
+    );
+    // The scale moves with the finger: larger values lie ahead of it, to
+    // the right, or below.
+    void slide(double by) => _slideReach(-by / _CellTicks.step, value, def, set);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: tap,
       onLongPress: () => _resetReach(set, def),
-      onHorizontalDragStart: (_) => _openDial(key, value),
-      // The scale moves with the finger: left brings larger values in.
-      onHorizontalDragUpdate: (d) => _slideReach(-d.delta.dx / _CellTicks.step, value, def, set),
-      onHorizontalDragEnd: (_) => _closeDial(),
-      onHorizontalDragCancel: _closeDial,
+      onHorizontalDragStart: vertical ? null : (_) => _openDial(key, value),
+      onHorizontalDragUpdate: vertical ? null : (d) => slide(d.delta.dx),
+      onHorizontalDragEnd: vertical ? null : (_) => _closeDial(),
+      onHorizontalDragCancel: vertical ? null : _closeDial,
+      onVerticalDragStart: vertical ? (_) => _openDial(key, value) : null,
+      onVerticalDragUpdate: vertical ? (d) => slide(d.delta.dy) : null,
+      onVerticalDragEnd: vertical ? (_) => _closeDial() : null,
+      onVerticalDragCancel: vertical ? _closeDial : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Motion.settle,
-        width: w,
-        height: 50,
+        width: vertical ? 74 : 106,
+        height: vertical ? 124 : 50,
         decoration: BoxDecoration(
           color: on ? const Color(0x1FFFFFFF) : Colors.transparent,
           borderRadius: BorderRadius.circular(18),
@@ -1109,37 +1129,22 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         child: Stack(
           children: [
             AnimatedAlign(
-              alignment: on ? const Alignment(0, -0.62) : Alignment.center,
+              alignment: on ? (vertical ? const Alignment(-0.5, 0) : const Alignment(0, -0.62)) : Alignment.center,
               duration: const Duration(milliseconds: 260),
               curve: Motion.settle,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('$label ', style: Txt.small.copyWith(color: _ink, fontSize: 12.5)),
-                  SizedBox(
-                    width: 15,
-                    child: Text('${value.round()}', textAlign: TextAlign.right, style: _figures),
-                  ),
-                ],
-              ),
+              child: vertical
+                  ? Column(mainAxisSize: MainAxisSize.min, children: [name, const SizedBox(height: 2), number])
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        name,
+                        SizedBox(width: 15, child: number),
+                      ],
+                    ),
             ),
-            Positioned(
-              left: 6,
-              right: 6,
-              bottom: 6,
-              height: 13,
-              child: AnimatedOpacity(
-                opacity: on ? 1 : 0,
-                duration: Duration(milliseconds: on ? 200 : 140),
-                curve: on ? Motion.settle : Curves.easeInCubic,
-                child: AnimatedBuilder(
-                  animation: _dialPos,
-                  builder: (context, _) => CustomPaint(
-                    painter: _CellTicks(value: _dialPos.value, def: def),
-                  ),
-                ),
-              ),
-            ),
+            vertical
+                ? Positioned(right: 7, top: 8, bottom: 8, width: 13, child: ticks)
+                : Positioned(left: 6, right: 6, bottom: 6, height: 13, child: ticks),
           ],
         ),
       ),
@@ -1964,8 +1969,11 @@ class _LoupePainter extends CustomPainter {
 /// A dial's scale under a fixed mark: a tick a unit, longer every five,
 /// a dot at the default.
 class _CellTicks extends CustomPainter {
-  _CellTicks({required this.value, required this.def});
+  _CellTicks({required this.value, required this.def, this.vertical = false});
   final double value, def;
+
+  /// Runs down instead of across, larger values below.
+  final bool vertical;
 
   /// One step of the value is this far on the scale, and as far under the
   /// finger, so the scale moves exactly with it.
@@ -1973,6 +1981,20 @@ class _CellTicks extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (vertical) {
+      // Drawn across, turned a quarter: across becomes down, and the ticks
+      // hang from the left edge.
+      canvas.save();
+      canvas.translate(size.width, 0);
+      canvas.rotate(math.pi / 2);
+      _across(canvas, Size(size.height, size.width));
+      canvas.restore();
+    } else {
+      _across(canvas, size);
+    }
+  }
+
+  void _across(Canvas canvas, Size size) {
     final mid = size.width / 2;
     final p = Paint()..strokeCap = StrokeCap.round;
     for (var v = 0.0; v <= 60; v++) {
@@ -2006,7 +2028,7 @@ class _CellTicks extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_CellTicks o) => o.value != value || o.def != def;
+  bool shouldRepaint(_CellTicks o) => o.value != value || o.def != def || o.vertical != vertical;
 }
 
 /// The lenses as the system camera shows them, .5 1 2 3, and the same
