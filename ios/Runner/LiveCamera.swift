@@ -60,6 +60,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   private var lastLocation: CLLocation?
 
   private var pendingCapture: FlutterResult?
+  private var warnedFormat = false
 
   init(textures: FlutterTextureRegistry) {
     self.textures = textures
@@ -168,15 +169,26 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     let format = camera.formats
       .filter { f in
         let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
-        return abs(Double(d.width) / Double(d.height) - 4.0 / 3.0) < 0.01 && d.width <= 1920
+        // 8-bit formats only: a 10-bit one is not turned into BGRA, and its
+        // planes read as BGRA come out as a doubled, grainy grey picture.
+        let sub = CMFormatDescriptionGetMediaSubType(f.formatDescription)
+        return (sub == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+          || sub == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+          && abs(Double(d.width) / Double(d.height) - 4.0 / 3.0) < 0.01 && d.width <= 1920
           && f.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= 30 }
       }
       .max { a, b in
-        CMVideoFormatDescriptionGetDimensions(a.formatDescription).width
-          < CMVideoFormatDescriptionGetDimensions(b.formatDescription).width
+        let wa = CMVideoFormatDescriptionGetDimensions(a.formatDescription).width
+        let wb = CMVideoFormatDescriptionGetDimensions(b.formatDescription).width
+        if wa != wb { return wa < wb }
+        // Full range keeps the shadows the renderer works from.
+        return CMFormatDescriptionGetMediaSubType(b.formatDescription) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
       }
     try camera.lockForConfiguration()
-    if let format { camera.activeFormat = format }
+    if let format {
+      camera.activeFormat = format
+      if format.supportedColorSpaces.contains(.sRGB) { camera.activeColorSpace = .sRGB }
+    }
     if camera.isFocusModeSupported(.continuousAutoFocus) { camera.focusMode = .continuousAutoFocus }
     if camera.isExposureModeSupported(.continuousAutoExposure) { camera.exposureMode = .continuousAutoExposure }
     camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
@@ -186,6 +198,8 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     videoOutput.alwaysDiscardsLateVideoFrames = true
     videoOutput.setSampleBufferDelegate(self, queue: queue)
     if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
+    // Asked again once attached, where the session can honor it.
+    videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
     if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
     if #available(iOS 16.0, *), let biggest = camera.activeFormat.supportedMaxPhotoDimensions.max(by: {
       $0.width * $0.height < $1.width * $1.height
@@ -274,6 +288,14 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
 
   func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
     guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+    // Everything here reads four bytes a pixel; anything else would be garbage.
+    guard CVPixelBufferGetPixelFormatType(pixels) == kCVPixelFormatType_32BGRA else {
+      if !warnedFormat {
+        warnedFormat = true
+        NSLog("LiveCamera: frames are not BGRA (%u)", CVPixelBufferGetPixelFormatType(pixels))
+      }
+      return
+    }
     process(pixels)
   }
 

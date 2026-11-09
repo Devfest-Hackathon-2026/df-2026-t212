@@ -14,7 +14,6 @@ import '../data/store.dart';
 import 'edit.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
-import 'widgets/controls.dart';
 
 class CameraRoute extends PageRouteBuilder<void> {
   CameraRoute()
@@ -48,7 +47,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
   /// The slot a tap fills: a kept color, or the empty slot after them.
   int _active = 0;
-  bool _reach = false;
+  bool _panel = false;
 
   /// Strong colors in view now.
   List<KeptColor> _candidates = [];
@@ -153,7 +152,7 @@ class _CameraScreenState extends State<CameraScreen> {
     final best = peaks.reduce((a, b) => score(a) >= score(b) ? a : b);
     setState(() {
       _r.colors = [color(best)];
-      _active = 1;
+      _active = 0;
     });
     _look();
   }
@@ -194,7 +193,7 @@ class _CameraScreenState extends State<CameraScreen> {
     setState(() {
       _r.colors.removeAt(i);
       _active = _r.colors.length < Recipe.maxColors ? _r.colors.length : _r.colors.length - 1;
-      if (_r.colors.isEmpty) _reach = false;
+      if (_r.colors.isEmpty) _panel = false;
     });
     _look();
   }
@@ -255,34 +254,37 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  // ------------------------------------------------------------ layout
+  //
+  // After the camera in the reference: a dark room, the view in the middle,
+  // everything that shapes the look laid on the view itself.
+
+  static const _bg = Color(0xFF232323);
+  static const _ink = Color(0xFFF2F2F0);
+  static const _dim = Color(0xFF8E8E8C);
+
   @override
   Widget build(BuildContext context) {
     final pad = MediaQuery.paddingOf(context);
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: systemBarsLight,
+      value: systemBarsDark,
       child: Scaffold(
-        backgroundColor: Neutral.bg,
+        backgroundColor: _bg,
         body: Padding(
           padding: EdgeInsets.only(top: pad.top, bottom: pad.bottom),
           child: LayoutBuilder(
             builder: (context, box) {
-              // The view as wide as the screen, unless the controls would not fit.
-              const controls = 14 + 52 + 10 + 66 + 84 + 8;
+              const top = 60.0, hint = 44.0, bottom = 110.0;
               final aspect = _feed?.aspect ?? 3 / 4;
-              final h = math.min(box.maxWidth / aspect, box.maxHeight - controls);
+              final w = box.maxWidth - 12;
+              final h = math.min(w / aspect, box.maxHeight - top - hint - bottom);
               return Column(
                 children: [
+                  SizedBox(height: top, width: double.infinity, child: _topBar()),
                   SizedBox(height: h, width: h * aspect, child: _viewfinder()),
-                  const SizedBox(height: 14),
-                  Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: _colors()),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 66,
-                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: _lower()),
-                  ),
+                  SizedBox(height: hint, child: _hint()),
                   const Spacer(),
-                  _bottom(),
-                  const SizedBox(height: 8),
+                  SizedBox(height: bottom, child: _bottom()),
                 ],
               );
             },
@@ -292,57 +294,179 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  Widget _topBar() {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Positioned(
+          left: 14,
+          child: GestureDetector(
+            onTap: () {
+              Haptics.light();
+              Navigator.pop(context);
+            },
+            child: const Glass(
+              dark: true,
+              radius: 16,
+              child: SizedBox(
+                width: 46,
+                height: 36,
+                child: Icon(Icons.chevron_left_rounded, size: 26, color: _ink),
+              ),
+            ),
+          ),
+        ),
+        _chips(),
+      ],
+    );
+  }
+
+  /// The kept colors: a dot each, the chosen one with its hex; a dashed dot
+  /// to add another.
+  Widget _chips() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < _r.colors.length; i++) _chip(i),
+        if (_addSlot >= 0)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              Haptics.tick();
+              setState(() => _active = _addSlot);
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CustomPaint(painter: _DashedDot(strong: _active == _addSlot)),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _chip(int i) {
+    final c = _r.colors[i];
+    final sel = i == _active;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        Haptics.tick();
+        setState(() => _active = i);
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Motion.settle,
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        padding: EdgeInsets.fromLTRB(6, 5, sel ? 4 : 6, 5),
+        decoration: BoxDecoration(
+          color: sel ? const Color(0x1FFFFFFF) : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                color: colorOf(c),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
+              ),
+            ),
+            if (sel) ...[
+              const SizedBox(width: 7),
+              Text(
+                oklabToHex(c.l, c.a, c.b).toUpperCase(),
+                style: Txt.mono.copyWith(color: _ink, fontSize: 12),
+              ),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _remove(i),
+                child: const Padding(
+                  padding: EdgeInsets.only(left: 4, right: 2),
+                  child: Icon(Icons.close_rounded, size: 14, color: _dim),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _hint() {
+    final show = _feed != null && !_chosen;
+    return Center(
+      child: AnimatedOpacity(
+        opacity: show || _error != null ? 1 : 0,
+        duration: const Duration(milliseconds: 300),
+        child: Text(
+          _error ?? 'Hold the view on a color to keep it',
+          textAlign: TextAlign.center,
+          style: Txt.small.copyWith(color: _dim),
+        ),
+      ),
+    );
+  }
+
   Widget _viewfinder() {
     final feed = _feed;
-    return SizedBox.expand(
-      child: LayoutBuilder(
-        builder: (context, box) {
-          final size = box.biggest;
-          Offset norm(Offset p) => Offset((p.dx / size.width).clamp(0.0, 1.0), (p.dy / size.height).clamp(0.0, 1.0));
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapUp: feed == null
-                ? null
-                : (d) async {
-                    final n = norm(d.localPosition);
-                    final c = await LiveCamera.sample(n.dx, n.dy);
-                    if (c != null && mounted) _pick(c, at: d.localPosition);
-                  },
-            onLongPressStart: feed == null
-                ? null
-                : (d) {
-                    Haptics.light();
-                    setState(() => _loupe = norm(d.localPosition));
-                    _sampleLoupe();
-                  },
-            onLongPressMoveUpdate: (d) {
-              if (_loupe == null) return;
-              setState(() => _loupe = norm(d.localPosition));
-              _sampleLoupe();
-            },
-            onLongPressEnd: (d) {
-              final c = _loupeColor;
-              setState(() {
-                _loupe = null;
-                _loupeColor = null;
-              });
-              if (c != null) _pick(c, at: d.localPosition);
-            },
+    return LayoutBuilder(
+      builder: (context, box) {
+        final size = box.biggest;
+        Offset norm(Offset p) => Offset((p.dx / size.width).clamp(0.0, 1.0), (p.dy / size.height).clamp(0.0, 1.0));
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: feed == null
+              ? null
+              : (d) async {
+                  if (_panel) {
+                    setState(() => _panel = false);
+                    return;
+                  }
+                  final n = norm(d.localPosition);
+                  final c = await LiveCamera.sample(n.dx, n.dy);
+                  if (c != null && mounted) _pick(c, at: d.localPosition);
+                },
+          onLongPressStart: feed == null
+              ? null
+              : (d) {
+                  Haptics.light();
+                  setState(() {
+                    _panel = false;
+                    _loupe = norm(d.localPosition);
+                  });
+                  _sampleLoupe();
+                },
+          onLongPressMoveUpdate: (d) {
+            if (_loupe == null) return;
+            setState(() => _loupe = norm(d.localPosition));
+            _sampleLoupe();
+          },
+          onLongPressEnd: (d) {
+            final c = _loupeColor;
+            setState(() {
+              _loupe = null;
+              _loupeColor = null;
+            });
+            if (c != null) _pick(c, at: d.localPosition);
+          },
+          child: DecoratedBox(
+            position: DecorationPosition.foreground,
+            decoration: BoxDecoration(border: Border.all(color: const Color(0x24FFFFFF), width: 0.6)),
             child: Stack(
               clipBehavior: Clip.hardEdge,
               children: [
                 Positioned.fill(
                   child: ColoredBox(
-                    color: const Color(0xFF1A1A1A),
-                    child: feed == null
-                        ? Center(
-                            child: Text(
-                              _error ?? '',
-                              textAlign: TextAlign.center,
-                              style: Txt.small.copyWith(color: const Color(0xFFBDBDBD)),
-                            ),
-                          )
-                        : Texture(textureId: feed.texture, filterQuality: FilterQuality.medium),
+                    color: const Color(0xFF161616),
+                    child: feed == null ? null : Texture(textureId: feed.texture, filterQuality: FilterQuality.medium),
                   ),
                 ),
                 Positioned.fill(
@@ -356,48 +480,133 @@ class _CameraScreenState extends State<CameraScreen> {
                 ),
                 for (final p in _pings) _PingRing(key: ValueKey(p.id), ping: p),
                 if (_loupe != null) _loupeRing(Offset(_loupe!.dx * size.width, _loupe!.dy * size.height)),
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  child: GestureDetector(
-                    onTap: () {
-                      Haptics.light();
-                      Navigator.pop(context);
-                    },
-                    child: const Glass(
-                      radius: 20,
-                      clear: true,
-                      child: SizedBox(
-                        width: 40,
-                        height: 40,
-                        child: Icon(Icons.close_rounded, size: 20, color: Neutral.primary),
-                      ),
-                    ),
-                  ),
-                ),
+                Positioned(left: 0, right: 0, bottom: 0, child: _reachPanel()),
                 Positioned(
                   left: 0,
                   right: 0,
                   bottom: 14,
-                  child: IgnorePointer(
-                    child: AnimatedOpacity(
-                      opacity: feed != null && !_chosen ? 1 : 0,
-                      duration: const Duration(milliseconds: 300),
-                      child: Center(
-                        child: Glass(
-                          radius: 16,
-                          clear: true,
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                          child: Text('Tap what you want in color', style: Txt.small.copyWith(color: Neutral.primary)),
-                        ),
-                      ),
-                    ),
-                  ),
+                  child: Center(child: _reachPill()),
                 ),
               ],
             ),
-          );
-        },
+          ),
+        );
+      },
+    );
+  }
+
+  /// How far the chosen color reaches, at a glance; opens the panel.
+  Widget _reachPill() {
+    final c = _cur;
+    return IgnorePointer(
+      ignoring: c == null || _panel,
+      child: AnimatedOpacity(
+        opacity: c == null || _panel ? 0 : 1,
+        duration: const Duration(milliseconds: 220),
+        child: GestureDetector(
+          onTap: () {
+            Haptics.tick();
+            setState(() => _panel = true);
+          },
+          child: Glass(
+            dark: true,
+            radius: 16,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Text(
+              c == null ? '' : 'Width ${c.width.round()}  ·  Edge ${c.softness.round()}',
+              style: Txt.small.copyWith(color: _ink, fontSize: 12.5),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Laid over the lower view: how far the color reaches, and the colors in
+  /// view to keep instead.
+  Widget _reachPanel() {
+    final c = _cur;
+    final open = _panel;
+    return IgnorePointer(
+      ignoring: !open,
+      child: AnimatedSlide(
+        offset: open ? Offset.zero : const Offset(0, 0.15),
+        duration: const Duration(milliseconds: 320),
+        curve: Motion.settle,
+        child: AnimatedOpacity(
+          opacity: open ? 1 : 0,
+          duration: const Duration(milliseconds: 220),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Glass(
+              dark: true,
+              radius: 20,
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (c != null) ...[
+                    _darkSlider('Width', c.width, 16, (v) => c.width = v),
+                    _darkSlider('Edge', c.softness, 20, (v) => c.softness = v),
+                    const SizedBox(height: 6),
+                  ],
+                  Text('In view', style: Txt.mono.copyWith(color: _dim)),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 26,
+                    child: Row(
+                      children: [
+                        for (final k in _candidates)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 10),
+                            child: GestureDetector(
+                              onTap: () => _pick(k.copy()),
+                              child: Container(
+                                width: 26,
+                                height: 26,
+                                decoration: BoxDecoration(
+                                  color: colorOf(k),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (_candidates.isEmpty) Text('No strong colors.', style: Txt.small.copyWith(color: _dim)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _darkSlider(String label, double value, double def, void Function(double) set) {
+    return SizedBox(
+      height: 36,
+      child: Row(
+        children: [
+          SizedBox(width: 52, child: Text(label, style: Txt.small.copyWith(color: _ink))),
+          Expanded(
+            child: _DarkSlider(
+              value: value / 60,
+              def: def / 60,
+              onChanged: (t) {
+                setState(() => set(t * 60));
+                _look();
+              },
+            ),
+          ),
+          SizedBox(
+            width: 30,
+            child: Text('${value.round()}', textAlign: TextAlign.right, style: Txt.mono.copyWith(color: _dim)),
+          ),
+        ],
       ),
     );
   }
@@ -416,7 +625,7 @@ class _CameraScreenState extends State<CameraScreen> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: c == null ? const Color(0x33FFFFFF) : colorOf(c),
-            border: Border.all(color: Neutral.surface, width: 3),
+            border: Border.all(color: _ink, width: 3),
             boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 12, offset: Offset(0, 4))],
           ),
         ),
@@ -424,199 +633,46 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
-  Widget _colors() {
-    return Row(
-      children: [
-        for (var i = 0; i < Recipe.maxColors; i++) Padding(padding: const EdgeInsets.only(right: 12), child: _slot(i)),
-        const Spacer(),
-        _Toggle(
-          label: 'Reach',
-          on: _reach,
-          onTap: _r.colors.isEmpty
-              ? null
-              : () {
-                  Haptics.tick();
-                  setState(() {
-                    _reach = !_reach;
-                    if (_reach && _cur == null) _active = _r.colors.length - 1;
-                  });
-                },
-        ),
-      ],
-    );
-  }
-
-  Widget _slot(int i) {
-    final filled = i < _r.colors.length;
-    final isAdd = i == _addSlot;
-    final sel = i == _active && (filled || isAdd);
-    const s = 46.0;
-    return SizedBox(
-      width: s + 6,
-      height: s + 6,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          GestureDetector(
-            onTap: filled || isAdd
-                ? () {
-                    Haptics.tick();
-                    setState(() {
-                      _active = i;
-                      if (isAdd) _reach = false;
-                    });
-                  }
-                : null,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              curve: Motion.settle,
-              width: s,
-              height: s,
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: sel ? Neutral.primary : Colors.transparent, width: 1.5),
-              ),
-              child: filled
-                  ? AnimatedContainer(
-                      duration: const Duration(milliseconds: 220),
-                      decoration: BoxDecoration(
-                        color: colorOf(_r.colors[i]),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0x14000000), width: 0.6),
-                      ),
-                    )
-                  : CustomPaint(painter: DashedSlot(plus: isAdd, strong: sel)),
-            ),
-          ),
-          if (filled && sel)
-            Positioned(
-              top: -4,
-              right: -4,
-              child: GestureDetector(
-                onTap: () => _remove(i),
-                child: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: Neutral.primary,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Neutral.bg, width: 2),
-                  ),
-                  child: const Icon(Icons.close_rounded, size: 12, color: Neutral.surface),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  /// Under the colors: how far the chosen one reaches, or the colors in view.
-  Widget _lower() {
-    final c = _cur;
-    if (_reach && c != null) {
-      return Column(
-        children: [
-          SliderRow(
-            height: 33,
-            label: 'Width',
-            value: c.width,
-            min: 0,
-            max: 60,
-            defaultValue: 16,
-            onStart: () {},
-            onEnd: () {},
-            onChanged: (v) {
-              setState(() => c.width = v);
-              _look();
-            },
-          ),
-          SliderRow(
-            height: 33,
-            label: 'Softness',
-            value: c.softness,
-            min: 0,
-            max: 60,
-            defaultValue: 20,
-            onStart: () {},
-            onEnd: () {},
-            onChanged: (v) {
-              setState(() => c.softness = v);
-              _look();
-            },
-          ),
-        ],
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('In view', style: Txt.mono),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: 28,
-          child: Row(
-            children: [
-              for (final k in _candidates)
-                Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: Swatch(k, size: 28, onTap: () => _pick(k.copy())),
-                ),
-              if (_candidates.isEmpty && _feed != null) Text('No strong colors.', style: Txt.small),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _bottom() {
     final last = _last;
-    return SizedBox(
-      height: 84,
-      child: Row(
-        children: [
-          Expanded(
-            child: Align(
-              alignment: Alignment.center,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 320),
-                switchInCurve: Motion.settle,
-                transitionBuilder: (child, a) => ScaleTransition(
-                  scale: Tween(begin: 0.6, end: 1.0).animate(a),
-                  child: FadeTransition(opacity: a, child: child),
-                ),
-                child: last == null
-                    ? const SizedBox(width: 50, height: 50)
-                    : GestureDetector(
-                        key: ValueKey(last.key),
-                        onTap: () {
-                          Haptics.light();
-                          Navigator.push(context, EditRoute(last));
-                        },
-                        child: Container(
-                          width: 50,
-                          height: 50,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Neutral.surface, width: 2),
-                            boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 2))],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: DevelopedImage(last, size: 160),
-                          ),
+    return Row(
+      children: [
+        Expanded(
+          child: Center(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 320),
+              switchInCurve: Motion.settle,
+              transitionBuilder: (child, a) => ScaleTransition(
+                scale: Tween(begin: 0.6, end: 1.0).animate(a),
+                child: FadeTransition(opacity: a, child: child),
+              ),
+              child: last == null
+                  ? const SizedBox(width: 48, height: 48)
+                  : GestureDetector(
+                      key: ValueKey(last.key),
+                      onTap: () {
+                        Haptics.light();
+                        Navigator.push(context, EditRoute(last));
+                      },
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0x55FFFFFF), width: 1),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(9),
+                          child: DevelopedImage(last, size: 160),
                         ),
                       ),
-              ),
+                    ),
             ),
           ),
-          _Shutter(busy: _shooting, onTap: _feed == null ? null : _shoot),
-          const Expanded(child: SizedBox()),
-        ],
-      ),
+        ),
+        _Shutter(busy: _shooting, onTap: _feed == null ? null : _shoot),
+        const Expanded(child: SizedBox()),
+      ],
     );
   }
 }
@@ -646,11 +702,11 @@ class _ShutterState extends State<_Shutter> {
             }
           : null,
       child: Container(
-        width: 74,
-        height: 74,
+        width: 76,
+        height: 76,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: on ? Neutral.primary : Neutral.tertiary, width: 2.5),
+          border: Border.all(color: on ? const Color(0xFFF2F2F0) : const Color(0xFF5A5A5A), width: 3),
         ),
         alignment: Alignment.center,
         child: AnimatedScale(
@@ -659,15 +715,15 @@ class _ShutterState extends State<_Shutter> {
           curve: Motion.settle,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
-            width: 60,
-            height: 60,
+            width: 62,
+            height: 62,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: !on
-                  ? Neutral.hairline
+                  ? const Color(0xFF3A3A3A)
                   : widget.busy
-                  ? Neutral.secondary
-                  : Neutral.primary,
+                  ? const Color(0xFF9A9A98)
+                  : const Color(0xFFF2F2F0),
             ),
           ),
         ),
@@ -676,35 +732,84 @@ class _ShutterState extends State<_Shutter> {
   }
 }
 
-/// A quiet text toggle: underlined when on.
-class _Toggle extends StatelessWidget {
-  const _Toggle({required this.label, required this.on, required this.onTap});
-  final String label;
-  final bool on;
-  final VoidCallback? onTap;
+/// A slider for the dark panel: a hairline track and a soft pill thumb.
+class _DarkSlider extends StatelessWidget {
+  const _DarkSlider({required this.value, required this.def, required this.onChanged});
+  final double value, def;
+  final ValueChanged<double> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-        child: AnimatedDefaultTextStyle(
-          duration: const Duration(milliseconds: 180),
-          style: Txt.small.copyWith(
-            color: onTap == null
-                ? Neutral.hairline
-                : on
-                ? Neutral.primary
-                : Neutral.secondary,
-            fontWeight: on ? FontWeight.w500 : FontWeight.w400,
-          ),
-          child: Text(label),
-        ),
-      ),
+    return LayoutBuilder(
+      builder: (context, box) {
+        final w = box.maxWidth;
+        void set(double dx) {
+          final t = (dx / w).clamp(0.0, 1.0);
+          if ((value - def).sign != (t - def).sign) Haptics.tick();
+          onChanged(t);
+        }
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragUpdate: (d) => set(d.localPosition.dx),
+          onTapUp: (d) => set(d.localPosition.dx),
+          child: CustomPaint(size: Size(w, 36), painter: _DarkSliderPainter(value.clamp(0, 1), def)),
+        );
+      },
     );
   }
+}
+
+class _DarkSliderPainter extends CustomPainter {
+  _DarkSliderPainter(this.t, this.def);
+  final double t, def;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final y = size.height / 2;
+    const r = 9.0;
+    final x = r + (size.width - 2 * r) * t;
+    final track = Paint()
+      ..color = const Color(0x33FFFFFF)
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(r, y), Offset(size.width - r, y), track);
+    canvas.drawLine(Offset(r, y), Offset(x, y), track..color = const Color(0xCCF2F2F0));
+    canvas.drawCircle(Offset(r + (size.width - 2 * r) * def, y), 1.6, Paint()..color = const Color(0x88FFFFFF));
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(x, y), width: 26, height: 20), const Radius.circular(10)),
+      Paint()..color = const Color(0xFFE6E6E4),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_DarkSliderPainter o) => o.t != t;
+}
+
+/// The empty dot a new color goes into.
+class _DashedDot extends CustomPainter {
+  _DashedDot({required this.strong});
+  final bool strong;
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final p = Paint()
+      ..color = strong ? const Color(0xFFF2F2F0) : const Color(0xFF7A7A78)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    final c = s.center(Offset.zero);
+    final r = s.width / 2 - 0.6;
+    const n = 12;
+    for (var i = 0; i < n; i++) {
+      final a = i * 2 * math.pi / n;
+      canvas.drawArc(Rect.fromCircle(center: c, radius: r), a, math.pi / n, false, p);
+    }
+    canvas.drawLine(c - const Offset(4, 0), c + const Offset(4, 0), p);
+    canvas.drawLine(c - const Offset(0, 4), c + const Offset(0, 4), p);
+  }
+
+  @override
+  bool shouldRepaint(_DashedDot o) => o.strong != strong;
 }
 
 class _Ping {
