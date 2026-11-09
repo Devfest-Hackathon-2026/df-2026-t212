@@ -87,6 +87,9 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       result(sample(x: x, y: y))
     case "thumb":
       result(thumb(width: args["width"] as? Int ?? 96))
+    case "loupe":
+      let x = args["x"] as? Double ?? 0.5, y = args["y"] as? Double ?? 0.5
+      result(loupe(x: x, y: y, side: args["side"] as? Int ?? 96))
     case "capture":
       capture(result)
     default:
@@ -442,6 +445,42 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   }
 
   /// A small RGBA copy of the upright frame, for finding its colors.
+  /// The original, uncolored by the look, in a square of [side] frame pixels
+  /// around a normalized point, with the color at its middle.
+  private func loupe(x: Double, y: Double, side: Int) -> [String: Any]? {
+    lock.lock()
+    let buffer = latestIn
+    lock.unlock()
+    guard let buffer, let lab = sample(x: x, y: y) else { return nil }
+    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+    let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
+    let row = CVPixelBufferGetBytesPerRow(buffer)
+    let p = base.assumingMemoryBound(to: UInt8.self)
+    let n = max(8, min(side, 256))
+    let cx = Int(min(max(x, 0), 1) * Double(w - 1)), cy = Int(min(max(y, 0), 1) * Double(h - 1))
+    var out = [UInt8](repeating: 0, count: n * n * 4)
+    for ty in 0..<n {
+      let sy = cy - n / 2 + ty
+      for tx in 0..<n {
+        let sx = cx - n / 2 + tx
+        let d = (ty * n + tx) * 4
+        // Past the edge of the frame stays dark.
+        guard sx >= 0, sy >= 0, sx < w, sy < h else {
+          out[d + 3] = 255
+          continue
+        }
+        let o = sy * row + sx * 4
+        out[d] = p[o + 2]
+        out[d + 1] = p[o + 1]
+        out[d + 2] = p[o]
+        out[d + 3] = 255
+      }
+    }
+    return ["side": n, "pixels": FlutterStandardTypedData(bytes: Data(out)), "lab": lab]
+  }
+
   private func thumb(width: Int) -> [String: Any]? {
     lock.lock()
     let buffer = latestIn
@@ -662,6 +701,8 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       uint w = dst.get_width(), h = dst.get_height();
       if (gid.x >= w || gid.y >= h) return;
       float4 px = src.read(gid);
+      // Nothing kept yet: the scene as it is, so its colors can be chosen.
+      if (look.count < 0.5) { dst.write(float4(px.rgb, 1.0), gid); return; }
       float R = lin(px.r), G = lin(px.g), B = lin(px.b);
       float l_ = cb(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
       float m_ = cb(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);

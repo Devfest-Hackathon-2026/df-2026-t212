@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -58,6 +59,8 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Offset? _loupe; // normalized
   KeptColor? _loupeColor;
+  ui.Image? _loupeImage;
+  static const _loupeSize = 112.0, _loupeZoom = 3.0;
   bool _sampling = false;
   final List<_Ping> _pings = [];
   int _pingId = 0;
@@ -78,6 +81,7 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void dispose() {
     _scan?.cancel();
+    _loupeImage?.dispose();
     LiveCamera.stop();
     super.dispose();
   }
@@ -106,7 +110,7 @@ class _CameraScreenState extends State<CameraScreen> {
     // Let exposure settle before reading the colors.
     await Future<void>.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    await _scanView(choose: true);
+    await _scanView();
     _scan = Timer.periodic(const Duration(milliseconds: 2500), (_) => _scanView());
   }
 
@@ -130,31 +134,26 @@ class _CameraScreenState extends State<CameraScreen> {
     return f.path;
   }
 
-  /// Finds the strong colors in view. The first time, keeps the one that
-  /// looks most like the subject: strong, and near the middle.
-  Future<void> _scanView({bool choose = false}) async {
+  /// Finds the strong colors in view, the most subject-like first: strong,
+  /// and near the middle. Nothing is kept for the person; the view stays in
+  /// full color until they choose.
+  Future<void> _scanView() async {
     final px = await LiveCamera.thumb();
     if (px == null || !mounted) return;
     final lab = toLab(px);
     final peaks = huePeaks(lab, top: 8).where((p) => p.meanChroma > 0.04).toList();
+    double score(HuePeak p) {
+      final d = math.sqrt(math.pow(p.center[0] - 0.5, 2) + math.pow(p.center[1] - 0.5, 2));
+      return p.share * (1 - 0.8 * (d / 0.71).clamp(0.0, 1.0)) * (0.5 + p.meanChroma * 4);
+    }
+
+    peaks.sort((a, b) => score(b).compareTo(score(a)));
     KeptColor color(HuePeak p) {
       final h = (p.from + p.to) / 2 * math.pi / 180;
       return KeptColor(l: p.meanL, a: p.meanChroma * math.cos(h), b: p.meanChroma * math.sin(h));
     }
 
     setState(() => _candidates = peaks.take(6).map(color).toList());
-    if (!choose || _chosen || peaks.isEmpty) return;
-    double score(HuePeak p) {
-      final d = math.sqrt(math.pow(p.center[0] - 0.5, 2) + math.pow(p.center[1] - 0.5, 2));
-      return p.share * (1 - 0.8 * (d / 0.71).clamp(0.0, 1.0)) * (0.5 + p.meanChroma * 4);
-    }
-
-    final best = peaks.reduce((a, b) => score(a) >= score(b) ? a : b);
-    setState(() {
-      _r.colors = [color(best)];
-      _active = 0;
-    });
-    _look();
   }
 
   void _look() => LiveCamera.look(_r);
@@ -172,7 +171,7 @@ class _CameraScreenState extends State<CameraScreen> {
           ..b = c.b;
       } else if (_addSlot >= 0) {
         _r.colors.add(c);
-        _active = _addSlot >= 0 ? _addSlot : _r.colors.length - 1;
+        _active = _r.colors.length - 1;
       }
       if (at != null) _ping(at, colorOf(c));
     });
@@ -193,21 +192,37 @@ class _CameraScreenState extends State<CameraScreen> {
     setState(() {
       _r.colors.removeAt(i);
       _active = _r.colors.length < Recipe.maxColors ? _r.colors.length : _r.colors.length - 1;
-      if (_r.colors.isEmpty) _panel = false;
     });
     _look();
   }
 
-  Future<void> _sampleLoupe() async {
-    final at = _loupe;
-    if (at == null || _sampling) return;
+  /// Reads the original under the finger for the loupe, one read at a time.
+  Future<void> _sampleLoupe(Size view) async {
+    final at = _loupe, feed = _feed;
+    if (at == null || feed == null || _sampling) return;
     _sampling = true;
-    final c = await LiveCamera.sample(at.dx, at.dy);
+    // The loupe shows a third of its width of the view, enlarged.
+    final side = (_loupeSize / _loupeZoom * feed.width / view.width).round();
+    final l = await LiveCamera.loupe(at.dx, at.dy, side: side);
+    ui.Image? image;
+    if (l != null) {
+      final done = Completer<ui.Image>();
+      ui.decodeImageFromPixels(l.pixels, l.side, l.side, ui.PixelFormat.rgba8888, done.complete);
+      image = await done.future;
+    }
     _sampling = false;
-    if (!mounted || _loupe == null) return;
-    setState(() => _loupeColor = c);
-    // The finger moved while sampling: catch up.
-    if (_loupe != at) unawaited(_sampleLoupe());
+    if (!mounted || _loupe == null) {
+      image?.dispose();
+      return;
+    }
+    final old = _loupeImage;
+    setState(() {
+      _loupeColor = l?.color;
+      _loupeImage = image;
+    });
+    old?.dispose();
+    // The finger moved while reading: catch up.
+    if (_loupe != at) unawaited(_sampleLoupe(view));
   }
 
   Future<void> _shoot() async {
@@ -442,19 +457,24 @@ class _CameraScreenState extends State<CameraScreen> {
                     _panel = false;
                     _loupe = norm(d.localPosition);
                   });
-                  _sampleLoupe();
+                  _sampleLoupe(size);
                 },
           onLongPressMoveUpdate: (d) {
             if (_loupe == null) return;
-            setState(() => _loupe = norm(d.localPosition));
-            _sampleLoupe();
+            final n = norm(d.localPosition);
+            if (_loupe != null && (n - _loupe!).distance > 0.02) Haptics.tick();
+            setState(() => _loupe = n);
+            _sampleLoupe(size);
           },
           onLongPressEnd: (d) {
             final c = _loupeColor;
+            final old = _loupeImage;
             setState(() {
               _loupe = null;
               _loupeColor = null;
+              _loupeImage = null;
             });
+            old?.dispose();
             if (c != null) _pick(c, at: d.localPosition);
           },
           child: DecoratedBox(
@@ -479,7 +499,7 @@ class _CameraScreenState extends State<CameraScreen> {
                   ),
                 ),
                 for (final p in _pings) _PingRing(key: ValueKey(p.id), ping: p),
-                if (_loupe != null) _loupeRing(Offset(_loupe!.dx * size.width, _loupe!.dy * size.height)),
+                if (_loupe != null) _loupeWidget(Offset(_loupe!.dx * size.width, _loupe!.dy * size.height), size),
                 Positioned(left: 0, right: 0, bottom: 0, child: _reachPanel()),
                 Positioned(
                   left: 0,
@@ -498,10 +518,11 @@ class _CameraScreenState extends State<CameraScreen> {
   /// How far the chosen color reaches, at a glance; opens the panel.
   Widget _reachPill() {
     final c = _cur;
+    final hidden = _feed == null || _panel;
     return IgnorePointer(
-      ignoring: c == null || _panel,
+      ignoring: hidden,
       child: AnimatedOpacity(
-        opacity: c == null || _panel ? 0 : 1,
+        opacity: hidden ? 0 : 1,
         duration: const Duration(milliseconds: 220),
         child: GestureDetector(
           onTap: () {
@@ -513,7 +534,7 @@ class _CameraScreenState extends State<CameraScreen> {
             radius: 16,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             child: Text(
-              c == null ? '' : 'Width ${c.width.round()}  ·  Edge ${c.softness.round()}',
+              c == null ? 'Colors in view' : 'Width ${c.width.round()}  ·  Edge ${c.softness.round()}',
               style: Txt.small.copyWith(color: _ink, fontSize: 12.5),
             ),
           ),
@@ -611,23 +632,26 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
-  /// Held over the finger: a ring filled with the color under it.
-  Widget _loupeRing(Offset p) {
-    const d = 66.0;
-    final c = _loupeColor;
+  /// Held above the finger, as in Edit: the scene under it enlarged and in
+  /// its own colors, ringed with the color that will be kept.
+  Widget _loupeWidget(Offset p, Size box) {
+    const d = _loupeSize;
+    final c = _loupeColor, image = _loupeImage;
+    final top = p.dy - d - 36 < 0 ? p.dy + 36 : p.dy - d - 36;
     return Positioned(
-      left: p.dx - d / 2,
-      top: p.dy - d / 2 - 78,
-      width: d,
-      height: d,
+      left: (p.dx - d / 2).clamp(0, box.width - d),
+      top: top,
       child: IgnorePointer(
         child: Container(
+          width: d,
+          height: d,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: c == null ? const Color(0x33FFFFFF) : colorOf(c),
-            border: Border.all(color: _ink, width: 3),
-            boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 12, offset: Offset(0, 4))],
+            color: const Color(0xFF161616),
+            border: Border.all(color: c == null ? _ink : colorOf(c), width: 5),
+            boxShadow: const [BoxShadow(color: Color(0x40000000), blurRadius: 14, offset: Offset(0, 4))],
           ),
+          child: ClipOval(child: CustomPaint(painter: _LoupePainter(image))),
         ),
       ),
     );
@@ -730,6 +754,33 @@ class _ShutterState extends State<_Shutter> {
       ),
     );
   }
+}
+
+class _LoupePainter extends CustomPainter {
+  _LoupePainter(this.image);
+  final ui.Image? image;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final im = image;
+    if (im != null) {
+      canvas.drawImageRect(
+        im,
+        Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()),
+        Offset.zero & size,
+        Paint()..filterQuality = FilterQuality.medium,
+      );
+    }
+    final c = size.center(Offset.zero);
+    final p = Paint()
+      ..color = const Color(0xCCFFFFFF)
+      ..strokeWidth = 1;
+    canvas.drawLine(c - const Offset(6, 0), c + const Offset(6, 0), p);
+    canvas.drawLine(c - const Offset(0, 6), c + const Offset(0, 6), p);
+  }
+
+  @override
+  bool shouldRepaint(_LoupePainter o) => o.image != image;
 }
 
 /// A slider for the dark panel: a hairline track and a soft pill thumb.

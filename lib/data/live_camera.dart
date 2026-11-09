@@ -68,6 +68,19 @@ class LiveCamera {
     return Rgba(r['width'] as int, r['height'] as int, r['pixels'] as Uint8List);
   }
 
+  /// The original, uncolored by the look, in a square of [side] frame
+  /// pixels around a normalized point, and the color at its middle.
+  static Future<({int side, Uint8List pixels, KeptColor color})?> loupe(double x, double y, {int side = 96}) async {
+    final r = await _ch.invokeMapMethod<String, Object?>('loupe', {'x': x, 'y': y, 'side': side});
+    if (r == null) return null;
+    final lab = (r['lab'] as List).cast<num>();
+    return (
+      side: r['side'] as int,
+      pixels: r['pixels'] as Uint8List,
+      color: KeptColor(l: lab[0].toDouble(), a: lab[1].toDouble(), b: lab[2].toDouble()),
+    );
+  }
+
   static Future<Shot> capture() async {
     final r = (await _ch.invokeMapMethod<String, Object?>('capture'))!;
     return Shot(
