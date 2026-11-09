@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import CoreLocation
 import CoreVideo
 import Flutter
@@ -11,14 +12,19 @@ import UIKit
 /// black and white. Only the area mask is left out. The shutter saves the
 /// untouched original to the photo library; After Hue keeps the look.
 ///
+/// It takes photos as the system camera does: every lens behind one zoom,
+/// switched by the phone as it sees fit (macro too), focus and exposure where
+/// tapped, the full-size photo processed at the best quality, and the volume
+/// buttons as a shutter.
+///
 /// Without a camera (the Simulator), a still photo stands in for the feed so
 /// the screen can still be worked on.
 final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSampleBufferDelegate,
   AVCapturePhotoCaptureDelegate, CLLocationManagerDelegate
 {
   static func register(registrar: FlutterPluginRegistrar) {
-    let camera = LiveCamera(textures: registrar.textures())
     let channel = FlutterMethodChannel(name: "afterhue/camera", binaryMessenger: registrar.messenger())
+    let camera = LiveCamera(textures: registrar.textures(), channel: channel)
     channel.setMethodCallHandler { call, result in camera.handle(call, result) }
     shared = camera
   }
@@ -26,6 +32,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   private static var shared: LiveCamera?
 
   private let textures: FlutterTextureRegistry
+  private let channel: FlutterMethodChannel
   private var textureId: Int64 = -1
   private let session = AVCaptureSession()
   private let videoOutput = AVCaptureVideoDataOutput()
@@ -34,6 +41,19 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   private var configured = false
   private var stillTimer: DispatchSourceTimer?
   private var still: CVPixelBuffer?
+
+  // The lens in use, and how the person has set it.
+  private var input: AVCaptureDeviceInput?
+  private var camera: AVCaptureDevice? { input?.device }
+  private var front = false
+  private var flash = AVCaptureDevice.FlashMode.off
+  private var resolution = 0  // megapixels; 0 is the largest
+  private var locked = false
+  private var subjectObserver: NSObjectProtocol?
+  private var rotation: AnyObject?  // AVCaptureDevice.RotationCoordinator
+  private var rotationWatch: NSKeyValueObservation?
+  private var captureAngle: CGFloat = 90
+  private var volume: AnyObject?  // AVCaptureEventInteraction
 
   // GPU
   private let device = MTLCreateSystemDefaultDevice()
@@ -59,14 +79,21 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   private let location = CLLocationManager()
   private var lastLocation: CLLocation?
 
-  private var pendingCapture: FlutterResult?
+  /// Photos still being saved, by their settings' id.
+  private var pending: [Int64: FlutterResult] = [:]
   private var warnedFormat = false
 
-  init(textures: FlutterTextureRegistry) {
+  init(textures: FlutterTextureRegistry, channel: FlutterMethodChannel) {
     self.textures = textures
+    self.channel = channel
     super.init()
     location.delegate = self
     location.desiredAccuracy = kCLLocationAccuracyHundredMeters
+  }
+
+  /// Tells the screen something it did not ask for.
+  private func emit(_ name: String, _ args: Any? = nil) {
+    DispatchQueue.main.async { self.channel.invokeMethod(name, arguments: args) }
   }
 
   // MARK: - Channel
@@ -92,6 +119,28 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       result(loupe(x: x, y: y, side: args["side"] as? Int ?? 96))
     case "capture":
       capture(result)
+    case "zoom":
+      result(zoom(to: args["factor"] as? Double ?? 1, ramp: args["ramp"] as? Bool ?? false))
+    case "focus":
+      focus(x: args["x"] as? Double ?? 0.5, y: args["y"] as? Double ?? 0.5)
+      result(nil)
+    case "lock":
+      setLocked(args["on"] as? Bool ?? false)
+      result(nil)
+    case "bias":
+      result(bias(args["ev"] as? Double ?? 0))
+    case "flash":
+      flash = switch args["mode"] as? String {
+      case "on": .on
+      case "auto": .auto
+      default: .off
+      }
+      result(nil)
+    case "resolution":
+      resolution = args["mp"] as? Int ?? 0
+      result(nil)
+    case "flip":
+      flip(result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -100,8 +149,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   // MARK: - Session
 
   private func start(stillPath: String?, result: @escaping FlutterResult) {
-    let haveCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil
-    if !haveCamera {
+    if Self.lens(front: false) == nil {
       guard let stillPath, let image = UIImage(contentsOfFile: stillPath) else {
         result(FlutterError(code: "unavailable", message: "No camera on this device", details: nil))
         return
@@ -120,10 +168,10 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
           do {
             try self.configure()
             self.session.startRunning()
-            let size = self.previewSize()
             DispatchQueue.main.async {
               self.registerTexture()
-              result(["texture": self.textureId, "width": size.width, "height": size.height])
+              self.watchVolume(true)
+              result(self.feedInfo())
             }
           } catch {
             DispatchQueue.main.async {
@@ -143,6 +191,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     stillTimer?.cancel()
     stillTimer = nil
     location.stopUpdatingLocation()
+    watchVolume(false)
     queue.async {
       if self.session.isRunning { self.session.stopRunning() }
     }
@@ -156,20 +205,51 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     lock.unlock()
   }
 
+  /// The best camera on a side: the one that joins all its lenses, when
+  /// there is one.
+  private static func lens(front: Bool) -> AVCaptureDevice? {
+    let types: [AVCaptureDevice.DeviceType] =
+      front
+      ? [.builtInTrueDepthCamera, .builtInWideAngleCamera]
+      : [.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera, .builtInWideAngleCamera]
+    return AVCaptureDevice.DiscoverySession(
+      deviceTypes: types, mediaType: .video, position: front ? .front : .back
+    ).devices.first
+  }
+
   private func configure() throws {
     if configured { return }
-    guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-      throw NSError(domain: "camera", code: 1)
-    }
+    guard let lens = Self.lens(front: front) else { throw NSError(domain: "camera", code: 1) }
     session.beginConfiguration()
     defer { session.commitConfiguration() }
     session.sessionPreset = .inputPriority
-    let input = try AVCaptureDeviceInput(device: camera)
-    if session.canAddInput(input) { session.addInput(input) }
+    try use(lens)
 
-    // A 4:3 format small enough to develop every frame, that still takes
-    // full-size photos.
-    let format = camera.formats
+    videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+    videoOutput.alwaysDiscardsLateVideoFrames = true
+    videoOutput.setSampleBufferDelegate(self, queue: queue)
+    if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
+    // Asked again once attached, where the session can honor it.
+    videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+    if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
+    afterLensChange()
+    configured = true
+  }
+
+  /// Puts [lens] in, on a format that develops every frame and still takes
+  /// full-size photos. Called inside a session configuration.
+  private func use(_ lens: AVCaptureDevice) throws {
+    if let input { session.removeInput(input) }
+    let next = try AVCaptureDeviceInput(device: lens)
+    guard session.canAddInput(next) else { throw NSError(domain: "camera", code: 2) }
+    session.addInput(next)
+    input = next
+
+    func photoArea(_ f: AVCaptureDevice.Format) -> Int32 {
+      guard #available(iOS 16.0, *) else { return 0 }
+      return f.supportedMaxPhotoDimensions.map { $0.width * $0.height }.max() ?? 0
+    }
+    let format = lens.formats
       .filter { f in
         let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
         // 8-bit formats only: a 10-bit one is not turned into BGRA, and its
@@ -184,49 +264,120 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
         let wa = CMVideoFormatDescriptionGetDimensions(a.formatDescription).width
         let wb = CMVideoFormatDescriptionGetDimensions(b.formatDescription).width
         if wa != wb { return wa < wb }
+        // The biggest photos the sensor can give.
+        let pa = photoArea(a), pb = photoArea(b)
+        if pa != pb { return pa < pb }
         // Full range keeps the shadows the renderer works from.
         return CMFormatDescriptionGetMediaSubType(b.formatDescription) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
       }
-    try camera.lockForConfiguration()
+    try lens.lockForConfiguration()
     if let format {
-      camera.activeFormat = format
-      if format.supportedColorSpaces.contains(.sRGB) { camera.activeColorSpace = .sRGB }
+      lens.activeFormat = format
+      if format.supportedColorSpaces.contains(.sRGB) { lens.activeColorSpace = .sRGB }
     }
-    if camera.isFocusModeSupported(.continuousAutoFocus) { camera.focusMode = .continuousAutoFocus }
-    if camera.isExposureModeSupported(.continuousAutoExposure) { camera.exposureMode = .continuousAutoExposure }
-    camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
-    camera.unlockForConfiguration()
+    if lens.isFocusModeSupported(.continuousAutoFocus) { lens.focusMode = .continuousAutoFocus }
+    if lens.isExposureModeSupported(.continuousAutoExposure) { lens.exposureMode = .continuousAutoExposure }
+    if lens.isSmoothAutoFocusSupported { lens.isSmoothAutoFocusEnabled = false }
+    lens.isSubjectAreaChangeMonitoringEnabled = true
+    lens.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
+    if lens.isVirtualDevice {
+      // Let the phone change lenses as the system camera does, close up too.
+      lens.setPrimaryConstituentDeviceSwitchingBehavior(.auto, restrictedSwitchingBehaviorConditions: [])
+    }
+    // Start on the main lens, as the system camera does.
+    lens.videoZoomFactor = min(max(1 / Self.multiplier(lens), lens.minAvailableVideoZoomFactor), lens.maxAvailableVideoZoomFactor)
+    lens.unlockForConfiguration()
+    locked = false
+    watchSubject(lens)
+  }
 
-    videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-    videoOutput.alwaysDiscardsLateVideoFrames = true
-    videoOutput.setSampleBufferDelegate(self, queue: queue)
-    if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
-    // Asked again once attached, where the session can honor it.
-    videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-    if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
+  /// What depends on the lens: the photo size, the fast shutter, which way
+  /// is up, the mirror. Called inside a session configuration.
+  private func afterLensChange() {
+    guard let camera else { return }
     if #available(iOS 16.0, *), let biggest = camera.activeFormat.supportedMaxPhotoDimensions.max(by: {
       $0.width * $0.height < $1.width * $1.height
     }) {
       photoOutput.maxPhotoDimensions = biggest
     }
     photoOutput.maxPhotoQualityPrioritization = .quality
-    if let conn = videoOutput.connection(with: .video) { Self.upright(conn, portrait: true) }
-    configured = true
-  }
-
-  /// Turns a connection to the phone held upright, or to how it is held now.
-  private static func upright(_ conn: AVCaptureConnection, portrait: Bool) {
-    let angle: CGFloat
-    if portrait {
-      angle = 90
-    } else {
-      switch UIDevice.current.orientation {
-      case .landscapeLeft: angle = 0
-      case .landscapeRight: angle = 180
-      case .portraitUpsideDown: angle = 270
-      default: angle = 90
+    if #available(iOS 17.0, *) {
+      // The system camera's quick shutter: the moment the button was
+      // pressed, taken from frames already buffered, and the heavy
+      // processing finished by the library afterwards.
+      if photoOutput.isZeroShutterLagSupported { photoOutput.isZeroShutterLagEnabled = true }
+      if photoOutput.isResponsiveCaptureSupported { photoOutput.isResponsiveCaptureEnabled = true }
+      if photoOutput.isFastCapturePrioritizationSupported { photoOutput.isFastCapturePrioritizationEnabled = true }
+      if photoOutput.isAutoDeferredPhotoDeliverySupported { photoOutput.isAutoDeferredPhotoDeliveryEnabled = true }
+    }
+    if let conn = videoOutput.connection(with: .video) {
+      Self.turn(conn, angle: 90)
+      if conn.isVideoMirroringSupported {
+        conn.automaticallyAdjustsVideoMirroring = false
+        conn.isVideoMirrored = front
       }
     }
+    if let conn = photoOutput.connection(with: .video), conn.isVideoMirroringSupported {
+      conn.automaticallyAdjustsVideoMirroring = false
+      conn.isVideoMirrored = front
+    }
+    watchRotation(camera)
+  }
+
+  /// The upright size of the frames, the long side as the height.
+  private func previewSize() -> CGSize {
+    guard let f = camera?.activeFormat else { return CGSize(width: 3, height: 4) }
+    let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
+    return CGSize(width: Int(min(d.width, d.height)), height: Int(max(d.width, d.height)))
+  }
+
+  /// What the screen needs to draw the controls for this lens.
+  private func feedInfo() -> [String: Any] {
+    let size = previewSize()
+    var info: [String: Any] = [
+      "texture": textureId, "width": size.width, "height": size.height, "front": front,
+      "flash": photoOutput.supportedFlashModes.contains(.on),
+    ]
+    guard let camera else { return info }
+    let mult = Self.multiplier(camera)
+    var stops: [Double] = [Double(camera.minAvailableVideoZoomFactor) * mult]
+    for f in camera.virtualDeviceSwitchOverVideoZoomFactors { stops.append(f.doubleValue * mult) }
+    // A 48MP main lens crops a sharp 2x, which the system camera offers.
+    var mps: [Int] = []
+    if #available(iOS 16.0, *) {
+      mps = Array(Set(camera.activeFormat.supportedMaxPhotoDimensions.map {
+        Int((Double($0.width) * Double($0.height) / 1e6).rounded())
+      })).sorted()
+    }
+    if !front, (mps.last ?? 0) >= 40, !stops.contains(where: { abs($0 - 2) < 0.2 }) { stops.append(2) }
+    stops = stops.map { ($0 * 10).rounded() / 10 }.filter { $0 >= 0.4 }.sorted()
+    info["zoom"] = [
+      "stops": stops.isEmpty ? [1.0] : stops,
+      "min": Double(camera.minAvailableVideoZoomFactor) * mult,
+      // As far as the system camera goes, not into mush.
+      "max": min(Double(camera.maxAvailableVideoZoomFactor), 15 / mult) * mult,
+      "now": Double(camera.videoZoomFactor) * mult,
+    ]
+    info["resolutions"] = mps
+    let ev = Double(min(abs(camera.minExposureTargetBias), abs(camera.maxExposureTargetBias)))
+    info["bias"] = min(ev, 2)
+    return info
+  }
+
+  /// The zoom factor shown for the device's 1.0: 0.5 where the ultra wide
+  /// is the widest lens.
+  private static func multiplier(_ lens: AVCaptureDevice) -> Double {
+    if #available(iOS 18.0, *) { return Double(lens.displayVideoZoomFactorMultiplier) }
+    if lens.constituentDevices.contains(where: { $0.deviceType == .builtInUltraWideCamera }),
+      let first = lens.virtualDeviceSwitchOverVideoZoomFactors.first
+    {
+      return 1 / first.doubleValue
+    }
+    return 1
+  }
+
+  /// Turns a connection to [angle] degrees.
+  private static func turn(_ conn: AVCaptureConnection, angle: CGFloat) {
     if #available(iOS 17.0, *) {
       if conn.isVideoRotationAngleSupported(angle) { conn.videoRotationAngle = angle }
     } else if conn.isVideoOrientationSupported {
@@ -240,13 +391,159 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     }
   }
 
-  private func previewSize() -> CGSize {
-    guard let f = (session.inputs.first as? AVCaptureDeviceInput)?.device.activeFormat else {
-      return CGSize(width: 3, height: 4)
+  // MARK: - Lens controls
+
+  /// Zooms to a factor as shown (0.5, 1, 2…), smoothly when [ramp]. Returns
+  /// the factor it reached.
+  private func zoom(to shown: Double, ramp: Bool) -> Double? {
+    guard let camera, (try? camera.lockForConfiguration()) != nil else { return nil }
+    defer { camera.unlockForConfiguration() }
+    let mult = Self.multiplier(camera)
+    let top = min(camera.maxAvailableVideoZoomFactor, CGFloat(15 / mult))
+    let f = min(max(CGFloat(shown / mult), camera.minAvailableVideoZoomFactor), top)
+    if ramp {
+      camera.ramp(toVideoZoomFactor: f, withRate: 12)
+    } else {
+      if camera.isRampingVideoZoom { camera.cancelVideoZoomRamp() }
+      camera.videoZoomFactor = f
     }
-    let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
-    // Delivered upright, so the long side is the height.
-    return CGSize(width: Int(min(d.width, d.height)), height: Int(max(d.width, d.height)))
+    return Double(f) * mult
+  }
+
+  /// A normalized point of the upright view, in the sensor's coordinates.
+  private func sensorPoint(x: Double, y: Double) -> CGPoint {
+    let s = previewSize()
+    let r = videoOutput.metadataOutputRectConverted(
+      fromOutputRect: CGRect(x: x * s.width - 1, y: y * s.height - 1, width: 2, height: 2))
+    let p = CGPoint(x: r.midX, y: r.midY)
+    if p.x.isFinite, p.y.isFinite, (0...1).contains(p.x), (0...1).contains(p.y) { return p }
+    // The frames are turned a quarter: the sensor's x runs down the view.
+    return CGPoint(x: y, y: front ? x : 1 - x)
+  }
+
+  /// Focuses and exposes for a point, until the scene changes or it is
+  /// unlocked.
+  private func focus(x: Double, y: Double) {
+    guard let camera, (try? camera.lockForConfiguration()) != nil else { return }
+    defer { camera.unlockForConfiguration() }
+    let p = sensorPoint(x: x, y: y)
+    if camera.isFocusPointOfInterestSupported {
+      camera.focusPointOfInterest = p
+      camera.focusMode = camera.isFocusModeSupported(.autoFocus) ? .autoFocus : camera.focusMode
+    }
+    if camera.isExposurePointOfInterestSupported {
+      camera.exposurePointOfInterest = p
+      camera.exposureMode = .autoExpose
+    }
+    camera.setExposureTargetBias(0, completionHandler: nil)
+    camera.isSubjectAreaChangeMonitoringEnabled = true
+    locked = false
+  }
+
+  /// Holds focus and exposure where they are, as the system camera's
+  /// AE/AF lock does.
+  private func setLocked(_ on: Bool) {
+    guard let camera, (try? camera.lockForConfiguration()) != nil else { return }
+    defer { camera.unlockForConfiguration() }
+    locked = on
+    if on {
+      if camera.isFocusModeSupported(.locked) { camera.focusMode = .locked }
+      if camera.isExposureModeSupported(.locked) { camera.exposureMode = .locked }
+    } else {
+      backToAuto(camera)
+    }
+  }
+
+  /// Brighter or darker than the meter, in stops. Returns what was set.
+  private func bias(_ ev: Double) -> Double? {
+    guard let camera, (try? camera.lockForConfiguration()) != nil else { return nil }
+    defer { camera.unlockForConfiguration() }
+    let v = min(max(Float(ev), camera.minExposureTargetBias, -2), camera.maxExposureTargetBias, 2)
+    camera.setExposureTargetBias(v, completionHandler: nil)
+    return Double(v)
+  }
+
+  /// Back to watching the whole frame. The device must be locked.
+  private func backToAuto(_ camera: AVCaptureDevice) {
+    let mid = CGPoint(x: 0.5, y: 0.5)
+    if camera.isFocusPointOfInterestSupported { camera.focusPointOfInterest = mid }
+    if camera.isExposurePointOfInterestSupported { camera.exposurePointOfInterest = mid }
+    if camera.isFocusModeSupported(.continuousAutoFocus) { camera.focusMode = .continuousAutoFocus }
+    if camera.isExposureModeSupported(.continuousAutoExposure) { camera.exposureMode = .continuousAutoExposure }
+    camera.setExposureTargetBias(0, completionHandler: nil)
+  }
+
+  /// When the scene moves on from a tapped point, the camera goes back to
+  /// the whole frame, unless it is locked.
+  private func watchSubject(_ lens: AVCaptureDevice) {
+    if let subjectObserver { NotificationCenter.default.removeObserver(subjectObserver) }
+    subjectObserver = NotificationCenter.default.addObserver(
+      forName: AVCaptureDevice.subjectAreaDidChangeNotification, object: lens, queue: .main
+    ) { [weak self] _ in
+      guard let self, !self.locked, let camera = self.camera, (try? camera.lockForConfiguration()) != nil else { return }
+      self.backToAuto(camera)
+      camera.unlockForConfiguration()
+      self.emit("focusReset")
+    }
+  }
+
+  /// Which way the phone is held, for the photo and for the controls.
+  private func watchRotation(_ lens: AVCaptureDevice) {
+    guard #available(iOS 17.0, *) else { return }
+    let coordinator = AVCaptureDevice.RotationCoordinator(device: lens, previewLayer: nil)
+    rotation = coordinator
+    rotationWatch = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) {
+      [weak self] c, _ in
+      guard let self else { return }
+      let angle = c.videoRotationAngleForHorizonLevelCapture
+      self.captureAngle = angle
+      // Told as the back camera counts it: the front one, facing the other
+      // way, turns its sideways frames the other way round.
+      let shown = self.front && (angle == 0 || angle == 180) ? 180 - angle : angle
+      self.emit("orientation", Double(shown))
+    }
+  }
+
+  /// The volume buttons take the photo while the camera is open.
+  private func watchVolume(_ on: Bool) {
+    guard #available(iOS 17.2, *) else { return }
+    let view = UIApplication.shared.connectedScenes
+      .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController?.view
+    if let old = volume as? AVCaptureEventInteraction {
+      old.view?.removeInteraction(old)
+      volume = nil
+    }
+    guard on, let view else { return }
+    let interaction = AVCaptureEventInteraction { [weak self] event in
+      if event.phase == .ended { self?.emit("shutter") }
+    }
+    view.addInteraction(interaction)
+    volume = interaction
+  }
+
+  /// To the other side's camera. The texture stays; its size may not.
+  private func flip(_ result: @escaping FlutterResult) {
+    guard configured, let lens = Self.lens(front: !front) else {
+      result(FlutterError(code: "unavailable", message: "No other camera", details: nil))
+      return
+    }
+    queue.async {
+      self.session.beginConfiguration()
+      let was = self.front
+      self.front = !was
+      do {
+        try self.use(lens)
+      } catch {
+        self.front = was
+        if let back = Self.lens(front: was) { try? self.use(back) }
+      }
+      self.afterLensChange()
+      self.session.commitConfiguration()
+      self.lock.lock()
+      self.look.castStale = true
+      self.lock.unlock()
+      DispatchQueue.main.async { result(self.feedInfo()) }
+    }
   }
 
   // MARK: - Still stand-in
@@ -564,49 +861,85 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       result(FlutterError(code: "unavailable", message: "No camera on this device", details: nil))
       return
     }
-    guard pendingCapture == nil else {
-      result(FlutterError(code: "busy", message: "Still saving the last photo", details: nil))
+    guard pending.count < 4 else {
+      result(FlutterError(code: "busy", message: "Still saving the last photos", details: nil))
       return
     }
-    pendingCapture = result
+    // HEIF, as the system camera saves, where the phone has it.
+    let settings =
+      photoOutput.availablePhotoCodecTypes.contains(.hevc)
+      ? AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc]) : AVCapturePhotoSettings()
+    if #available(iOS 16.0, *) { settings.maxPhotoDimensions = photoSize(resolution) }
+    settings.photoQualityPrioritization = .quality
+    if photoOutput.supportedFlashModes.contains(flash) { settings.flashMode = flash }
+    pending[settings.uniqueID] = result
+    let angle = captureAngle
     queue.async {
-      if let conn = self.photoOutput.connection(with: .video) { Self.upright(conn, portrait: false) }
-      let settings = AVCapturePhotoSettings()
-      if #available(iOS 16.0, *) { settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions }
-      settings.photoQualityPrioritization = .quality
+      if let conn = self.photoOutput.connection(with: .video) { Self.turn(conn, angle: angle) }
       self.photoOutput.capturePhoto(with: settings, delegate: self)
     }
   }
 
+  /// The photo size nearest the megapixels asked for; the largest for 0.
+  @available(iOS 16.0, *)
+  private func photoSize(_ mp: Int) -> CMVideoDimensions {
+    let all = (camera?.activeFormat.supportedMaxPhotoDimensions ?? []).filter {
+      $0.width * $0.height <= photoOutput.maxPhotoDimensions.width * photoOutput.maxPhotoDimensions.height
+    }
+    guard mp > 0, !all.isEmpty else { return photoOutput.maxPhotoDimensions }
+    return all.min {
+      abs(Double($0.width) * Double($0.height) / 1e6 - Double(mp))
+        < abs(Double($1.width) * Double($1.height) / 1e6 - Double(mp))
+    } ?? photoOutput.maxPhotoDimensions
+  }
+
   func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
     guard error == nil, let data = photo.fileDataRepresentation() else {
-      finishCapture(FlutterError(code: "capture", message: "\(error.map { "\($0)" } ?? "no data")", details: nil))
+      finishCapture(photo, FlutterError(code: "capture", message: "\(error.map { "\($0)" } ?? "no data")", details: nil))
       return
     }
+    save(data, as: .photo, photo)
+  }
+
+  /// The quick shutter's photo: a proxy the library finishes processing
+  /// later, to the same quality as the system camera's.
+  @available(iOS 17.0, *)
+  func photoOutput(
+    _ output: AVCapturePhotoOutput, didFinishCapturingDeferredPhotoProxy proxy: AVCaptureDeferredPhotoProxy?,
+    error: Error?
+  ) {
+    guard error == nil, let proxy, let data = proxy.fileDataRepresentation() else {
+      finishCapture(proxy, FlutterError(code: "capture", message: "\(error.map { "\($0)" } ?? "no proxy")", details: nil))
+      return
+    }
+    save(data, as: .photoProxy, proxy)
+  }
+
+  private func save(_ data: Data, as type: PHAssetResourceType, _ photo: AVCapturePhoto) {
     let place = lastLocation
     let taken = Date()
+    let angle = captureAngle
     PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
       guard status == .authorized || status == .limited else {
-        self.finishCapture(FlutterError(code: "library", message: "Saving to Photos was not allowed", details: nil))
+        self.finishCapture(photo, FlutterError(code: "library", message: "Saving to Photos was not allowed", details: nil))
         return
       }
       var id: String?
       PHPhotoLibrary.shared().performChanges({
         let request = PHAssetCreationRequest.forAsset()
-        request.addResource(with: .photo, data: data, options: nil)
+        request.addResource(with: type, data: data, options: nil)
         request.creationDate = taken
         request.location = place
         id = request.placeholderForCreatedAsset?.localIdentifier
       }) { ok, error in
         guard ok, let id else {
-          self.finishCapture(FlutterError(code: "library", message: "\(error.map { "\($0)" } ?? "not saved")", details: nil))
+          self.finishCapture(photo, FlutterError(code: "library", message: "\(error.map { "\($0)" } ?? "not saved")", details: nil))
           return
         }
         let dims = photo.resolvedSettings.photoDimensions
-        let upright = [UIDeviceOrientation.portrait, .portraitUpsideDown, .unknown, .faceUp, .faceDown]
-          .contains(UIDevice.current.orientation)
+        let upright = angle == 90 || angle == 270
         let (w, h) = (Int(dims.width), Int(dims.height))
-        self.finishCapture([
+        self.finishCapture(photo, [
           "id": id,
           "taken": Int(taken.timeIntervalSince1970 * 1000),
           "width": upright ? min(w, h) : max(w, h),
@@ -618,10 +951,11 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     }
   }
 
-  private func finishCapture(_ value: Any?) {
+  private func finishCapture(_ photo: AVCapturePhoto?, _ value: Any?) {
     DispatchQueue.main.async {
-      self.pendingCapture?(value)
-      self.pendingCapture = nil
+      // Without the photo to name it, the oldest waiting is answered.
+      guard let id = photo?.resolvedSettings.uniqueID ?? self.pending.keys.min() else { return }
+      self.pending.removeValue(forKey: id)?(value)
     }
   }
 

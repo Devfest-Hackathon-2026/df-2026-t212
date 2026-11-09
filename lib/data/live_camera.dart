@@ -3,12 +3,50 @@ import 'package:flutter/services.dart';
 import '../core/recipe.dart';
 import '../core/renderer.dart';
 
-/// What the camera started with: the texture to show and its size, upright.
+/// What the camera started with: the texture to show and its size, upright,
+/// and what the lens in use can do.
 class LiveFeed {
   LiveFeed(this.texture, this.width, this.height);
+
+  factory LiveFeed.from(Map<String, Object?> r) {
+    final f = LiveFeed(r['texture'] as int, (r['width'] as num).round(), (r['height'] as num).round())
+      ..front = r['front'] as bool? ?? false
+      ..flash = r['flash'] as bool? ?? false
+      ..maxBias = (r['bias'] as num?)?.toDouble() ?? 0
+      ..resolutions = [for (final m in (r['resolutions'] as List?) ?? const []) (m as num).toInt()];
+    final z = r['zoom'] as Map?;
+    if (z != null) {
+      f
+        ..live = true
+        ..stops = [for (final s in z['stops'] as List) (s as num).toDouble()]
+        ..minZoom = (z['min'] as num).toDouble()
+        ..maxZoom = (z['max'] as num).toDouble()
+        ..zoom = (z['now'] as num).toDouble();
+    }
+    return f;
+  }
+
   final int texture;
   final int width, height;
   double get aspect => width / height;
+
+  /// A real camera, not a photo standing in for one.
+  bool live = false;
+  bool front = false;
+
+  /// Whether this lens has a flash.
+  bool flash = false;
+
+  /// The zoom factors shown as buttons (0.5, 1, 2, 3…), and the range, as
+  /// the system camera counts them.
+  List<double> stops = const [1];
+  double minZoom = 1, maxZoom = 1, zoom = 1;
+
+  /// How far exposure can be pushed either way, in stops.
+  double maxBias = 0;
+
+  /// The photo sizes on offer, in megapixels.
+  List<int> resolutions = const [];
 }
 
 /// A photo the shutter saved to the library.
@@ -29,8 +67,38 @@ class LiveCamera {
   /// [still] is a photo to stand in for the feed where there is no camera.
   static Future<LiveFeed> start({String? still}) async {
     final r = await _ch.invokeMapMethod<String, Object?>('start', {'still': ?still});
-    return LiveFeed(r!['texture'] as int, (r['width'] as num).round(), (r['height'] as num).round());
+    return LiveFeed.from(r!);
   }
+
+  /// What the camera says unasked: `shutter` (a volume button), `focusReset`
+  /// (the scene moved on from a tapped point), `orientation` (degrees the
+  /// photo will be turned: 90 upright, 0 or 180 on its side).
+  static void listen(void Function(String event, Object? args)? on) {
+    _ch.setMethodCallHandler(on == null ? null : (call) async => on(call.method, call.arguments));
+  }
+
+  /// Zooms to [factor] as shown (0.5, 1, 2…); smoothly when [ramp]. Returns
+  /// the factor reached.
+  static Future<double?> zoom(double factor, {bool ramp = false}) =>
+      _ch.invokeMethod<double>('zoom', {'factor': factor, 'ramp': ramp});
+
+  /// Focuses and exposes for a normalized point of the view.
+  static Future<void> focus(double x, double y) => _ch.invokeMethod('focus', {'x': x, 'y': y});
+
+  /// Holds focus and exposure where they are.
+  static Future<void> lock(bool on) => _ch.invokeMethod('lock', {'on': on});
+
+  /// Brighter or darker than the meter, in stops.
+  static Future<double?> bias(double ev) => _ch.invokeMethod<double>('bias', {'ev': ev});
+
+  /// `off`, `auto` or `on`.
+  static Future<void> flash(String mode) => _ch.invokeMethod('flash', {'mode': mode});
+
+  /// The photo size in megapixels; 0 for the largest.
+  static Future<void> resolution(int mp) => _ch.invokeMethod('resolution', {'mp': mp});
+
+  /// To the camera on the other side.
+  static Future<LiveFeed> flip() async => LiveFeed.from((await _ch.invokeMapMethod<String, Object?>('flip'))!);
 
   static Future<void> stop() => _ch.invokeMethod('stop');
 

@@ -23,9 +23,10 @@ class CameraRoute extends PageRouteBuilder<void> {
         reverseTransitionDuration: const Duration(milliseconds: 320),
         pageBuilder: (_, _, _) => const CameraScreen(),
         transitionsBuilder: (_, a, _, child) => SlideTransition(
-          position: Tween(begin: const Offset(0, 1), end: Offset.zero).animate(
-            CurvedAnimation(parent: a, curve: Motion.settle, reverseCurve: Curves.easeInCubic),
-          ),
+          position: Tween(
+            begin: const Offset(0, 1),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(parent: a, curve: Motion.settle, reverseCurve: Curves.easeInCubic)),
           child: child,
         ),
       );
@@ -66,8 +67,28 @@ class _CameraScreenState extends State<CameraScreen> {
   int _pingId = 0;
 
   PhotoItem? _last;
-  bool _shooting = false;
-  bool _flash = false;
+  bool _blink = false;
+
+  // The lens, as the person has set it.
+  double _zoom = 1;
+  double? _pinchFrom;
+  bool _pinching = false;
+  Offset? _focusAt; // in the view
+  bool _locked = false;
+  double _bias = 0;
+  bool _focusQuiet = false;
+  Timer? _focusFade;
+  String _flashMode = 'auto';
+  int _timer = 0;
+  int _count = 0;
+  Timer? _countdown;
+  bool _grid = false;
+  int _mp = 0;
+  bool _options = false;
+  bool _flipping = false;
+
+  /// How far the controls turn to stay upright as the phone turns.
+  double _turns = 0;
 
   int get _addSlot => _r.colors.length < Recipe.maxColors ? _r.colors.length : -1;
   KeptColor? get _cur => _active < _r.colors.length ? _r.colors[_active] : null;
@@ -75,14 +96,22 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void initState() {
     super.initState();
+    // The screen stays upright, as the system camera's does; the controls
+    // turn instead.
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    LiveCamera.listen(_onEvent);
     _start();
   }
 
   @override
   void dispose() {
     _scan?.cancel();
+    _focusFade?.cancel();
+    _countdown?.cancel();
     _loupeImage?.dispose();
+    LiveCamera.listen(null);
     LiveCamera.stop();
+    SystemChrome.setPreferredOrientations([]);
     super.dispose();
   }
 
@@ -106,7 +135,19 @@ class _CameraScreenState extends State<CameraScreen> {
       unawaited(LiveCamera.stop());
       return;
     }
-    setState(() => _feed = feed);
+    _mp = feed.resolutions.contains(24)
+        ? 24
+        : feed.resolutions.contains(12)
+        ? 12
+        : 0;
+    if (feed.live) {
+      unawaited(LiveCamera.resolution(_mp));
+      unawaited(LiveCamera.flash(_flashMode));
+    }
+    setState(() {
+      _feed = feed;
+      _zoom = feed.zoom;
+    });
     // Let exposure settle before reading the colors.
     await Future<void>.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
@@ -157,6 +198,151 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _look() => LiveCamera.look(_r);
+
+  void _onEvent(String event, Object? args) {
+    if (!mounted) return;
+    switch (event) {
+      case 'shutter':
+        _shutter();
+      case 'focusReset':
+        if (!_locked && _focusAt != null) {
+          setState(() {
+            _focusAt = null;
+            _bias = 0;
+          });
+        }
+      case 'orientation':
+        // Upright is 90; on its side, 0 or 180. The controls turn back.
+        final t = switch ((args as num).round()) {
+          0 => 0.25,
+          180 => -0.25,
+          270 => 0.5,
+          _ => 0.0,
+        };
+        if (t != _turns) setState(() => _turns = t);
+    }
+  }
+
+  // ------------------------------------------------------------ the lens
+
+  void _setZoom(double z, {bool ramp = false}) {
+    final f = _feed;
+    if (f == null || !f.live) return;
+    final v = z.clamp(f.minZoom, f.maxZoom);
+    // A tick on passing a lens.
+    if (f.stops.any((s) => (s - _zoom) * (s - v) < 0 || (v == s && _zoom != s))) Haptics.tick();
+    setState(() => _zoom = v);
+    LiveCamera.zoom(v, ramp: ramp);
+  }
+
+  /// Focus and exposure where the view was tapped; on the box again, held
+  /// there, as the system camera's AE/AF lock.
+  void _tapFocus(Offset p, Size size) {
+    if (!(_feed?.live ?? false)) return;
+    final at = _focusAt;
+    if (at != null && (p - at).distance < 44) {
+      Haptics.firm();
+      final on = !_locked;
+      setState(() => _locked = on);
+      LiveCamera.lock(on);
+      _wakeFocus();
+      return;
+    }
+    Haptics.light();
+    setState(() {
+      _focusAt = p;
+      _locked = false;
+      _bias = 0;
+    });
+    LiveCamera.focus(p.dx / size.width, p.dy / size.height);
+    _wakeFocus();
+  }
+
+  void _setBias(double ev) {
+    final m = _feed?.maxBias ?? 0;
+    final v = ev.clamp(-m, m);
+    if (_bias != 0 && (v == 0 || v.sign != _bias.sign)) Haptics.tick();
+    setState(() => _bias = v);
+    LiveCamera.bias(v);
+    _wakeFocus();
+  }
+
+  /// The box stays bright while it is used, then quietens.
+  void _wakeFocus() {
+    _focusFade?.cancel();
+    if (_focusQuiet) setState(() => _focusQuiet = false);
+    _focusFade = Timer(const Duration(milliseconds: 1600), () {
+      if (mounted) setState(() => _focusQuiet = true);
+    });
+  }
+
+  void _cycleFlash() {
+    Haptics.tick();
+    final next = switch (_flashMode) {
+      'auto' => 'on',
+      'on' => 'off',
+      _ => 'auto',
+    };
+    setState(() => _flashMode = next);
+    LiveCamera.flash(next);
+  }
+
+  Future<void> _flip() async {
+    final f = _feed;
+    if (_flipping || f == null || !f.live) return;
+    Haptics.light();
+    setState(() {
+      _flipping = true;
+      _focusAt = null;
+      _locked = false;
+      _bias = 0;
+    });
+    try {
+      final next = await LiveCamera.flip();
+      if (!mounted) return;
+      if (next.resolutions.isNotEmpty && !next.resolutions.contains(_mp)) {
+        _mp = next.resolutions.last;
+        unawaited(LiveCamera.resolution(_mp));
+      }
+      setState(() {
+        _feed = next;
+        _zoom = next.zoom;
+      });
+    } on PlatformException {
+      // Stays on the lens it had.
+    } finally {
+      await Future<void>.delayed(const Duration(milliseconds: 160));
+      if (mounted) setState(() => _flipping = false);
+    }
+  }
+
+  /// The shutter, the volume buttons: now, or after the timer.
+  void _shutter() {
+    if (_feed == null) return;
+    if (_count > 0) {
+      _countdown?.cancel();
+      Haptics.light();
+      setState(() => _count = 0);
+      return;
+    }
+    if (_timer == 0) {
+      _shoot();
+      return;
+    }
+    Haptics.tick();
+    setState(() => _count = _timer);
+    _countdown = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return t.cancel();
+      if (_count <= 1) {
+        t.cancel();
+        setState(() => _count = 0);
+        _shoot();
+      } else {
+        Haptics.tick();
+        setState(() => _count--);
+      }
+    });
+  }
 
   /// Keeps [c]: in place of the chosen color, or as a new one.
   void _pick(KeptColor c, {Offset? at}) {
@@ -226,15 +412,12 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _shoot() async {
-    if (_shooting || _feed == null) return;
+    if (_feed == null) return;
     Haptics.firm();
     final look = _r.copy();
-    setState(() {
-      _shooting = true;
-      _flash = true;
-    });
+    setState(() => _blink = true);
     Future.delayed(const Duration(milliseconds: 90), () {
-      if (mounted) setState(() => _flash = false);
+      if (mounted) setState(() => _blink = false);
     });
     try {
       final s = await LiveCamera.capture();
@@ -254,18 +437,14 @@ class _CameraScreenState extends State<CameraScreen> {
         SnackBar(
           behavior: SnackBarBehavior.floating,
           backgroundColor: Neutral.primary,
-          content: Text(
-            switch (e.code) {
-              'library' => 'Saving to Photos is not allowed.',
-              'unavailable' => 'There is no camera on this device.',
-              _ => 'The photo could not be taken.',
-            },
-            style: Txt.small.copyWith(color: Neutral.surface),
-          ),
+          content: Text(switch (e.code) {
+            'library' => 'Saving to Photos is not allowed.',
+            'busy' => 'Still saving the last photos.',
+            'unavailable' => 'There is no camera on this device.',
+            _ => 'The photo could not be taken.',
+          }, style: Txt.small.copyWith(color: Neutral.surface)),
         ),
       );
-    } finally {
-      if (mounted) setState(() => _shooting = false);
     }
   }
 
@@ -309,11 +488,7 @@ class _CameraScreenState extends State<CameraScreen> {
                     ],
                   ),
                   if (at != null)
-                    _loupeWidget(
-                      view + Offset(at.dx * h * aspect, at.dy * h),
-                      width: box.maxWidth,
-                      ceiling: 0,
-                    ),
+                    _loupeWidget(view + Offset(at.dx * h * aspect, at.dy * h), width: box.maxWidth, ceiling: 0),
                 ],
               );
             },
@@ -337,16 +512,59 @@ class _CameraScreenState extends State<CameraScreen> {
             child: const Glass(
               dark: true,
               radius: 16,
-              child: SizedBox(
-                width: 46,
-                height: 36,
-                child: Icon(Icons.chevron_left_rounded, size: 26, color: _ink),
-              ),
+              child: SizedBox(width: 46, height: 36, child: Icon(Icons.chevron_left_rounded, size: 26, color: _ink)),
             ),
           ),
         ),
-        _chips(),
+        Positioned(
+          left: 70,
+          right: 100,
+          child: Center(
+            child: FittedBox(fit: BoxFit.scaleDown, child: _chips()),
+          ),
+        ),
+        Positioned(
+          right: 14,
+          child: Row(
+            children: [
+              if (_feed?.flash ?? false)
+                _round(switch (_flashMode) {
+                  'on' => Icons.flash_on_rounded,
+                  'off' => Icons.flash_off_rounded,
+                  _ => Icons.flash_auto_rounded,
+                }, _cycleFlash),
+              const SizedBox(width: 8),
+              _round(_options ? Icons.close_rounded : Icons.tune_rounded, () {
+                Haptics.tick();
+                setState(() {
+                  _options = !_options;
+                  _panel = false;
+                });
+              }),
+            ],
+          ),
+        ),
       ],
+    );
+  }
+
+  Widget _round(IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Glass(
+        dark: true,
+        radius: 18,
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: AnimatedRotation(
+            turns: _turns,
+            duration: const Duration(milliseconds: 320),
+            curve: Motion.settle,
+            child: Icon(icon, size: 18, color: _ink),
+          ),
+        ),
+      ),
     );
   }
 
@@ -410,10 +628,7 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
             if (sel) ...[
               const SizedBox(width: 7),
-              Text(
-                oklabToHex(c.l, c.a, c.b).toUpperCase(),
-                style: Txt.mono.copyWith(color: _ink, fontSize: 12),
-              ),
+              Text(oklabToHex(c.l, c.a, c.b).toUpperCase(), style: Txt.mono.copyWith(color: _ink, fontSize: 12)),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => _remove(i),
@@ -430,6 +645,7 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Widget _hint() {
+    if (_options) return _optionsRow();
     final show = _feed != null && !_chosen;
     return Center(
       child: AnimatedOpacity(
@@ -444,6 +660,43 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  /// The system camera's lesser settings: timer, grid, photo size.
+  Widget _optionsRow() {
+    final sizes = _feed?.resolutions ?? const <int>[];
+    Widget opt(String label, bool on, VoidCallback tap) => GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        Haptics.tick();
+        tap();
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Text(label, style: Txt.small.copyWith(color: on ? _ink : _dim, fontSize: 12.5)),
+      ),
+    );
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        opt(_timer == 0 ? 'Timer off' : 'Timer ${_timer}s', _timer > 0, () {
+          setState(
+            () => _timer = switch (_timer) {
+              0 => 3,
+              3 => 10,
+              _ => 0,
+            },
+          );
+        }),
+        opt('Grid', _grid, () => setState(() => _grid = !_grid)),
+        if (sizes.length > 1)
+          opt('${_mp == 0 ? sizes.last : _mp} MP', true, () {
+            final i = sizes.indexOf(_mp == 0 ? sizes.last : _mp);
+            setState(() => _mp = sizes[(i + 1) % sizes.length]);
+            LiveCamera.resolution(_mp);
+          }),
+      ],
+    );
+  }
+
   Widget _viewfinder() {
     final feed = _feed;
     return LayoutBuilder(
@@ -454,15 +707,35 @@ class _CameraScreenState extends State<CameraScreen> {
           behavior: HitTestBehavior.opaque,
           onTapUp: feed == null
               ? null
-              : (d) async {
-                  if (_panel) {
-                    setState(() => _panel = false);
+              : (d) {
+                  if (_panel || _options) {
+                    setState(() {
+                      _panel = false;
+                      _options = false;
+                    });
                     return;
                   }
-                  final n = norm(d.localPosition);
-                  final c = await LiveCamera.sample(n.dx, n.dy);
-                  if (c != null && mounted) _pick(c, at: d.localPosition);
+                  _tapFocus(d.localPosition, size);
                 },
+          // Two fingers zoom; one, after a tap, moves the exposure.
+          onScaleStart: feed == null
+              ? null
+              : (d) {
+                  _pinchFrom = _zoom;
+                  _pinching = d.pointerCount >= 2;
+                },
+          onScaleUpdate: feed == null
+              ? null
+              : (d) {
+                  if (_loupe != null) return;
+                  if (d.pointerCount >= 2) _pinching = true;
+                  if (_pinching) {
+                    if (d.pointerCount >= 2) _setZoom((_pinchFrom ?? _zoom) * d.scale);
+                  } else if (_focusAt != null && feed.maxBias > 0) {
+                    _setBias(_bias - d.focalPointDelta.dy / 110);
+                  }
+                },
+          onScaleEnd: (_) => _pinching = false,
           onLongPressStart: feed == null
               ? null
               : (d) {
@@ -500,24 +773,57 @@ class _CameraScreenState extends State<CameraScreen> {
                 Positioned.fill(
                   child: ColoredBox(
                     color: const Color(0xFF161616),
-                    child: feed == null ? null : Texture(textureId: feed.texture, filterQuality: FilterQuality.medium),
+                    child: feed == null
+                        ? null
+                        : AnimatedOpacity(
+                            opacity: _flipping ? 0 : 1,
+                            duration: const Duration(milliseconds: 160),
+                            child: Texture(textureId: feed.texture, filterQuality: FilterQuality.medium),
+                          ),
                   ),
                 ),
+                if (_grid)
+                  const Positioned.fill(
+                    child: IgnorePointer(child: CustomPaint(painter: _GridPainter())),
+                  ),
+                if (_focusAt != null) _focusBox(_focusAt!),
+                Positioned(top: 10, left: 0, right: 0, child: Center(child: _lockPill())),
+                if (_count > 0)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Center(
+                        child: AnimatedRotation(
+                          turns: _turns,
+                          duration: const Duration(milliseconds: 320),
+                          child: Text(
+                            '$_count',
+                            style: const TextStyle(
+                              color: _ink,
+                              fontSize: 96,
+                              fontWeight: FontWeight.w200,
+                              shadows: [Shadow(color: Color(0x66000000), blurRadius: 12)],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 Positioned.fill(
                   child: IgnorePointer(
                     child: AnimatedOpacity(
-                      opacity: _flash ? 0.85 : 0,
-                      duration: Duration(milliseconds: _flash ? 40 : 260),
+                      opacity: _blink ? 0.85 : 0,
+                      duration: Duration(milliseconds: _blink ? 40 : 260),
                       child: const ColoredBox(color: Colors.white),
                     ),
                   ),
                 ),
                 for (final p in _pings) _PingRing(key: ValueKey(p.id), ping: p),
                 Positioned(left: 0, right: 0, bottom: 0, child: _reachPanel()),
+                Positioned(left: 0, right: 0, bottom: 12, child: Center(child: _zoomRow())),
                 Positioned(
                   left: 0,
                   right: 0,
-                  bottom: 14,
+                  bottom: (_feed?.stops.length ?? 0) > 1 ? 60 : 14,
                   child: Center(child: _reachPill()),
                 ),
               ],
@@ -525,6 +831,136 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         );
       },
+    );
+  }
+
+  /// The lenses, as the system camera shows them: .5, 1, 2, 3, the one in
+  /// use with its exact factor.
+  Widget _zoomRow() {
+    final f = _feed;
+    if (f == null || f.stops.length < 2) return const SizedBox();
+    var cur = 0;
+    for (var i = 0; i < f.stops.length; i++) {
+      if (_zoom >= f.stops[i] - 0.05) cur = i;
+    }
+    String n(double v) {
+      final r = (v * 10).round() / 10;
+      final t = r == r.roundToDouble() ? r.toStringAsFixed(0) : r.toStringAsFixed(1);
+      return t.startsWith('0.') ? t.substring(1) : t;
+    }
+
+    final hidden = _panel;
+    return IgnorePointer(
+      ignoring: hidden,
+      child: AnimatedOpacity(
+        opacity: hidden ? 0 : 1,
+        duration: const Duration(milliseconds: 220),
+        child: Glass(
+          dark: true,
+          radius: 22,
+          padding: const EdgeInsets.all(3),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < f.stops.length; i++)
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _setZoom(f.stops[i], ramp: true),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Motion.settle,
+                    width: i == cur ? 40 : 34,
+                    height: 34,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: i == cur ? const Color(0x2EFFFFFF) : Colors.transparent,
+                    ),
+                    child: AnimatedRotation(
+                      turns: _turns,
+                      duration: const Duration(milliseconds: 320),
+                      curve: Motion.settle,
+                      child: Text(
+                        i == cur ? '${n(_zoom)}×' : n(f.stops[i]),
+                        style: Txt.small.copyWith(
+                          color: i == cur ? _ink : _dim,
+                          fontSize: i == cur ? 12 : 11,
+                          fontWeight: i == cur ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Where the camera focuses and meters, and beside it how much brighter
+  /// or darker than the meter it is set.
+  Widget _focusBox(Offset p) {
+    const d = 74.0;
+    final m = _feed?.maxBias ?? 0;
+    return Positioned(
+      left: p.dx - d / 2,
+      top: p.dy - d / 2,
+      width: d + 34,
+      height: d,
+      child: IgnorePointer(
+        child: AnimatedOpacity(
+          opacity: _focusQuiet ? 0.45 : 1,
+          duration: const Duration(milliseconds: 300),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              TweenAnimationBuilder<double>(
+                key: ValueKey(p),
+                tween: Tween(begin: 1.35, end: 1),
+                duration: const Duration(milliseconds: 280),
+                curve: Motion.settle,
+                builder: (context, s, child) => Transform.scale(scale: s, child: child),
+                child: Container(
+                  width: d,
+                  height: d,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: _ink, width: _locked ? 1.8 : 1.2),
+                    boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 4)],
+                  ),
+                ),
+              ),
+              if (m > 0)
+                Positioned(
+                  left: d + 8,
+                  top: 0,
+                  bottom: 0,
+                  width: 22,
+                  child: CustomPaint(painter: _BiasPainter(_bias / m)),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _lockPill() {
+    return IgnorePointer(
+      child: AnimatedOpacity(
+        opacity: _locked ? 1 : 0,
+        duration: const Duration(milliseconds: 220),
+        child: AnimatedRotation(
+          turns: _turns,
+          duration: const Duration(milliseconds: 320),
+          child: Glass(
+            dark: true,
+            radius: 12,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: Text('AE/AF Lock', style: Txt.mono.copyWith(color: _ink, fontSize: 11)),
+          ),
+        ),
+      ),
     );
   }
 
@@ -625,7 +1061,10 @@ class _CameraScreenState extends State<CameraScreen> {
       height: 36,
       child: Row(
         children: [
-          SizedBox(width: 52, child: Text(label, style: Txt.small.copyWith(color: _ink))),
+          SizedBox(
+            width: 52,
+            child: Text(label, style: Txt.small.copyWith(color: _ink)),
+          ),
           Expanded(
             child: _DarkSlider(
               value: value / 60,
@@ -638,7 +1077,11 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
           SizedBox(
             width: 30,
-            child: Text('${value.round()}', textAlign: TextAlign.right, style: Txt.mono.copyWith(color: _dim)),
+            child: Text(
+              '${value.round()}',
+              textAlign: TextAlign.right,
+              style: Txt.mono.copyWith(color: _dim),
+            ),
           ),
         ],
       ),
@@ -698,24 +1141,51 @@ class _CameraScreenState extends State<CameraScreen> {
                         Haptics.light();
                         Navigator.push(context, EditRoute(last));
                       },
-                      child: Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: const Color(0x55FFFFFF), width: 1),
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(9),
-                          child: DevelopedImage(last, size: 160),
+                      child: AnimatedRotation(
+                        turns: _turns,
+                        duration: const Duration(milliseconds: 320),
+                        curve: Motion.settle,
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0x55FFFFFF), width: 1),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(9),
+                            child: DevelopedImage(last, size: 160),
+                          ),
                         ),
                       ),
                     ),
             ),
           ),
         ),
-        _Shutter(busy: _shooting, onTap: _feed == null ? null : _shoot),
-        const Expanded(child: SizedBox()),
+        _Shutter(busy: _count > 0, onTap: _feed == null ? null : _shutter),
+        Expanded(
+          child: Center(
+            child: (_feed?.live ?? false)
+                ? GestureDetector(
+                    onTap: _flip,
+                    child: Glass(
+                      dark: true,
+                      radius: 24,
+                      child: SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: AnimatedRotation(
+                          turns: _turns,
+                          duration: const Duration(milliseconds: 320),
+                          curve: Motion.settle,
+                          child: const Icon(Icons.flip_camera_ios_outlined, size: 22, color: _ink),
+                        ),
+                      ),
+                    ),
+                  )
+                : const SizedBox(),
+          ),
+        ),
       ],
     );
   }
@@ -801,6 +1271,56 @@ class _LoupePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_LoupePainter o) => o.image != image;
+}
+
+/// Thirds, as the system camera's grid.
+class _GridPainter extends CustomPainter {
+  const _GridPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()
+      ..color = const Color(0x40FFFFFF)
+      ..strokeWidth = 0.6;
+    for (var i = 1; i < 3; i++) {
+      final x = size.width * i / 3, y = size.height * i / 3;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), p);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_GridPainter o) => false;
+}
+
+/// The exposure beside the focus box: a sun on a line, up for brighter.
+class _BiasPainter extends CustomPainter {
+  _BiasPainter(this.t);
+  final double t; // -1…1
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final x = size.width / 2;
+    final y = size.height / 2 - t * (size.height / 2 - 8);
+    final p = Paint()
+      ..color = _CameraScreenState._ink
+      ..strokeWidth = 1
+      ..strokeCap = StrokeCap.round;
+    const gap = 10.0;
+    if (t != 0) {
+      if (y - gap > 0) canvas.drawLine(Offset(x, 0), Offset(x, y - gap), p);
+      if (y + gap < size.height) canvas.drawLine(Offset(x, y + gap), Offset(x, size.height), p);
+    }
+    canvas.drawCircle(Offset(x, y), 3.4, p..style = PaintingStyle.fill);
+    for (var i = 0; i < 8; i++) {
+      final a = i * math.pi / 4;
+      final u = Offset(math.cos(a), math.sin(a));
+      canvas.drawLine(Offset(x, y) + u * 5.4, Offset(x, y) + u * 7.6, p);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BiasPainter o) => o.t != t;
 }
 
 /// A slider for the dark panel: a hairline track and a soft pill thumb.
