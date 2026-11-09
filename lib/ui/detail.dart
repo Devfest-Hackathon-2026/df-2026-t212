@@ -258,16 +258,24 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                 Column(
                   children: [
                     SizedBox(height: pad.top + 4),
-                    Row(
-                      children: [
-                        TextAction('Close', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
-                        const Spacer(),
-                        Opacity(
-                          opacity: fade,
-                          child: Text('${_index + 1} / ${_items.length}', style: Txt.mono),
-                        ),
-                        const SizedBox(width: 16),
-                      ],
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Row(
+                        children: [
+                          IconAction(G.close, label: 'Close', onTap: () => Navigator.pop(context)),
+                          Expanded(
+                            child: Opacity(
+                              opacity: fade,
+                              child: Text(
+                                '${_index + 1} / ${_items.length}',
+                                style: Txt.mono,
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                          IconAction(G.more, label: 'More', onTap: _more),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -390,30 +398,30 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                                   ],
                           ),
                         ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            TextAction('Edit', onTap: () => Navigator.of(context).push(EditRoute(item))),
-                            const Spacer(),
-                            IconAction(
-                              Icons.favorite_border_rounded,
-                              activeIcon: Icons.favorite_rounded,
-                              active: item.favorite,
-                              label: 'Favorite',
-                              onTap: () {
-                                Haptics.light();
-                                s.toggleFavorite(item);
-                              },
-                            ),
-                            const SizedBox(width: 8),
-                            IconAction(Icons.ios_share_rounded, label: 'Share', onTap: _share),
-                            const SizedBox(width: 8),
-                            if (widget.review) ...[
-                              IconAction(Icons.delete_outline_rounded, label: 'Delete', onTap: _delete),
-                              const SizedBox(width: 8),
+                        const SizedBox(height: 14),
+                        // Three places, the weight in the middle: Edit is
+                        // what this screen leads to.
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 28),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              IconAction(G.share, label: 'Share', onTap: _share),
+                              _EditButton(onTap: () => Navigator.of(context).push(EditRoute(item))),
+                              widget.review
+                                  ? IconAction(G.trash, label: 'Delete', onTap: _delete)
+                                  : IconAction(
+                                      G.heart,
+                                      activeIcon: G.heartFill,
+                                      active: item.favorite,
+                                      label: 'Favorite',
+                                      onTap: () {
+                                        Haptics.light();
+                                        s.toggleFavorite(item);
+                                      },
+                                    ),
                             ],
-                            IconAction(Icons.more_horiz_rounded, label: 'More', onTap: _more),
-                          ],
+                          ),
                         ),
                       ],
                     ),
@@ -442,6 +450,49 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
       }
     }
   }
+}
+
+/// The one filled control on the screen, so the eye lands on it.
+class _EditButton extends StatefulWidget {
+  const _EditButton({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  State<_EditButton> createState() => _EditButtonState();
+}
+
+class _EditButtonState extends State<_EditButton> {
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: 'Edit',
+        child: GestureDetector(
+          onTapDown: (_) => setState(() => _down = true),
+          onTapCancel: () => setState(() => _down = false),
+          onTapUp: (_) => setState(() => _down = false),
+          onTap: () {
+            Haptics.light();
+            widget.onTap();
+          },
+          child: AnimatedScale(
+            scale: _down ? 0.92 : 1,
+            duration: const Duration(milliseconds: 160),
+            curve: Motion.settle,
+            child: Container(
+              width: 58,
+              height: 58,
+              decoration: const BoxDecoration(
+                color: Neutral.primary,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: Color(0x26000000), blurRadius: 12, offset: Offset(0, 4))],
+              ),
+              child: const Center(child: Glyph(G.edit, size: 24, color: Neutral.surface)),
+            ),
+          ),
+        ),
+      );
 }
 
 class _Original extends StatelessWidget {

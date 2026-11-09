@@ -811,7 +811,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
             child: const Glass(
               dark: true,
               radius: 16,
-              child: SizedBox(width: 46, height: 36, child: Icon(Icons.chevron_left_rounded, size: 26, color: _ink)),
+              child: SizedBox(width: 46, height: 36, child: Center(child: Glyph(G.back, size: 24, color: _ink))),
             ),
           ),
         ),
@@ -828,12 +828,12 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
             children: [
               if (_feed?.flash ?? false)
                 _round(switch (_flashMode) {
-                  'on' => Icons.flash_on_rounded,
-                  'off' => Icons.flash_off_rounded,
-                  _ => Icons.flash_auto_rounded,
+                  'on' => G.flash,
+                  'off' => G.flashOff,
+                  _ => G.flashAuto,
                 }, _cycleFlash),
               const SizedBox(width: 8),
-              _round(_options ? Icons.close_rounded : Icons.tune_rounded, () {
+              _round(_options ? G.close : G.options, () {
                 Haptics.tick();
                 setState(() {
                   _options = !_options;
@@ -847,7 +847,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  Widget _round(IconData icon, VoidCallback onTap) {
+  Widget _round(G icon, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
       child: Glass(
@@ -868,7 +868,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                 opacity: a,
                 child: ScaleTransition(scale: Tween(begin: 0.6, end: 1.0).animate(a), child: child),
               ),
-              child: Icon(icon, key: ValueKey(icon), size: 18, color: _ink),
+              child: Center(key: ValueKey(icon), child: Glyph(icon, size: 20, color: _ink)),
             ),
           ),
         ),
@@ -943,7 +943,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                 onTap: () => _remove(i),
                 child: const Padding(
                   padding: EdgeInsets.only(left: 4, right: 2),
-                  child: Icon(Icons.close_rounded, size: 14, color: _dim),
+                  child: Glyph(G.close, size: 14, color: _dim, weight: 1.4),
                 ),
               ),
             ],
@@ -1232,10 +1232,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     final mp = _mp == 0 && sizes.isNotEmpty ? sizes.last : _mp;
     return [
       opt(
-        Icon(
-          _timer == 0 ? Icons.timer_off_outlined : Icons.timer_outlined,
+        Glyph(
+          _timer == 0 ? G.timerOff : G.timer,
           key: ValueKey(_timer == 0),
-          size: 19,
+          size: 21,
           color: _timer > 0 ? _ink : _dim,
         ),
         _timer > 0,
@@ -1249,10 +1249,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         ),
       ),
       opt(
-        Icon(
-          _grid ? Icons.grid_on_rounded : Icons.grid_off_rounded,
+        Glyph(
+          _grid ? G.grid : G.gridOff,
           key: ValueKey(_grid),
-          size: 19,
+          size: 21,
           color: _grid ? _ink : _dim,
         ),
         _grid,
@@ -1795,7 +1795,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                           turns: _turns,
                           duration: const Duration(milliseconds: 320),
                           curve: Motion.settle,
-                          child: const Icon(Icons.flip_camera_ios_outlined, size: 22, color: _ink),
+                          child: const Center(child: Glyph(G.flip, size: 24, color: _ink)),
                         ),
                       ),
                     ),

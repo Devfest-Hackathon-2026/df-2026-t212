@@ -107,9 +107,9 @@ class _ShellState extends State<Shell> {
                       _RoundAction(onTap: () {
                         Haptics.light();
                         ImportSheet.show(context);
-                      }, child: const _PlusGlyph()),
+                      }, child: const Glyph(G.plus, size: 22, color: Neutral.primary)),
                       Container(width: 0.6, height: 22, color: const Color(0x1F000000)),
-                      _RoundAction(onTap: _camera, child: const _CameraGlyph()),
+                      _RoundAction(onTap: _camera, child: const Glyph(G.camera, size: 26, color: Neutral.primary)),
                     ]),
                   ),
                 ],
@@ -264,56 +264,3 @@ class _RoundAction extends StatelessWidget {
       );
 }
 
-class _PlusGlyph extends StatelessWidget {
-  const _PlusGlyph();
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-        width: 20,
-        height: 20,
-        child: Stack(alignment: Alignment.center, children: [
-          Container(width: 18, height: 1.6, decoration: BoxDecoration(color: Neutral.primary, borderRadius: BorderRadius.circular(1))),
-          Container(width: 1.6, height: 18, decoration: BoxDecoration(color: Neutral.primary, borderRadius: BorderRadius.circular(1))),
-        ]),
-      );
-}
-
-class _CameraGlyph extends StatelessWidget {
-  const _CameraGlyph();
-
-  @override
-  Widget build(BuildContext context) => CustomPaint(size: const Size(24, 20), painter: _CameraPainter());
-}
-
-class _CameraPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()
-      ..color = Neutral.primary
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6
-      ..strokeJoin = StrokeJoin.round;
-    final w = size.width, h = size.height;
-    // Body with the viewfinder hump, drawn as one outline.
-    final body = Path()
-      ..moveTo(3, 5)
-      ..lineTo(7.5, 5)
-      ..lineTo(9.2, 2.2)
-      ..lineTo(w - 9.2, 2.2)
-      ..lineTo(w - 7.5, 5)
-      ..lineTo(w - 3, 5)
-      ..arcToPoint(Offset(w - 1, 7), radius: const Radius.circular(2))
-      ..lineTo(w - 1, h - 3)
-      ..arcToPoint(Offset(w - 3, h - 1), radius: const Radius.circular(2))
-      ..lineTo(3, h - 1)
-      ..arcToPoint(Offset(1, h - 3), radius: const Radius.circular(2))
-      ..lineTo(1, 7)
-      ..arcToPoint(const Offset(3, 5), radius: const Radius.circular(2))
-      ..close();
-    canvas.drawPath(body, p);
-    canvas.drawCircle(Offset(w / 2, (5 + h - 1) / 2 + 0.3), 4.2, p);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}

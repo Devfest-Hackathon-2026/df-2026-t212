@@ -10,6 +10,9 @@ import '../../core/renderer.dart';
 import '../../data/places.dart';
 import '../../data/store.dart';
 import '../theme.dart';
+import 'glyphs.dart';
+
+export 'glyphs.dart';
 
 Color colorOf(KeptColor c) {
   final rgb = oklabToRgb8(c.l, c.a, c.b);
@@ -177,10 +180,10 @@ class TileHeart extends StatelessWidget {
           offset: tileShadow.offset,
           child: ImageFiltered(
             imageFilter: ui.ImageFilter.blur(sigmaX: tileShadow.blurSigma, sigmaY: tileShadow.blurSigma),
-            child: Icon(Icons.favorite_rounded, size: size, color: tileShadow.color),
+            child: Glyph(G.heartFill, size: size, color: tileShadow.color, weight: 1),
           ),
         ),
-        Icon(Icons.favorite_rounded, size: size, color: Colors.white),
+        Glyph(G.heartFill, size: size, color: Colors.white, weight: 1),
       ],
     );
   }
@@ -459,8 +462,8 @@ class TextAction extends StatelessWidget {
 /// An icon action for states a word cannot show at a glance (favorite on or off).
 class IconAction extends StatelessWidget {
   const IconAction(this.icon, {super.key, required this.label, this.onTap, this.activeIcon, this.active = false});
-  final IconData icon;
-  final IconData? activeIcon;
+  final G icon;
+  final G? activeIcon;
   final bool active;
 
   /// For screen readers.
@@ -491,10 +494,10 @@ class IconAction extends StatelessWidget {
                 scale: Tween(begin: 0.6, end: 1.0).animate(CurvedAnimation(parent: a, curve: Motion.settle)),
                 child: FadeTransition(opacity: a, child: c),
               ),
-              child: Icon(
-                active && activeIcon != null ? activeIcon : icon,
+              child: Glyph(
+                active && activeIcon != null ? activeIcon! : icon,
                 key: ValueKey(active),
-                size: 23,
+                size: 24,
                 color: onTap == null ? Neutral.tertiary : Neutral.primary,
               ),
             ),
