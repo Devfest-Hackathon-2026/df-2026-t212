@@ -27,7 +27,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Take a photo to develop it right away.</string>
+	<string>See the developed look live while you take a photo.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Photos you take with After Hue are placed on your map.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>After Hue saves photos you take with its camera to your library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

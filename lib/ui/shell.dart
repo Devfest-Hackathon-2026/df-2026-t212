@@ -2,10 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:photo_manager/photo_manager.dart';
 
-import '../data/store.dart';
+import 'camera.dart';
 import 'import_sheet.dart';
 import 'map_screen.dart';
 import 'photos.dart';
@@ -26,24 +24,9 @@ class Shell extends StatefulWidget {
 class _ShellState extends State<Shell> {
   int _tab = 0;
 
-  Future<void> _camera() async {
+  void _camera() {
     Haptics.firm();
-    try {
-      final shot = await ImagePicker().pickImage(source: ImageSource.camera, requestFullMetadata: true);
-      if (shot == null) return;
-      // The original goes to the photo library; After Hue keeps only the edit.
-      await PhotoManager.editor.saveImageWithPath(shot.path, title: shot.name);
-      await Store.instance.refresh();
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Neutral.primary,
-          content: Text('Camera is not available on this device.', style: Txt.small.copyWith(color: Neutral.surface)),
-        ),
-      );
-    }
+    Navigator.push(context, CameraRoute());
   }
 
   @override

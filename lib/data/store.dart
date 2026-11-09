@@ -440,6 +440,44 @@ class Store extends ChangeNotifier {
     return added;
   }
 
+  /// A photo taken with After Hue's camera, developed as it was seen. The
+  /// person chose its colors, so the agent leaves it alone. Called before the
+  /// library refresh finds it, so it is not brought in twice.
+  PhotoItem addCaptured({
+    required String id,
+    required DateTime taken,
+    required int width,
+    required int height,
+    double? lat,
+    double? lng,
+    required Recipe recipe,
+  }) {
+    final kept = recipe.colors.isNotEmpty;
+    final it = PhotoItem(
+      id: id,
+      taken: taken,
+      lat: lat,
+      lng: lng,
+      width: width,
+      height: height,
+      edit: recipe,
+      state: kept ? Develop.done : Develop.manual,
+      picked: true,
+      judged: true,
+      seen: true,
+    );
+    final known = _byKey[id];
+    if (known != null) {
+      items.remove(known);
+      _byKey.remove(id);
+    }
+    _add(it);
+    _sortItems();
+    _save();
+    notifyListeners();
+    return it;
+  }
+
   /// Already in the library (photos the agent passed over do not count).
   bool inLibrary(String id) => _byKey[id]?.shown ?? false;
 

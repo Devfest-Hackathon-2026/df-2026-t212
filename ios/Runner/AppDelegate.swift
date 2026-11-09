@@ -16,6 +16,9 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "AppleJudge") {
       AppleJudge.register(messenger: registrar.messenger())
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "LiveCamera") {
+      LiveCamera.register(registrar: registrar)
+    }
   }
 }
 
