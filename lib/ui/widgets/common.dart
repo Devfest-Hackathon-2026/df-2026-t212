@@ -1,8 +1,7 @@
 import 'dart:io';
-import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/recipe.dart';
@@ -641,14 +640,15 @@ class SplitSwatch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final r = size * 0.32;
+    // A dot, not a tile: a place on a map is a point. Its colors are cut
+    // like a pie from twelve o'clock, so each one keeps an equal share.
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: Neutral.surface,
-        borderRadius: BorderRadius.circular(r),
-        boxShadow: const [
+        shape: BoxShape.circle,
+        boxShadow: [
           BoxShadow(
             color: Color(0x26000000),
             blurRadius: 6,
@@ -657,16 +657,37 @@ class SplitSwatch extends StatelessWidget {
         ],
       ),
       padding: EdgeInsets.all(border),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(math.max(0, r - border)),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final c in colors)
-              Expanded(child: ColoredBox(color: colorOf(c))),
-          ],
-        ),
+      child: CustomPaint(
+        size: Size.square(size - border * 2),
+        painter: PiePainter([for (final c in colors) colorOf(c)]),
       ),
     );
   }
+}
+
+class PiePainter extends CustomPainter {
+  PiePainter(this.colors);
+  final List<Color> colors;
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    if (colors.isEmpty) return;
+    final rect = Offset.zero & s;
+    final sweep = 2 * 3.141592653589793 / colors.length;
+    final p = Paint()..isAntiAlias = true;
+    for (var i = 0; i < colors.length; i++) {
+      p.color = colors[i];
+      // Overlap a hair so no seam of white shows between slices.
+      canvas.drawArc(
+        rect,
+        -3.141592653589793 / 2 + sweep * i,
+        sweep + (i == colors.length - 1 ? 0 : 0.02),
+        true,
+        p,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(PiePainter old) => !listEquals(old.colors, colors);
 }

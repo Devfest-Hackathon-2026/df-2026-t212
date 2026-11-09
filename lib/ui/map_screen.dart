@@ -196,7 +196,12 @@ class _MapScreenState extends State<MapScreen>
   void _fit(List<PhotoItem> located) {
     // Before the style is in, or while the tab is hidden (the native view has
     // no size then), the map ignores camera moves.
-    if (located.isEmpty || _map == null || !_styled || !TickerMode.valuesOf(context).enabled) return;
+    if (located.isEmpty ||
+        _map == null ||
+        !_styled ||
+        !TickerMode.valuesOf(context).enabled) {
+      return;
+    }
     // Photos arrive in batches; keep framing all of them until the person
     // takes the map into their own hands.
     if (_fitted && (_wandered || located.length == _framedCount)) return;
@@ -205,7 +210,12 @@ class _MapScreenState extends State<MapScreen>
     _framedCount = located.length;
     // The native view takes a moment to get its size after the tab appears.
     Future.delayed(Duration(milliseconds: first ? 180 : 0), () {
-      if (mounted) _frame(located, duration: first ? Duration.zero : const Duration(milliseconds: 500));
+      if (mounted) {
+        _frame(
+          located,
+          duration: first ? Duration.zero : const Duration(milliseconds: 500),
+        );
+      }
     });
   }
 
@@ -586,12 +596,12 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
           final left = (point.dx - 66)
               .clamp(safe.left, math.max(safe.left, safe.right - 132))
               .toDouble();
-          final below = point.dy - 172 < safe.top;
+          final below = point.dy - _pinH < safe.top;
           final rect = Rect.fromLTWH(
             left,
-            below ? point.dy : point.dy - 172,
+            below ? point.dy : point.dy - _pinH,
             132,
-            172,
+            _pinH,
           );
           if (rect.bottom > safe.bottom) continue;
           if (used.any((r) => r.inflate(10).overlaps(rect))) continue;
@@ -703,31 +713,29 @@ class _Stack extends StatelessWidget {
       clipBehavior: Clip.none,
       alignment: Alignment.center,
       children: [
+        // A second dot peeking from behind says "more than one".
         Transform.translate(
-          offset: const Offset(-3.5, -3),
-          child: Transform.rotate(
-            angle: -0.16,
-            child: Container(
-              width: 26,
-              height: 26,
-              decoration: BoxDecoration(
-                color: Neutral.surface,
-                borderRadius: BorderRadius.circular(26 * 0.32),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x1F000000),
-                    blurRadius: 5,
-                    offset: Offset(0, 1),
-                  ),
-                ],
-              ),
+          offset: const Offset(-5, -3),
+          child: Container(
+            width: 24,
+            height: 24,
+            decoration: const BoxDecoration(
+              color: Neutral.surface,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0x24000000),
+                  blurRadius: 5,
+                  offset: Offset(0, 1),
+                ),
+              ],
             ),
           ),
         ),
         SplitSwatch(c.colors.take(5).toList(), size: 26, border: 2.2),
         Positioned(
-          right: -2,
-          top: -3,
+          right: -5,
+          top: -5,
           child: Container(
             constraints: const BoxConstraints(minWidth: 17),
             height: 17,
@@ -844,6 +852,9 @@ class _Card extends StatelessWidget {
 }
 
 /// Glass bubble with a photo, pinned to where it was taken.
+const _pinGap = 15.0;
+const _pinH = 156 + 10 + _pinGap;
+
 class _Pin extends StatelessWidget {
   const _Pin(
     this.item, {
@@ -938,20 +949,8 @@ class _Pin extends StatelessWidget {
               ),
             ),
           ),
-          Align(
-            alignment: Alignment(anchor, 0),
-            child: Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                color: item.hues.isEmpty
-                    ? Neutral.primary
-                    : colorOf(item.hues.first),
-                shape: BoxShape.circle,
-                border: Border.all(color: Neutral.surface, width: 1.2),
-              ),
-            ),
-          ),
+          // The marker itself marks the place; the tail stops just short of it.
+          const SizedBox(height: _pinGap),
         ],
       ),
     );
