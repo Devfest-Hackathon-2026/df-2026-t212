@@ -826,13 +826,23 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       // The hand is at the shutter: Width and Edge sit there,
                       // in the room between the view and the shutter, their
                       // wheel opening up over the view as the zoom's does.
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: bottom,
-                        height: band,
-                        child: _dock(),
-                      ),
+                      if (_sideways)
+                        Positioned(
+                          top: top + 24,
+                          left: _quarter == 1 ? view.dx + 10 : null,
+                          right: _quarter == -1 ? view.dx + 10 : null,
+                          height: h - 48,
+                          width: 32,
+                          child: _dock(sideways: true),
+                        )
+                      else
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: bottom,
+                          height: band,
+                          child: _dock(),
+                        ),
                       Positioned(
                         left: 0,
                         right: 0,
@@ -1217,19 +1227,24 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   }
 
   /// While the add slot is selected, explain how to pick from the preview.
-  Widget _dock() {
+  Widget _dock({bool sideways = false}) {
     final show = _feed != null && _addSlot >= 0 && _active == _addSlot &&
-        !_options && !_sideways && _loupe == null && _error == null;
+        !_options && _loupe == null && _error == null;
+    final label = Text('Touch and hold a color in the preview to keep it',
+      textAlign: TextAlign.center, style: Txt.small.copyWith(color: sideways ? _ink : _dim));
     return IgnorePointer(
       child: AnimatedOpacity(
         opacity: show ? 1 : 0,
         duration: Duration(milliseconds: show ? 280 : 140),
         curve: show ? Motion.settle : Curves.easeInCubic,
-        child: Center(
-          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Text('Touch and hold a color in the preview to keep it', textAlign: TextAlign.center,
-              style: Txt.small.copyWith(color: _dim))),
-        ),
+        child: sideways
+            ? RotatedBox(
+                quarterTurns: _quarter,
+                child: Center(child: _tray(radius: 14,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), child: label)),
+              )
+            : Center(child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20), child: label)),
       ),
     );
   }
