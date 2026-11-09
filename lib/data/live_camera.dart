@@ -100,6 +100,10 @@ class LiveCamera {
   /// The photo size in megapixels; 0 for the largest.
   static Future<void> resolution(int mp) => _ch.invokeMethod('resolution', {'mp': mp});
 
+  /// Lets the phone go to the ultra wide by itself close up, or keeps it on
+  /// the main lens.
+  static Future<void> macro(bool on) => _ch.invokeMethod('macro', {'on': on});
+
   /// To the camera on the other side.
   static Future<LiveFeed> flip() async => LiveFeed.from((await _ch.invokeMapMethod<String, Object?>('flip'))!);
 

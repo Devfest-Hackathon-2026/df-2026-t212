@@ -26,6 +26,10 @@ enum G {
   up,
   camera,
   plus,
+
+  /// Close up: the ultra wide, focusing near.
+  macro,
+  macroOff,
 }
 
 /// Draws [g] centered on [at], for painters that place glyphs themselves.
@@ -142,7 +146,37 @@ class _GlyphPainter extends CustomPainter {
       seg(17.6, 6.9, 18.7, 5.8);
     }
 
+    // A tulip, as close-up focus is drawn everywhere.
+    void tulip() {
+      canvas.drawPath(
+        Path()
+          ..moveTo(12, 13.2)
+          ..cubicTo(8.4, 13.2, 6.9, 10.4, 7.1, 5.4)
+          ..lineTo(9.7, 7.3)
+          ..lineTo(12, 4.2)
+          ..lineTo(14.3, 7.3)
+          ..lineTo(16.9, 5.4)
+          ..cubicTo(17.1, 10.4, 15.6, 13.2, 12, 13.2)
+          ..close(),
+        line,
+      );
+      seg(12, 13.2, 12, 20.4);
+      for (final d in [-1.0, 1.0]) {
+        canvas.drawPath(
+          Path()
+            ..moveTo(12, 20.4)
+            ..cubicTo(12 + d * -2.6, 20.4, 12 + d * -5.6, 19, 12 + d * -6.4, 15.6)
+            ..cubicTo(12 + d * -3.4, 15.8, 12 + d * -1.2, 17.4, 12, 20.4),
+          line,
+        );
+      }
+    }
+
     switch (g) {
+      case G.macro:
+        tulip();
+      case G.macroOff:
+        slashed(tulip);
       case G.heart:
         canvas.drawPath(heart(), line);
       case G.heartFill:

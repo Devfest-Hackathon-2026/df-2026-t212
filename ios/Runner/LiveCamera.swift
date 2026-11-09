@@ -51,6 +51,15 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   private var resolution = 0  // megapixels; 0 is the largest
   private var locked = false
   private var subjectObserver: NSObjectProtocol?
+
+  /// Macro, as the system camera's: on, the phone moves to the ultra wide
+  /// by itself close up; off, it stays on the main lens until the subject
+  /// is left behind.
+  private var macroOn = true
+  private var macroWatch: [NSKeyValueObservation] = []
+  /// Where the main lens focused once macro was turned off, close up.
+  private var macroRef: Float?
+  private var macroSent: (Bool, Bool)?
   private let motion = CMMotionManager()
   /// How the phone is held, as the back camera's rotation: 90 upright, 0
   /// top to the left, 180 top to the right, 270 upside down.
@@ -157,6 +166,9 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       result(nil)
     case "flip":
       flip(result)
+    case "macro":
+      setMacro(args["on"] as? Bool ?? true)
+      result(nil)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -212,6 +224,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     watchMotion(false)
     zoomLink?.invalidate()
     zoomLink = nil
+    macroWatch = []
     queue.async {
       if self.session.isRunning { self.session.stopRunning() }
     }
@@ -313,6 +326,7 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     lens.unlockForConfiguration()
     locked = false
     watchSubject(lens)
+    watchMacro(lens)
   }
 
   /// What depends on the lens: the photo size, the fast shutter, which way
@@ -560,6 +574,105 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
       self.backToAuto(camera)
       camera.unlockForConfiguration()
       self.emit("focusReset")
+    }
+  }
+
+  // MARK: - Macro
+
+  private static func constituent(_ lens: AVCaptureDevice, _ type: AVCaptureDevice.DeviceType) -> AVCaptureDevice? {
+    lens.constituentDevices.first { $0.deviceType == type }
+  }
+
+  /// Watches for the phone going to the ultra wide close up, so the screen
+  /// can say which lens it is on and offer to stop it.
+  private func watchMacro(_ lens: AVCaptureDevice) {
+    macroWatch = []
+    macroRef = nil
+    guard lens.isVirtualDevice, lens.activePrimaryConstituentDeviceSwitchingBehavior != .unsupported,
+      Self.constituent(lens, .builtInUltraWideCamera) != nil
+    else {
+      reportMacro()
+      return
+    }
+    let again: () -> Void = { [weak self] in DispatchQueue.main.async { self?.reportMacro() } }
+    macroWatch.append(lens.observe(\.activePrimaryConstituent) { _, _ in again() })
+    macroWatch.append(lens.observe(\.videoZoomFactor) { _, _ in again() })
+    if let wide = Self.constituent(lens, .builtInWideAngleCamera) {
+      macroWatch.append(wide.observe(\.lensPosition) { _, _ in again() })
+    }
+    if !macroOn { applyMacro(lens) }
+    reportMacro()
+  }
+
+  /// At the main lens's zoom or past it, where the system camera would call
+  /// the ultra wide macro.
+  private func atMain(_ lens: AVCaptureDevice) -> Bool {
+    guard let first = lens.virtualDeviceSwitchOverVideoZoomFactors.first?.doubleValue else { return false }
+    return Double(lens.videoZoomFactor) >= first - 0.01
+  }
+
+  private func setMacro(_ on: Bool) {
+    guard let lens = camera, !macroWatch.isEmpty, on != macroOn else { return }
+    macroOn = on
+    macroRef = nil
+    applyMacro(lens)
+    if !on {
+      // Once the main lens is back and has found its nearest focus, that is
+      // where "still close" is measured from.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+        guard let self, !self.macroOn, let lens = self.camera,
+          let wide = Self.constituent(lens, .builtInWideAngleCamera)
+        else { return }
+        self.macroRef = wide.lensPosition
+        self.reportMacro()
+      }
+    }
+    reportMacro()
+  }
+
+  private func applyMacro(_ lens: AVCaptureDevice) {
+    guard (try? lens.lockForConfiguration()) != nil else { return }
+    if macroOn {
+      lens.setPrimaryConstituentDeviceSwitchingBehavior(.auto, restrictedSwitchingBehaviorConditions: [])
+    } else {
+      // Lenses change with the zoom only, never by how near the subject is.
+      lens.setPrimaryConstituentDeviceSwitchingBehavior(.restricted, restrictedSwitchingBehaviorConditions: [.videoZoomChanged])
+      // A nudge of the zoom, so the main lens comes back now.
+      let z = lens.videoZoomFactor
+      lens.videoZoomFactor = min(z + 0.01, lens.maxAvailableVideoZoomFactor)
+      lens.videoZoomFactor = z
+    }
+    lens.unlockForConfiguration()
+  }
+
+  private func reportMacro() {
+    var shown = false
+    if let lens = camera, !macroWatch.isEmpty {
+      if !atMain(lens) {
+        // Wider than the main lens: no macro to speak of, and off ends.
+        if !macroOn {
+          macroOn = true
+          applyMacro(lens)
+        }
+      } else if macroOn {
+        shown = lens.activePrimaryConstituent?.deviceType == .builtInUltraWideCamera
+      } else if let ref = macroRef, let wide = Self.constituent(lens, .builtInWideAngleCamera) {
+        // Off, the main lens holds as near as it can focus; once its focus
+        // moves well away, the subject has been left behind, and macro is
+        // back on, as the system camera's.
+        shown = abs(wide.lensPosition - ref) < 0.2
+        if !shown {
+          macroOn = true
+          macroRef = nil
+          applyMacro(lens)
+        }
+      } else {
+        shown = true
+      }
+    }
+    if macroSent.map({ $0 != (shown, macroOn) }) ?? true {
+      macroSent = (shown, macroOn)
+      emit("macro", ["shown": shown, "on": macroOn])
     }
   }
 

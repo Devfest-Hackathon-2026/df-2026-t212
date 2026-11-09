@@ -53,6 +53,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
 
   /// The slot a tap fills: a kept color, or the empty slot after them.
   int _active = 0;
+
+  /// The color set last before the empty place was chosen: a new color
+  /// starts with its Width and Edge.
+  int? _from;
   bool _panel = false;
 
   /// The colors in view, each keeping its place while it stays in view, so
@@ -107,6 +111,12 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   int _timer = 0;
   int _count = 0;
   Timer? _countdown;
+
+  /// Close up on the ultra wide, or kept off it: shown while it matters,
+  /// a moment longer, and named for a moment when it is turned.
+  bool _macro = false, _macroOn = true;
+  Timer? _macroLinger, _macroNoteTimer;
+  String? _macroNote;
   bool _grid = false;
   int _mp = 0;
   bool _options = false;
@@ -166,6 +176,8 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   void dispose() {
     _scan?.cancel();
     _focusFade?.cancel();
+    _macroLinger?.cancel();
+    _macroNoteTimer?.cancel();
     _countdown?.cancel();
     _pullBack.dispose();
     _fly.dispose();
@@ -373,6 +385,22 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     switch (event) {
       case 'shutter':
         _shutter();
+      case 'macro':
+        final m = (args as Map?) ?? const {};
+        final shown = m['shown'] == true;
+        final on = m['on'] != false;
+        _macroLinger?.cancel();
+        if (shown) {
+          setState(() {
+            _macro = true;
+            _macroOn = on;
+          });
+        } else {
+          setState(() => _macroOn = on);
+          _macroLinger = Timer(const Duration(milliseconds: 1200), () {
+            if (mounted) setState(() => _macro = false);
+          });
+        }
       case 'focusReset':
         if (!_locked && _focusAt != null) {
           setState(() {
@@ -532,6 +560,15 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
           ..a = c.a
           ..b = c.b;
       } else if (_addSlot >= 0) {
+        final from = _from;
+        final like = from != null && from < _r.colors.length
+            ? _r.colors[from]
+            : (_r.colors.isEmpty ? null : _r.colors.last);
+        if (like != null) {
+          c
+            ..width = like.width
+            ..softness = like.softness;
+        }
         _r.colors.add(c);
         _active = _r.colors.length - 1;
       }
@@ -553,6 +590,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     Haptics.light();
     setState(() {
       _r.colors.removeAt(i);
+      _from = null;
       _active = _r.colors.length < Recipe.maxColors ? _r.colors.length : _r.colors.length - 1;
     });
     _look();
@@ -912,7 +950,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                 _slot(
                   key: const ValueKey('add'),
                   on: _active == _addSlot,
-                  onTap: () => setState(() => _active = _addSlot),
+                  onTap: () => setState(() {
+                    if (_active < _r.colors.length) _from = _active;
+                    _active = _addSlot;
+                  }),
                   dot: const SizedBox.square(dimension: 20, child: CustomPaint(painter: _EmptyDot())),
                 ),
               if (cur != null) ...[
@@ -1035,6 +1076,95 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         ),
       ),
     );
+  }
+
+  /// Macro, by the zoom, as the system camera's: a tulip that shows up close,
+  /// solid while the phone is on the ultra wide, struck through while it is
+  /// kept off; tapped, it turns, and says which for a moment.
+  Widget _macroButton() {
+    final show = _macro && _dial != 'zoom' && _dial != 'reach' && !_panel;
+    final on = _macroOn;
+    return IgnorePointer(
+      ignoring: !show,
+      child: AnimatedOpacity(
+        opacity: show ? 1 : 0,
+        duration: Duration(milliseconds: show ? 220 : 160),
+        curve: show ? Motion.settle : Curves.easeInCubic,
+        child: AnimatedScale(
+          scale: show ? 1 : 0.6,
+          duration: Duration(milliseconds: show ? 320 : 160),
+          curve: show ? Motion.settle : Curves.easeInCubic,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _toggleMacro,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Motion.settle,
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: on ? _ink : const Color(0xA6141414),
+                    border: Border.all(color: const Color(0x26FFFFFF), width: 0.6),
+                  ),
+                  child: AnimatedRotation(
+                    turns: _turns,
+                    duration: const Duration(milliseconds: 320),
+                    curve: Motion.settle,
+                    child: Center(
+                      child: Glyph(
+                        on ? G.macro : G.macroOff,
+                        size: 20,
+                        color: on ? const Color(0xFF111111) : _ink,
+                        weight: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              AnimatedOpacity(
+                opacity: _macroNote != null ? 1 : 0,
+                duration: Duration(milliseconds: _macroNote != null ? 200 : 260),
+                curve: Motion.settle,
+                child: RotatedBox(
+                  // Upright for the person, however the phone is held.
+                  quarterTurns: switch (_quarter) {
+                    -1 => 3,
+                    1 => 1,
+                    2 => 2,
+                    _ => 0,
+                  },
+                  child: _tray(
+                    radius: 12,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    child: Text(_macroNote ?? (on ? 'Macro' : 'Macro Off'), style: Txt.small.copyWith(color: _ink)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _toggleMacro() {
+    Haptics.tick();
+    final on = !_macroOn;
+    _macroLinger?.cancel();
+    setState(() {
+      _macroOn = on;
+      _macroNote = on ? 'Macro' : 'Macro Off';
+    });
+    _macroNoteTimer?.cancel();
+    _macroNoteTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => _macroNote = null);
+    });
+    LiveCamera.macro(on);
   }
 
   /// Until a color is kept, upright, how to keep one, where Width and
@@ -1387,6 +1517,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                   ),
                 ),
                 for (final p in _pings) _PingRing(key: ValueKey(p.id), ping: p),
+                Positioned(left: 14, bottom: 12, child: _macroButton()),
                 if (feed != null && feed.stops.length > 1)
                   Positioned(
                     left: 0,
@@ -1844,7 +1975,7 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
 
   void _hideSoon() {
     _close?.cancel();
-    _close = Timer(const Duration(milliseconds: 650), () {
+    _close = Timer(const Duration(milliseconds: 300), () {
       if (!mounted) return;
       _open.animateBack(0, duration: const Duration(milliseconds: 220), curve: Motion.settle);
       widget.onOpen(false);
@@ -2283,7 +2414,7 @@ class _ReachWheelState extends State<_ReachWheel> with TickerProviderStateMixin 
     }
   }
 
-  void _hideSoon([int ms = 650]) {
+  void _hideSoon([int ms = 300]) {
     _close?.cancel();
     _close = Timer(Duration(milliseconds: ms), () {
       if (!mounted) return;
@@ -2320,7 +2451,7 @@ class _ReachWheelState extends State<_ReachWheel> with TickerProviderStateMixin 
   void _tap(Offset p, Size s) {
     if (_open.value <= 0.5) {
       _show(_nearest(p, s));
-      _hideSoon(1100);
+      _hideSoon(900);
       return;
     }
     final g = _g(s);
@@ -2492,6 +2623,27 @@ class _ReachWheelPainter extends CustomPainter {
   /// A name and its number side by side, centered on [at] together, upright
   /// for the person.
   void _pair(Canvas canvas, String name, String number, Offset at, double size, double nameAlpha, double alpha, bool bold) {
+    final (a, b) = _lay(name, number, size, nameAlpha, alpha, bold);
+    const gap = 5.0;
+    final w = a.width + gap + b.width;
+    canvas.save();
+    canvas.translate(at.dx, at.dy);
+    canvas.rotate(turns * 2 * math.pi);
+    a.paint(canvas, Offset(-w / 2, -a.height / 2));
+    b.paint(canvas, Offset(-w / 2 + a.width + gap, -b.height / 2));
+    canvas.restore();
+  }
+
+  /// How far the pair reaches up and down on the screen as it is turned,
+  /// so it can sit inside the ticks, never across them.
+  double _extent(String name, String number, double size) {
+    final (a, b) = _lay(name, number, size, 1, 1, true);
+    final w = a.width + 5 + b.width, h = a.height;
+    final th = turns * 2 * math.pi;
+    return (w * math.sin(th)).abs() + (h * math.cos(th)).abs();
+  }
+
+  (TextPainter, TextPainter) _lay(String name, String number, double size, double nameAlpha, double alpha, bool bold) {
     TextPainter lay(String text, Color color, FontWeight weight) => TextPainter(
       text: TextSpan(
         text: text,
@@ -2504,16 +2656,10 @@ class _ReachWheelPainter extends CustomPainter {
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    final a = lay(name, ink.withValues(alpha: nameAlpha), FontWeight.w500);
-    final b = lay(number, ink.withValues(alpha: alpha), bold ? FontWeight.w600 : FontWeight.w500);
-    const gap = 5.0;
-    final w = a.width + gap + b.width;
-    canvas.save();
-    canvas.translate(at.dx, at.dy);
-    canvas.rotate(turns * 2 * math.pi);
-    a.paint(canvas, Offset(-w / 2, -a.height / 2));
-    b.paint(canvas, Offset(-w / 2 + a.width + gap, -b.height / 2));
-    canvas.restore();
+    return (
+      lay(name, ink.withValues(alpha: nameAlpha), FontWeight.w500),
+      lay(number, ink.withValues(alpha: alpha), bold ? FontWeight.w600 : FontWeight.w500),
+    );
   }
 
   @override
@@ -2582,7 +2728,9 @@ class _ReachWheelPainter extends CustomPainter {
 
     // The buttons: a glyph and its number each. The one held goes up to
     // the top of the wheel under the mark, the other steps back.
-    final atTop = scaled(g.onRim(0, 34));
+    // Under the mark, its near end clear of the longest ticks.
+    final held = values[active].round().toString();
+    final atTop = scaled(g.onRim(0, math.max(34, 24 + _extent(names[active], held, 14) / 2)));
     for (var i = 0; i < 2; i++) {
       final on = i == active;
       final from = g.button(i.toDouble());
