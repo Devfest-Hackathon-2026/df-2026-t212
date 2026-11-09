@@ -8,12 +8,12 @@ import 'theme.dart';
 import 'widgets/common.dart';
 
 class DetailRoute extends PageRouteBuilder<void> {
-  DetailRoute({required List<PhotoItem> items, required int index})
+  DetailRoute({required List<PhotoItem> items, required int index, bool review = false})
     : super(
         opaque: false,
         transitionDuration: const Duration(milliseconds: 420),
         reverseTransitionDuration: const Duration(milliseconds: 320),
-        pageBuilder: (_, _, _) => DetailScreen(items: items, index: index),
+        pageBuilder: (_, _, _) => DetailScreen(items: items, index: index, review: review),
         transitionsBuilder: (_, a, _, child) => FadeTransition(
           opacity: CurvedAnimation(parent: a, curve: Curves.easeOut),
           child: child,
@@ -23,9 +23,14 @@ class DetailRoute extends PageRouteBuilder<void> {
 
 /// One job: look at one photo, and compare it with the original.
 class DetailScreen extends StatefulWidget {
-  const DetailScreen({super.key, required this.items, required this.index});
+  const DetailScreen({super.key, required this.items, required this.index, this.review = false});
   final List<PhotoItem> items;
   final int index;
+
+  /// Opened from the camera to look back over what was just taken. Only
+  /// here is there a trash button, and it always deletes the shot itself,
+  /// from the iPhone too: a failed shot is thrown away and taken again.
+  final bool review;
 
   @override
   State<DetailScreen> createState() => _DetailScreenState();
@@ -163,9 +168,9 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                 }),
                 row('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
                 row('Why this color?', _why),
-                if (s.deletesFromLibrary(item)) ...[
+                if (!widget.review) ...[
                   const Hairline(),
-                  row('Remove from After Hue only', () {
+                  row('Remove from After Hue', () {
                     s.remove(item);
                     _leave();
                   }, quiet: true),
@@ -403,12 +408,10 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                             const SizedBox(width: 8),
                             IconAction(Icons.ios_share_rounded, label: 'Share', onTap: _share),
                             const SizedBox(width: 8),
-                            IconAction(
-                              Icons.delete_outline_rounded,
-                              label: s.deletesFromLibrary(item) ? 'Delete' : 'Remove from After Hue',
-                              onTap: _delete,
-                            ),
-                            const SizedBox(width: 8),
+                            if (widget.review) ...[
+                              IconAction(Icons.delete_outline_rounded, label: 'Delete', onTap: _delete),
+                              const SizedBox(width: 8),
+                            ],
                             IconAction(Icons.more_horiz_rounded, label: 'More', onTap: _more),
                           ],
                         ),

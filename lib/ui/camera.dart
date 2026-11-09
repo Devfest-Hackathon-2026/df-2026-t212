@@ -88,6 +88,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   int _pingId = 0;
 
   PhotoItem? _last;
+
+  /// Shots taken since the camera opened, oldest first: what the thumbnail
+  /// opens to look back over.
+  final List<PhotoItem> _shots = [];
   bool _blink = false;
 
   // The lens, as the person has set it.
@@ -612,6 +616,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         lng: s.lng,
         recipe: look,
       );
+      _shots.add(it);
       if (mounted) setState(() => _last = it);
     } on PlatformException catch (e) {
       if (!mounted) return;
@@ -1728,15 +1733,18 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       key: ValueKey(last.key),
                       onTap: () async {
                         Haptics.light();
-                        // What was just taken, then the rest, newest first.
-                        final all = Store.instance.items.where((e) => e.shown).toList();
-                        final list = all.contains(last) ? all : [last, ...all];
-                        await Navigator.push(context, DetailRoute(items: list, index: list.indexOf(last)));
-                        // Deleted there: the thumbnail goes with it.
-                        if (mounted && !Store.instance.items.contains(_last)) {
+                        // This session's shots, newest first.
+                        final store = Store.instance;
+                        _shots.retainWhere(store.items.contains);
+                        final list = _shots.reversed.toList();
+                        if (list.isEmpty) return;
+                        await Navigator.push(context, DetailRoute(items: list, index: 0, review: true));
+                        // Deleted there: the thumbnail falls back to the shot before.
+                        _shots.retainWhere(store.items.contains);
+                        if (mounted && !store.items.contains(_last)) {
                           final o = _shotOrig, d = _shotDev;
                           setState(() {
-                            _last = null;
+                            _last = _shots.isEmpty ? null : _shots.last;
                             _shotOrig = null;
                             _shotDev = null;
                           });

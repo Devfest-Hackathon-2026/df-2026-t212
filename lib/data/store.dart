@@ -863,13 +863,10 @@ class Store extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Whether deleting [it] here also deletes it from the iPhone: only a
-  /// photo After Hue's camera took, and only its last copy here.
-  bool deletesFromLibrary(PhotoItem it) => it.captured && !items.any((e) => e.id == it.id && e != it);
-
-  /// Deletes [its] from After Hue. Photos After Hue's camera took leave the
-  /// iPhone too (iOS asks first, and keeps them in Recently Deleted); the
-  /// person's own photos stay in their library. Returns the items that went.
+  /// Deletes shots After Hue's camera took, from the iPhone too (iOS asks
+  /// first, and keeps them in Recently Deleted). Anything else, or a copy
+  /// whose photo another item still shows, only leaves After Hue. Returns
+  /// the items that went.
   Future<List<PhotoItem>> delete(List<PhotoItem> its) async {
     final going = its.toSet();
     final shared = <PhotoItem>[], last = <PhotoItem>[];

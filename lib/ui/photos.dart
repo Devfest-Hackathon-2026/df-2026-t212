@@ -425,11 +425,11 @@ class _PhotosScreenState extends State<PhotosScreen> {
               },
             ),
             TextAction(
-              'Delete',
-              onTap: () async {
-                final gone = await s.delete(sel);
-                if (!mounted || gone.isEmpty) return;
-                Haptics.firm();
+              'Remove',
+              onTap: () {
+                for (final it in sel) {
+                  s.remove(it);
+                }
                 setState(_selected.clear);
               },
             ),
