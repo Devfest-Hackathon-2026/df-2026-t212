@@ -561,7 +561,16 @@ class _CameraScreenState extends State<CameraScreen> {
             turns: _turns,
             duration: const Duration(milliseconds: 320),
             curve: Motion.settle,
-            child: Icon(icon, size: 18, color: _ink),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 240),
+              switchInCurve: Motion.settle,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, a) => FadeTransition(
+                opacity: a,
+                child: ScaleTransition(scale: Tween(begin: 0.6, end: 1.0).animate(a), child: child),
+              ),
+              child: Icon(icon, key: ValueKey(icon), size: 18, color: _ink),
+            ),
           ),
         ),
       ),
@@ -617,6 +626,7 @@ class _CameraScreenState extends State<CameraScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             AnimatedContainer(
+              curve: Motion.settle,
               duration: const Duration(milliseconds: 220),
               width: 18,
               height: 18,
@@ -644,11 +654,29 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  /// The hint, or the options in its place, one easing into the other.
   Widget _hint() {
-    if (_options) return _optionsRow();
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 280),
+      switchInCurve: Motion.settle,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, a) => FadeTransition(
+        opacity: a,
+        child: SlideTransition(
+          position: Tween(begin: const Offset(0, 0.25), end: Offset.zero).animate(a),
+          child: child,
+        ),
+      ),
+      child: _options ? KeyedSubtree(key: const ValueKey('options'), child: _optionsRow()) : _hintText(),
+    );
+  }
+
+  Widget _hintText() {
     final show = _feed != null && !_chosen;
     return Center(
+      key: const ValueKey('hint'),
       child: AnimatedOpacity(
+        curve: Motion.settle,
         opacity: show || _error != null ? 1 : 0,
         duration: const Duration(milliseconds: 300),
         child: Text(
@@ -776,6 +804,7 @@ class _CameraScreenState extends State<CameraScreen> {
                     child: feed == null
                         ? null
                         : AnimatedOpacity(
+                            curve: Motion.settle,
                             opacity: _flipping ? 0 : 1,
                             duration: const Duration(milliseconds: 160),
                             child: Texture(textureId: feed.texture, filterQuality: FilterQuality.medium),
@@ -793,15 +822,26 @@ class _CameraScreenState extends State<CameraScreen> {
                     child: IgnorePointer(
                       child: Center(
                         child: AnimatedRotation(
+                          curve: Motion.settle,
                           turns: _turns,
                           duration: const Duration(milliseconds: 320),
-                          child: Text(
-                            '$_count',
-                            style: const TextStyle(
-                              color: _ink,
-                              fontSize: 96,
-                              fontWeight: FontWeight.w200,
-                              shadows: [Shadow(color: Color(0x66000000), blurRadius: 12)],
+                          child: TweenAnimationBuilder<double>(
+                            key: ValueKey(_count),
+                            tween: Tween(begin: 0, end: 1),
+                            duration: const Duration(milliseconds: 420),
+                            curve: Motion.settle,
+                            builder: (context, t, child) => Opacity(
+                              opacity: t,
+                              child: Transform.scale(scale: 1.25 - 0.25 * t, child: child),
+                            ),
+                            child: Text(
+                              '$_count',
+                              style: const TextStyle(
+                                color: _ink,
+                                fontSize: 96,
+                                fontWeight: FontWeight.w200,
+                                shadows: [Shadow(color: Color(0x66000000), blurRadius: 12)],
+                              ),
                             ),
                           ),
                         ),
@@ -811,6 +851,7 @@ class _CameraScreenState extends State<CameraScreen> {
                 Positioned.fill(
                   child: IgnorePointer(
                     child: AnimatedOpacity(
+                      curve: Motion.settle,
                       opacity: _blink ? 0.85 : 0,
                       duration: Duration(milliseconds: _blink ? 40 : 260),
                       child: const ColoredBox(color: Colors.white),
@@ -853,6 +894,7 @@ class _CameraScreenState extends State<CameraScreen> {
     return IgnorePointer(
       ignoring: hidden,
       child: AnimatedOpacity(
+        curve: Motion.settle,
         opacity: hidden ? 0 : 1,
         duration: const Duration(milliseconds: 220),
         child: Glass(
@@ -910,6 +952,7 @@ class _CameraScreenState extends State<CameraScreen> {
       height: d,
       child: IgnorePointer(
         child: AnimatedOpacity(
+          curve: Motion.settle,
           opacity: _focusQuiet ? 0.45 : 1,
           duration: const Duration(milliseconds: 300),
           child: Stack(
@@ -948,9 +991,11 @@ class _CameraScreenState extends State<CameraScreen> {
   Widget _lockPill() {
     return IgnorePointer(
       child: AnimatedOpacity(
+        curve: Motion.settle,
         opacity: _locked ? 1 : 0,
         duration: const Duration(milliseconds: 220),
         child: AnimatedRotation(
+          curve: Motion.settle,
           turns: _turns,
           duration: const Duration(milliseconds: 320),
           child: Glass(
@@ -971,6 +1016,7 @@ class _CameraScreenState extends State<CameraScreen> {
     return IgnorePointer(
       ignoring: hidden,
       child: AnimatedOpacity(
+        curve: Motion.settle,
         opacity: hidden ? 0 : 1,
         duration: const Duration(milliseconds: 220),
         child: GestureDetector(
@@ -1004,6 +1050,7 @@ class _CameraScreenState extends State<CameraScreen> {
         duration: const Duration(milliseconds: 320),
         curve: Motion.settle,
         child: AnimatedOpacity(
+          curve: Motion.settle,
           opacity: open ? 1 : 0,
           duration: const Duration(milliseconds: 220),
           child: Padding(
@@ -1228,6 +1275,7 @@ class _ShutterState extends State<_Shutter> {
           duration: const Duration(milliseconds: 120),
           curve: Motion.settle,
           child: AnimatedContainer(
+            curve: Motion.settle,
             duration: const Duration(milliseconds: 200),
             width: 62,
             height: 62,
