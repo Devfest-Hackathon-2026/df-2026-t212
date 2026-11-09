@@ -66,7 +66,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
     },
     insets: () {
       final pad = MediaQuery.paddingOf(context);
-      return EdgeInsets.only(top: pad.top + 44, bottom: pad.bottom + 72);
+      return EdgeInsets.only(top: pad.top + 70, bottom: pad.bottom + 72);
     },
   );
 
@@ -155,8 +155,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
               child: CustomScrollView(
                 controller: _scroll,
                 slivers: [
-                  SliverToBoxAdapter(child: SizedBox(height: pad.top + 10)),
-                  SliverToBoxAdapter(child: _header()),
+                  SliverToBoxAdapter(child: SizedBox(height: pad.top + 70)),
                   SliverToBoxAdapter(child: _status()),
                   if (s.palette.isNotEmpty) SliverToBoxAdapter(child: _paletteRow()),
                   if (list.isEmpty)
@@ -185,52 +184,30 @@ class _PhotosScreenState extends State<PhotosScreen> {
     );
   }
 
-  /// Once the large title scrolls away, a glass bar keeps the place, and the
-  /// photos pass underneath it.
+  /// Keep the same title and actions in place while photos pass underneath.
   Widget _topBar(EdgeInsets pad) {
     return Positioned(
       top: 0,
       left: 0,
       right: 0,
-      child: ValueListenableBuilder<double>(
-        valueListenable: _offset,
-        builder: (context, o, _) {
-          final t = ((o - 36) / 28).clamp(0.0, 1.0);
-          if (t == 0) return const SizedBox.shrink();
-          return IgnorePointer(
-            ignoring: !_selecting,
-            child: Opacity(
-              opacity: t,
-              child: ClipRect(
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-                  child: Container(
-                    height: pad.top + 44,
-                    padding: EdgeInsets.only(top: pad.top),
-                    alignment: Alignment.center,
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [Color(0xE6F6F6F5), Color(0xB3F3F3F2)],
-                      ),
-                      border: Border(bottom: BorderSide(color: Color(0x14000000), width: 0.5)),
-                    ),
-                    child: _selecting
-                        ? Row(children: [
-                            const SizedBox(width: 20),
-                            Expanded(child: Text('${_selected.length} selected', style: Txt.label)),
-                            _clearSelection(),
-                            TextAction('Done', onTap: () => _setSelecting(false)),
-                            const SizedBox(width: 10),
-                          ])
-                        : Text('Photos', style: Txt.label),
-                  ),
-                ),
+      child: ClipRect(
+        child: ValueListenableBuilder<double>(
+          valueListenable: _offset,
+          child: Padding(
+            padding: EdgeInsets.only(top: pad.top + 10),
+            child: _header(),
+          ),
+          builder: (context, offset, header) {
+            final glass = (offset / 24).clamp(0.0, 1.0);
+            return BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 14 * glass, sigmaY: 14 * glass),
+              child: ColoredBox(
+                color: Neutral.bg.withValues(alpha: 0.86 * glass),
+                child: header,
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -298,12 +275,17 @@ class _PhotosScreenState extends State<PhotosScreen> {
         children: [
           Expanded(
             // Edges fade, so a cut-off swatch reads as "there is more this way".
-            child: ShaderMask(
+            child: ClipRect(child: ShaderMask(
               blendMode: BlendMode.dstIn,
-              shaderCallback: (r) => const LinearGradient(
-                colors: [Color(0x00000000), Color(0xFF000000), Color(0xFF000000), Color(0x00000000)],
-                stops: [0, 0.05, 0.84, 1],
-              ).createShader(r),
+              shaderCallback: (r) {
+                // Reach zero before the clip edge, including its antialiased pixel.
+                final fade = (32 / r.width).clamp(0.0, 0.45);
+                final clear = (2 / r.width).clamp(0.0, 0.04);
+                return LinearGradient(
+                  colors: const [Colors.transparent, Colors.black, Colors.black, Colors.transparent, Colors.transparent],
+                  stops: [0, fade / 2, 1 - fade, 1 - clear, 1],
+                ).createShader(r);
+              },
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.fromLTRB(20, 8, 28, 14),
@@ -320,7 +302,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                   },
                 ),
               ),
-            ),
+            )),
           ),
           // Clear stays put; it never scrolls away with the swatches.
           AnimatedSize(
@@ -335,7 +317,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                     },
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(6, 0, 20, 6),
-                      child: Text('Clear', style: Txt.mono.copyWith(color: Neutral.primary)),
+                      child: Text('Clear', style: Txt.label.copyWith(color: Neutral.secondary)),
                     ),
                   )
                 : const SizedBox(height: 1),
