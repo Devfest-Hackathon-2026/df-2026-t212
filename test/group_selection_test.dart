@@ -51,6 +51,7 @@ void main() {
     await tester.tap(find.text('Done').last);
     await tester.pumpAndSettle();
     expect(find.text('2 selected'), findsOneWidget);
+    expect(find.descendant(of: tile(0), matching: find.text('2')), findsOneWidget);
     expect(tile(1), findsNothing);
     expect(tester.getRect(tile(3)), before);
     // A sweep starting at a partially selected bundle adds every member.

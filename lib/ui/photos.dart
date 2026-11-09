@@ -428,7 +428,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
               _ => 4.0,
             },
             selected: selectedCount == members.length,
-            partiallySelected: selectedCount > 0 && selectedCount < members.length,
+            selectedCount: selectedCount,
             selecting: _selecting,
             onTap: () => _open(it, all),
             ),
@@ -644,14 +644,16 @@ class _Tile extends StatelessWidget {
     required this.size,
     required this.onTap,
     this.selected = false,
-    this.partiallySelected = false,
+    this.selectedCount = 0,
     this.selecting = false,
     this.onGroupTap,
     this.groupCount = 1,
     this.radius = 0,
   });
   final PhotoItem item;
-  final bool play, selected, partiallySelected, selecting;
+  final bool play, selected, selecting;
+  final int selectedCount;
+  bool get partiallySelected => selectedCount > 0 && selectedCount < groupCount;
   final VoidCallback? onGroupTap;
   final double radius;
   final int size;
@@ -794,7 +796,7 @@ class _Tile extends StatelessWidget {
                     child: Semantics(
                       excludeSemantics: true,
                       label: onGroupTap == null ? '$groupCount grouped photos' : 'Choose photos in group of $groupCount',
-                      value: selecting ? (partiallySelected ? 'Partially selected' : selected ? 'Selected' : 'Not selected') : null,
+                      value: selecting ? '$selectedCount of $groupCount selected' : null,
                       button: onGroupTap != null,
                       onTap: onGroupTap,
                       child: GestureDetector(
@@ -824,15 +826,18 @@ class _Tile extends StatelessWidget {
                     bottom: 7,
                     right: 7,
                     child: Container(
-                      width: 18,
+                      width: partiallySelected ? null : 18,
+                      constraints: const BoxConstraints(minWidth: 18),
                       height: 18,
+                      padding: EdgeInsets.symmetric(horizontal: partiallySelected ? 4 : 0),
                       decoration: BoxDecoration(
                         color: selected || partiallySelected ? Neutral.primary : const Color(0x40000000),
-                        shape: BoxShape.circle,
+                        borderRadius: BorderRadius.circular(9),
                         border: Border.all(color: Neutral.surface, width: 1.5),
                       ),
                       child: partiallySelected
-                          ? const Center(child: SizedBox(width: 8, height: 2, child: ColoredBox(color: Neutral.surface)))
+                          ? Center(widthFactor: 1, child: Text('$selectedCount', style: Txt.small.copyWith(
+                              fontSize: 10, height: 1, fontWeight: FontWeight.w600, color: Neutral.surface)))
                           : selected ? const Center(child: Glyph(G.check, size: 11, color: Neutral.surface)) : null,
                     ),
                   ),
