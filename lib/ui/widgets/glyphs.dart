@@ -26,6 +26,20 @@ enum G {
   up,
   camera,
   plus,
+
+  /// How wide a band of hue is kept.
+  width,
+
+  /// How softly the kept color fades out at its edge.
+  edge,
+}
+
+/// Draws [g] centered on [at], for painters that place glyphs themselves.
+void paintGlyph(Canvas canvas, G g, Offset at, double size, Color color, {double weight = 1.6}) {
+  canvas.save();
+  canvas.translate(at.dx - size / 2, at.dy - size / 2);
+  _GlyphPainter(g, color, weight).paint(canvas, Size.square(size));
+  canvas.restore();
 }
 
 class Glyph extends StatelessWidget {
@@ -54,7 +68,7 @@ class _GlyphPainter extends CustomPainter {
   static const _optical = <G, Offset>{
     G.heart: Offset(0, 0.35),
     G.heartFill: Offset(0, 0.35),
-    G.share: Offset(0, 0.2),
+    G.share: Offset(0, -0.5),
     G.up: Offset(0, 0.6),
     G.camera: Offset(0, -0.3),
     G.flashAuto: Offset(0.4, -0.6),
@@ -289,6 +303,22 @@ class _GlyphPainter extends CustomPainter {
       case G.plus:
         seg(12, 3.5, 12, 20.5);
         seg(3.5, 12, 20.5, 12);
+      case G.width:
+        seg(4.4, 12, 19.6, 12);
+        for (final d in [-1.0, 1.0]) {
+          final x = 12 + d * 7.6;
+          canvas.drawPath(
+            Path()
+              ..moveTo(x - d * 3.4, 8.6)
+              ..lineTo(x, 12)
+              ..lineTo(x - d * 3.4, 15.4),
+            line,
+          );
+        }
+      case G.edge:
+        const c = Offset(12, 12);
+        canvas.drawCircle(c, 7.6, line);
+        canvas.drawArc(Rect.fromCircle(center: c, radius: 7.6), math.pi / 2, math.pi, true, fill);
     }
   }
 

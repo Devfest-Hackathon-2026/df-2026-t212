@@ -132,14 +132,8 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   );
   double _pullFrom = 0;
 
-  /// The dial open under the finger: 'width', 'edge' or 'zoom'.
+  /// The wheel open under the finger: 'zoom' or 'reach'.
   String? _dial;
-  double _dialAcc = 0;
-  Timer? _dialHide;
-
-  /// Where the Width/Edge scale stands: with the finger, unrounded, while
-  /// it slides, then sprung onto the whole number it lands on.
-  late final AnimationController _dialPos = AnimationController.unbounded(vsync: this);
 
   // The photo just taken: its frame flies to the corner in black and white
   // and develops there.
@@ -173,8 +167,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     _scan?.cancel();
     _focusFade?.cancel();
     _countdown?.cancel();
-    _dialHide?.cancel();
-    _dialPos.dispose();
     _pullBack.dispose();
     _fly.dispose();
     _develop.dispose();
@@ -741,6 +733,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                   final aspect = _feed?.aspect ?? 3 / 4;
                   final w = box.maxWidth - 12;
                   final h = math.min(w / aspect, box.maxHeight - top - hint - bottom);
+                  final band = math.max(box.maxHeight - top - h - bottom, 68.0);
                   // Where the view sits, so the loupe can leave it.
                   final view = Offset((box.maxWidth - h * aspect) / 2, top);
                   _viewRect = view & Size(h * aspect, h);
@@ -774,14 +767,21 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                         child: Center(child: _inView()),
                       ),
                       // The hand is at the shutter: Width and Edge sit there,
-                      // in the room between the view and the shutter, or
-                      // over the view's edge where the screen leaves none.
+                      // in the room between the view and the shutter, their
+                      // wheel opening up over the view as the zoom's does.
                       Positioned(
                         left: 0,
                         right: 0,
                         bottom: bottom,
-                        height: math.max(box.maxHeight - top - h - bottom, 68),
+                        height: band,
                         child: _dock(),
+                      ),
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: bottom,
+                        height: band + 200,
+                        child: _reach(band / 2),
                       ),
                       if (at != null)
                         _loupeWidget(view + Offset(at.dx * h * aspect, at.dy * h), width: box.maxWidth, ceiling: 0),
@@ -997,168 +997,52 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// Width and Edge by the shutter, where the thumb is, in the room
-  /// between the view and the shutter: side by side when the phone is
-  /// upright, one over the other when it is sideways, upright for the
-  /// person either way. Each half is a dial: slid, its own scale turns
-  /// inside it under the finger; held, it goes back to the default; tapped,
-  /// it opens the colors in view.
+  /// Until a color is kept, upright, how to keep one, where Width and
+  /// Edge will be.
   Widget _dock() {
+    final show = _feed != null && _cur == null && !_chosen && !_sideways;
+    return IgnorePointer(
+      child: AnimatedOpacity(
+        opacity: show ? 1 : 0,
+        duration: Duration(milliseconds: show ? 280 : 140),
+        curve: show ? Motion.settle : Curves.easeInCubic,
+        child: Center(
+          child: Text('Hold the view on a color to keep it', style: Txt.small.copyWith(color: _dim)),
+        ),
+      ),
+    );
+  }
+
+  /// Width and Edge of the color being set, by the shutter, made as the
+  /// zoom's buttons are.
+  Widget _reach(double base) {
     final c = _cur;
-    final show = _feed != null;
-    final side = _sideways;
-    final Widget body;
-    if (c == null) {
-      // Until a color is kept, upright, how to keep one.
-      body = !_chosen && !side
-          ? Text('Hold the view on a color to keep it', style: Txt.small.copyWith(color: _dim))
-          : const SizedBox.shrink();
-    } else {
-      final parts = [
-        _reachCell('width', 'Width', c.width, 16, (v) => c.width = v, side),
-        side
-            ? Container(height: 1, width: 28, color: const Color(0x33FFFFFF))
-            : Container(width: 1, height: 24, color: const Color(0x33FFFFFF)),
-        _reachCell('edge', 'Edge', c.softness, 20, (v) => c.softness = v, side),
-      ];
-      body = Glass(
-        dark: true,
-        radius: 18,
-        child: side
-            ? Column(mainAxisSize: MainAxisSize.min, children: parts)
-            : Row(mainAxisSize: MainAxisSize.min, children: parts),
-      );
-    }
+    final show = _feed != null && c != null;
     return IgnorePointer(
       ignoring: !show,
       child: AnimatedOpacity(
         opacity: show ? 1 : 0,
         duration: Duration(milliseconds: show ? 280 : 140),
         curve: show ? Motion.settle : Curves.easeInCubic,
-        child: Center(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 280),
-              reverseDuration: const Duration(milliseconds: 120),
-              switchInCurve: Motion.settle,
-              switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (child, a) => FadeTransition(
-                opacity: a,
-                child: ScaleTransition(scale: Tween(begin: 0.9, end: 1.0).animate(a), child: child),
-              ),
-              child: RotatedBox(
-                key: ValueKey((c == null, _quarter, !_chosen)),
-                quarterTurns: switch (_quarter) {
-                  -1 => 3,
-                  1 => 1,
-                  _ => 0,
-                },
-                child: body,
-              ),
-            ),
-          ),
+        child: _ReachWheel(
+          values: [c?.width ?? 16, c?.softness ?? 20],
+          defaults: const [16, 20],
+          turns: _turns,
+          base: base,
+          hidden: _panel || _dial == 'zoom',
+          onChange: (key, v) {
+            final c = _cur;
+            if (c == null) return;
+            setState(() => key == 0 ? c.width = v : c.softness = v);
+            _look();
+          },
+          onOpen: (open) {
+            if (open && _dial == null) setState(() => _dial = 'reach');
+            if (!open && _dial == 'reach') setState(() => _dial = null);
+          },
         ),
       ),
     );
-  }
-
-  /// One half of Width/Edge. Slid, its name and number step aside and a
-  /// scale shows beside them, running the way the half is slid and moving
-  /// exactly with the finger, then springs onto the number it lands on.
-  /// Upright the scale runs across; sideways, along the room by the
-  /// shutter, up and down for the person.
-  Widget _reachCell(String key, String label, double value, double def, void Function(double) set, bool vertical) {
-    final on = _dial == key;
-    final number = Text('${value.round()}', textAlign: TextAlign.right, style: _figures);
-    final name = Text(vertical ? label : '$label ', style: Txt.small.copyWith(color: _ink, fontSize: 12.5));
-    final ticks = AnimatedOpacity(
-      opacity: on ? 1 : 0,
-      duration: Duration(milliseconds: on ? 200 : 140),
-      curve: on ? Motion.settle : Curves.easeInCubic,
-      child: AnimatedBuilder(
-        animation: _dialPos,
-        builder: (context, _) => CustomPaint(
-          painter: _CellTicks(value: _dialPos.value, def: def, vertical: vertical),
-        ),
-      ),
-    );
-    // The scale moves with the finger: larger values lie ahead of it, to
-    // the right, or below.
-    void slide(double by) => _slideReach(-by / _CellTicks.step, value, def, set);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onLongPress: () => _resetReach(set, def),
-      onHorizontalDragStart: vertical ? null : (_) => _openDial(key, value),
-      onHorizontalDragUpdate: vertical ? null : (d) => slide(d.delta.dx),
-      onHorizontalDragEnd: vertical ? null : (_) => _closeDial(),
-      onHorizontalDragCancel: vertical ? null : _closeDial,
-      onVerticalDragStart: vertical ? (_) => _openDial(key, value) : null,
-      onVerticalDragUpdate: vertical ? (d) => slide(d.delta.dy) : null,
-      onVerticalDragEnd: vertical ? (_) => _closeDial() : null,
-      onVerticalDragCancel: vertical ? _closeDial : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        curve: Motion.settle,
-        width: vertical ? 74 : 106,
-        height: vertical ? 124 : 50,
-        decoration: BoxDecoration(
-          color: on ? const Color(0x1FFFFFFF) : Colors.transparent,
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Stack(
-          children: [
-            AnimatedAlign(
-              alignment: on ? (vertical ? const Alignment(-0.5, 0) : const Alignment(0, -0.62)) : Alignment.center,
-              duration: const Duration(milliseconds: 260),
-              curve: Motion.settle,
-              child: vertical
-                  ? Column(mainAxisSize: MainAxisSize.min, children: [name, const SizedBox(height: 2), number])
-                  : Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        name,
-                        SizedBox(width: 15, child: number),
-                      ],
-                    ),
-            ),
-            vertical
-                ? Positioned(right: 7, top: 8, bottom: 8, width: 13, child: ticks)
-                : Positioned(left: 6, right: 6, bottom: 6, height: 13, child: ticks),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Numbers that keep their width as they change, so nothing beside them
-  /// moves.
-  static final _figures = Txt.small.copyWith(
-    color: _ink,
-    fontSize: 12.5,
-    fontFeatures: const [ui.FontFeature.tabularFigures()],
-  );
-
-  /// Moves Width or Edge by [by] steps from where the slide has got to.
-  void _slideReach(double by, double value, double def, void Function(double) set) {
-    _dialAcc = (_dialAcc + by).clamp(-2.0, 62.0);
-    _dialPos.value = _dialAcc.clamp(0.0, 60.0);
-    final next = _dialAcc.clamp(0.0, 60.0).roundToDouble();
-    if (next == value) return;
-    if (next == def) {
-      Haptics.snap();
-    } else {
-      Haptics.tick();
-    }
-    setState(() => set(next));
-    _look();
-  }
-
-  void _resetReach(void Function(double) set, double def) {
-    Haptics.firm();
-    setState(() => set(def));
-    _dialPos.animateWith(SpringSimulation(Springs.snappy, _dialPos.value, def, 0));
-    _look();
   }
 
   List<Widget> _optionItems() {
@@ -1475,7 +1359,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       max: feed.maxZoom,
                       stops: feed.stops,
                       turns: _turns,
-                      hidden: _panel,
+                      hidden: _panel || _dial == 'reach',
                       onZoom: _setZoom,
                       onOpen: (open) {
                         if (open && _dial == null) setState(() => _dial = 'zoom');
@@ -1489,30 +1373,6 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         );
       },
     );
-  }
-
-  /// Opens a dial for [key] under the finger, or keeps it open.
-  void _openDial(String key, double from) {
-    _dialHide?.cancel();
-    if (_dial != key) Haptics.light();
-    _dialAcc = from;
-    _dialPos.stop();
-    _dialPos.value = from;
-    setState(() => _dial = key);
-  }
-
-  /// Lets the dial go a moment after the finger leaves.
-  void _closeDial() {
-    _dialHide?.cancel();
-    // The scale springs onto the number it shows.
-    final c = _cur;
-    if (c != null && (_dial == 'width' || _dial == 'edge')) {
-      final to = _dial == 'width' ? c.width : c.softness;
-      _dialPos.animateWith(SpringSimulation(Springs.snappy, _dialPos.value, to, 0));
-    }
-    _dialHide = Timer(const Duration(milliseconds: 300), () {
-      if (mounted) setState(() => _dial = null);
-    });
   }
 
   /// Where the camera focuses and meters, and beside it how much brighter
@@ -1891,71 +1751,6 @@ class _LoupePainter extends CustomPainter {
   bool shouldRepaint(_LoupePainter o) => o.image != image;
 }
 
-/// A dial's scale under a fixed mark: a tick a unit, longer every five,
-/// a dot at the default.
-class _CellTicks extends CustomPainter {
-  _CellTicks({required this.value, required this.def, this.vertical = false});
-  final double value, def;
-
-  /// Runs down instead of across, larger values below.
-  final bool vertical;
-
-  /// One step of the value is this far on the scale, and as far under the
-  /// finger, so the scale moves exactly with it.
-  static const step = 5.0;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (vertical) {
-      // Drawn across, turned a quarter: across becomes down, and the ticks
-      // hang from the left edge.
-      canvas.save();
-      canvas.translate(size.width, 0);
-      canvas.rotate(math.pi / 2);
-      _across(canvas, Size(size.height, size.width));
-      canvas.restore();
-    } else {
-      _across(canvas, size);
-    }
-  }
-
-  void _across(Canvas canvas, Size size) {
-    final mid = size.width / 2;
-    final p = Paint()..strokeCap = StrokeCap.round;
-    for (var v = 0.0; v <= 60; v++) {
-      final x = mid + (v - value) * step;
-      if (x < 0 || x > size.width) continue;
-      // Fades toward the ends, as a drum turning away.
-      final t = ((x - mid).abs() / mid).clamp(0.0, 1.0);
-      final fade = 1 - t * t;
-      final major = v % 5 == 0;
-      p
-        ..color = Color.fromRGBO(242, 242, 240, (major ? 0.7 : 0.32) * fade)
-        ..strokeWidth = major ? 1.3 : 1;
-      final h = major ? 7.0 : 4.0;
-      canvas.drawLine(Offset(x, size.height - h), Offset(x, size.height), p);
-      if (v == def) {
-        canvas.drawCircle(
-          Offset(x, size.height - 10.5),
-          1.4,
-          Paint()..color = Color.fromRGBO(242, 242, 240, 0.75 * fade),
-        );
-      }
-    }
-    canvas.drawLine(
-      Offset(mid, 0),
-      Offset(mid, size.height),
-      Paint()
-        ..color = const Color(0xFFF2F2F0)
-        ..strokeWidth = 1.8
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_CellTicks o) => o.value != value || o.def != def || o.vertical != vertical;
-}
-
 /// The lenses as the system camera shows them, .5 1 2 3, and the same
 /// buttons opening into a wheel when held, slid or pinched: a half disc
 /// whose numbers come out of the buttons, turning under a fixed mark with
@@ -2172,12 +1967,15 @@ class _ZoomWheelState extends State<_ZoomWheel> with SingleTickerProviderStateMi
 
 /// Where everything on the zoom wheel sits.
 class _WheelGeometry {
-  _WheelGeometry(this.size, this.n)
+  _WheelGeometry(this.size, this.n, {this.step = 40, this.base = 30})
     : r = size.width * 0.85,
       // A shallow arc, its top a little above the buttons, as the system's.
-      center = Offset(size.width / 2, size.height - 88 + size.width * 0.85);
+      center = Offset(size.width / 2, size.height - base - 58 + size.width * 0.85);
   final Size size;
   final int n;
+
+  /// From one button to the next, and from the buttons to the bottom.
+  final double step, base;
 
   /// The disc's radius, and its middle, below the bottom edge.
   final double r;
@@ -2185,7 +1983,6 @@ class _WheelGeometry {
 
   /// Radians of the wheel per unit of [p]: about 180 points of rim each.
   double get k => 180 / r;
-  static const step = 40.0;
 
   /// The wheel's scale: even in the log up to 3x, then drawn closer, as
   /// the system camera's, so 15x still fits.
@@ -2208,7 +2005,7 @@ class _WheelGeometry {
   /// The top of the wheel, under the mark.
   Offset get top => center - Offset(0, r);
 
-  Offset button(double i) => Offset(size.width / 2 + (i - (n - 1) / 2) * step, size.height - 30);
+  Offset button(double i) => Offset(size.width / 2 + (i - (n - 1) / 2) * step, size.height - base);
 
   Rect get capsule => Rect.fromCenter(center: button((n - 1) / 2), width: n * step + 6, height: 44);
 
@@ -2368,6 +2165,400 @@ class _ZoomWheelPainter extends CustomPainter {
   @override
   bool shouldRepaint(_ZoomWheelPainter o) =>
       o.t != t || o.zoom != zoom || o.turns != turns || o.current != current || o.max != max;
+}
+
+/// Width and Edge, made as the zoom's buttons are: a frosted capsule by the
+/// shutter holding ↔ and ◐ with their numbers. Held or slid, the one under
+/// the finger opens into the same half disc, a unit to a tick, turning with
+/// the finger under a fixed mark; the other steps back. Tapped, it shows
+/// its wheel a moment, so the hand learns it turns. On the open wheel, a
+/// number or the dot at the default is a tap away.
+class _ReachWheel extends StatefulWidget {
+  const _ReachWheel({
+    required this.values,
+    required this.defaults,
+    required this.turns,
+    required this.base,
+    required this.hidden,
+    required this.onChange,
+    required this.onOpen,
+  });
+
+  /// Width, then Edge.
+  final List<double> values, defaults;
+  final double turns, base;
+  final bool hidden;
+  final void Function(int key, double value) onChange;
+  final void Function(bool open) onOpen;
+
+  @override
+  State<_ReachWheel> createState() => _ReachWheelState();
+}
+
+class _ReachWheelState extends State<_ReachWheel> with TickerProviderStateMixin {
+  late final AnimationController _open = AnimationController(vsync: this);
+
+  /// Where the wheel stands: with the finger, unrounded, while it turns,
+  /// then sprung onto the whole number it lands on.
+  late final AnimationController _pos = AnimationController.unbounded(vsync: this);
+  Timer? _close;
+  int _key = 0;
+  double _acc = 0, _lastDx = 0;
+  bool _held = false;
+
+  @override
+  void didUpdateWidget(_ReachWheel old) {
+    super.didUpdateWidget(old);
+    final v = widget.values[_key];
+    if (!_held && v != old.values[_key]) _settle(v);
+  }
+
+  @override
+  void dispose() {
+    _close?.cancel();
+    _open.dispose();
+    _pos.dispose();
+    super.dispose();
+  }
+
+  _WheelGeometry _g(Size s) => _ReachWheelPainter.geometry(s, widget.base);
+
+  int _nearest(Offset p, Size s) {
+    final g = _g(s);
+    return (p - g.button(0)).distance <= (p - g.button(1)).distance ? 0 : 1;
+  }
+
+  void _settle(double to) => _pos.animateWith(SpringSimulation(Springs.snappy, _pos.value, to, 0));
+
+  void _show(int key) {
+    _close?.cancel();
+    if (_open.value < 0.02 && _key != key) {
+      setState(() => _key = key);
+      _pos.value = widget.values[key];
+    }
+    if (_open.value < 1 && _open.status != AnimationStatus.forward) {
+      Haptics.light();
+      widget.onOpen(true);
+      _pos.value = widget.values[_key];
+      _open.animateTo(1, duration: const Duration(milliseconds: 200), curve: Motion.settle);
+    }
+  }
+
+  void _hideSoon([int ms = 650]) {
+    _close?.cancel();
+    _close = Timer(Duration(milliseconds: ms), () {
+      if (!mounted) return;
+      _open.animateBack(0, duration: const Duration(milliseconds: 220), curve: Motion.settle);
+      widget.onOpen(false);
+    });
+  }
+
+  void _grab(Offset p, Size s) {
+    _show(_open.value > 0.5 ? _key : _nearest(p, s));
+    _held = true;
+    _lastDx = 0;
+    _acc = widget.values[_key];
+    _pos.stop();
+    _pos.value = _acc;
+  }
+
+  void _turn(double dx) {
+    _close?.cancel();
+    _acc = (_acc - dx / _ReachWheelPainter.unit).clamp(-2.0, 62.0);
+    _pos.value = _acc.clamp(0.0, 60.0);
+    final next = _acc.clamp(0.0, 60.0).roundToDouble();
+    if (next == widget.values[_key]) return;
+    next == widget.defaults[_key] ? Haptics.snap() : Haptics.tick();
+    widget.onChange(_key, next);
+  }
+
+  void _let() {
+    _held = false;
+    _settle(widget.values[_key]);
+    _hideSoon();
+  }
+
+  void _tap(Offset p, Size s) {
+    if (_open.value <= 0.5) {
+      _show(_nearest(p, s));
+      _hideSoon(1100);
+      return;
+    }
+    final g = _g(s);
+    final value = widget.values[_key];
+    final def = widget.defaults[_key];
+    double? best;
+    var bestD = 30.0;
+    for (final v in [for (var v = 0.0; v <= 60; v += 10) v, def]) {
+      final at = _ReachWheelPainter.labelAt(g, value, v, v == def && v % 10 != 0);
+      final d = (at - p).distance;
+      if (d < bestD) {
+        bestD = d;
+        best = v;
+      }
+    }
+    if (best != null && best != value) {
+      best == def ? Haptics.firm() : Haptics.tick();
+      widget.onChange(_key, best);
+    }
+    _hideSoon();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: widget.hidden,
+      child: AnimatedOpacity(
+        opacity: widget.hidden ? 0 : 1,
+        duration: const Duration(milliseconds: 220),
+        curve: Motion.settle,
+        child: LayoutBuilder(
+          builder: (context, box) {
+            final size = box.biggest;
+            final g = _g(size);
+            final buttons = g.capsule.inflate(4);
+            return AnimatedBuilder(
+              animation: Listenable.merge([_open, _pos]),
+              builder: (context, _) {
+                final t = _open.value;
+                final open = t > 0.02;
+                return Stack(
+                  children: [
+                    if (t < 1)
+                      Positioned.fill(
+                        key: const ValueKey('capsule'),
+                        child: IgnorePointer(
+                          child: ClipPath(
+                            clipper: _PathClip(
+                              Path()..addRRect(RRect.fromRectAndRadius(g.capsule, const Radius.circular(22))),
+                            ),
+                            child: BackdropFilter(
+                              filter: ui.ImageFilter.blur(sigmaX: 9 * (1 - t), sigmaY: 9 * (1 - t)),
+                              child: const SizedBox.expand(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (t > 0)
+                      Positioned.fill(
+                        key: const ValueKey('disc'),
+                        child: IgnorePointer(
+                          child: ClipPath(
+                            clipper: _PathClip(g.disc(t)),
+                            child: BackdropFilter(
+                              filter: ui.ImageFilter.blur(sigmaX: 12 * t, sigmaY: 12 * t),
+                              child: const SizedBox.expand(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    Positioned.fill(
+                      key: const ValueKey('paint'),
+                      child: IgnorePointer(
+                        child: TweenAnimationBuilder<double>(
+                          tween: Tween(end: widget.turns),
+                          duration: const Duration(milliseconds: 320),
+                          curve: Motion.settle,
+                          builder: (context, turns, _) => CustomPaint(
+                            painter: _ReachWheelPainter(
+                              t: t,
+                              values: widget.values,
+                              defaults: widget.defaults,
+                              active: _key,
+                              pos: _pos.value,
+                              turns: turns,
+                              base: widget.base,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned.fromRect(
+                      key: const ValueKey('touch'),
+                      rect: open ? Offset.zero & size : buttons,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTapUp: (d) => _tap(d.localPosition + (open ? Offset.zero : buttons.topLeft), size),
+                        onLongPressStart: (d) => _grab(d.localPosition + (open ? Offset.zero : buttons.topLeft), size),
+                        onLongPressMoveUpdate: (d) {
+                          _turn(d.offsetFromOrigin.dx - _lastDx);
+                          _lastDx = d.offsetFromOrigin.dx;
+                        },
+                        onLongPressEnd: (_) => _let(),
+                        onHorizontalDragStart: (d) =>
+                            _grab(d.localPosition + (open ? Offset.zero : buttons.topLeft), size),
+                        onHorizontalDragUpdate: (d) => _turn(d.delta.dx),
+                        onHorizontalDragEnd: (_) => _let(),
+                        onHorizontalDragCancel: _let,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ReachWheelPainter extends CustomPainter {
+  _ReachWheelPainter({
+    required this.t,
+    required this.values,
+    required this.defaults,
+    required this.active,
+    required this.pos,
+    required this.turns,
+    required this.base,
+  });
+  final double t, pos, turns, base;
+  final List<double> values, defaults;
+  final int active;
+
+  static const ink = _ZoomWheelPainter.ink;
+  static const glyphs = [G.width, G.edge];
+
+  /// Points of rim a unit, and as far under the finger.
+  static const unit = 6.0;
+
+  static _WheelGeometry geometry(Size s, double base) => _WheelGeometry(s, 2, step: 66, base: base);
+
+  /// Where [v] sits on the wheel standing at [at]: the tens as numbers, the
+  /// default as a dot just inside the ticks.
+  static Offset labelAt(_WheelGeometry g, double at, double v, bool dot) =>
+      g.onRim((v - at) * unit / g.r, dot ? 25 : 34);
+
+  Offset _turned(Offset v) {
+    final a = turns * 2 * math.pi;
+    return Offset(v.dx * math.cos(a) - v.dy * math.sin(a), v.dx * math.sin(a) + v.dy * math.cos(a));
+  }
+
+  void _text(Canvas canvas, String text, Offset at, double size, Color color, {FontWeight weight = FontWeight.w500}) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: size,
+          fontWeight: weight,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    canvas.save();
+    canvas.translate(at.dx, at.dy);
+    canvas.rotate(turns * 2 * math.pi);
+    tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+    canvas.restore();
+  }
+
+  void _glyph(Canvas canvas, G g, Offset at, double size, Color color) {
+    canvas.save();
+    canvas.translate(at.dx, at.dy);
+    canvas.rotate(turns * 2 * math.pi);
+    paintGlyph(canvas, g, Offset.zero, size, color, weight: 1.5);
+    canvas.restore();
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final g = geometry(size, base);
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    final grow = _WheelGeometry.grow(t);
+    final pivot = g.button(0.5);
+    Offset scaled(Offset o) => pivot + (o - pivot) * grow;
+
+    if (t < 1) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(g.capsule, const Radius.circular(22)),
+        Paint()..color = Color.fromRGBO(20, 20, 20, 0.32 * (1 - t)),
+      );
+    }
+
+    if (t > 0) {
+      canvas.save();
+      canvas.translate(pivot.dx, pivot.dy);
+      canvas.scale(grow);
+      canvas.translate(-pivot.dx, -pivot.dy);
+      canvas.drawCircle(g.center, g.r, Paint()..color = Color.fromRGBO(14, 14, 14, 0.45 * t));
+
+      // A tick a unit, as the zoom's in three weights: the tens long and
+      // bright, the fives middling, the rest short and faint.
+      final tick = Paint()..strokeCap = StrokeCap.round;
+      final def = defaults[active];
+      for (var v = 0; v <= 60; v++) {
+        final a = (v - pos) * unit / g.r;
+        final along = a.abs() * g.r;
+        if (along > 260) continue;
+        final fade = (1 - math.pow(along / 260, 3)).clamp(0.0, 1.0);
+        final (len, alpha, width) = v % 10 == 0
+            ? (15.0, 1.0, 2.0)
+            : v % 5 == 0
+                ? (10.0, 0.7, 1.4)
+                : (5.0, 0.32, 1.0);
+        tick
+          ..color = ink.withValues(alpha: alpha * fade * t)
+          ..strokeWidth = width;
+        canvas.drawLine(g.onRim(a, 3), g.onRim(a, 3 + len), tick);
+        if (v == def) {
+          canvas.drawCircle(g.onRim(a, 25), 2, Paint()..color = ink.withValues(alpha: 0.9 * fade * t));
+        }
+      }
+      final mark = Path()
+        ..moveTo(g.top.dx - 4, g.top.dy - 9)
+        ..lineTo(g.top.dx + 4, g.top.dy - 9)
+        ..lineTo(g.top.dx, g.top.dy - 3)
+        ..close();
+      canvas.drawPath(mark, Paint()..color = ink.withValues(alpha: t));
+      canvas.restore();
+
+      // The tens on the wheel, giving way near the top to the number set.
+      for (var v = 0.0; v <= 60; v += 10) {
+        // The number set is wider than the zoom's, its glyph beside it.
+        final along = (v - pos).abs() * unit;
+        final near = (1 - (along - 46) / 22).clamp(0.0, 1.0);
+        final fade = (1 - math.pow(along / 240, 3)).clamp(0.0, 1.0) * (1 - near);
+        if (fade <= 0) continue;
+        _text(canvas, v.toStringAsFixed(0), scaled(labelAt(g, pos, v, false)), 12, ink.withValues(alpha: 0.85 * fade * t));
+      }
+    }
+
+    // The buttons: a glyph and its number each. The one held goes up to
+    // the top of the wheel under the mark, the other steps back.
+    final atTop = scaled(g.onRim(0, 34));
+    for (var i = 0; i < 2; i++) {
+      final on = i == active;
+      final from = g.button(i.toDouble());
+      final at = on ? Offset.lerp(from, atTop, t)! : from;
+      final alpha = on ? 1.0 : (1 - t * 1.6).clamp(0.0, 1.0);
+      if (alpha <= 0) continue;
+      final gap = on ? 10 + 3 * t : 10.0;
+      _glyph(canvas, glyphs[i], at + _turned(Offset(-gap, 0)), on ? 16 + t : 16, ink.withValues(alpha: alpha * 0.92));
+      _text(
+        canvas,
+        values[i].round().toString(),
+        at + _turned(Offset(gap - 1, 0)),
+        on ? 12.5 + 1.5 * t : 12.5,
+        ink.withValues(alpha: alpha),
+        weight: on && t > 0.5 ? FontWeight.w600 : FontWeight.w500,
+      );
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_ReachWheelPainter o) =>
+      o.t != t ||
+      o.pos != pos ||
+      o.turns != turns ||
+      o.active != active ||
+      o.base != base ||
+      o.values[0] != values[0] ||
+      o.values[1] != values[1];
 }
 
 class _PathClip extends CustomClipper<Path> {
