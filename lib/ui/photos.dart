@@ -185,7 +185,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
     if (s.developing) text = 'Developing ${s.doneCount + 1} of ${s.doneCount + s.pendingCount}';
     return AnimatedSize(
       duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOutCubic,
+      curve: Motion.settle,
       child: text == null
           ? const SizedBox(width: double.infinity)
           : Padding(
@@ -246,7 +246,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
           // Clear stays put; it never scrolls away with the swatches.
           AnimatedSize(
             duration: const Duration(milliseconds: 260),
-            curve: Curves.easeOutCubic,
+            curve: Motion.settle,
             child: filtering
                 ? GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -471,7 +471,7 @@ class _Tile extends StatelessWidget {
       child: AnimatedScale(
         scale: selected ? 0.9 : 1,
         duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutBack,
+        curve: Motion.settle,
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radius),
@@ -602,6 +602,7 @@ class _SortSwitch extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
         child: AnimatedDefaultTextStyle(
           duration: const Duration(milliseconds: 180),
+          curve: Motion.settle,
           style: Txt.label.copyWith(color: value == m ? Neutral.primary : Neutral.tertiary),
           child: Text(t),
         ),

@@ -28,6 +28,8 @@ class AfterHue extends StatelessWidget {
           final s = Store.instance;
           return AnimatedSwitcher(
             duration: const Duration(milliseconds: 500),
+            switchInCurve: Motion.settle,
+            switchOutCurve: Curves.easeInCubic,
             child: s.onboarded ? const Shell(key: ValueKey('shell')) : const Onboarding(key: ValueKey('onboarding')),
           );
         },

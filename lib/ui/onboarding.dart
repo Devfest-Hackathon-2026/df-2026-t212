@@ -19,7 +19,7 @@ class _OnboardingState extends State<Onboarding> {
 
   static const _samples = ['assets/samples/lantern.jpg', 'assets/samples/hydrangea.jpg', 'assets/samples/taxi.jpg'];
 
-  void _next() => _page.nextPage(duration: const Duration(milliseconds: 520), curve: Curves.easeOutCubic);
+  void _next() => _page.nextPage(duration: const Duration(milliseconds: 520), curve: Motion.settle);
 
   Future<void> _allow() async {
     final a = await Store.instance.requestAccess();
@@ -111,6 +111,7 @@ class _OnboardingState extends State<Onboarding> {
                 for (var i = 0; i < 3; i++)
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
+                    curve: Motion.settle,
                     margin: const EdgeInsets.only(right: 6),
                     width: i == _index ? 18 : 6,
                     height: 3,

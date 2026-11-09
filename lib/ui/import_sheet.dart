@@ -162,7 +162,7 @@ class _ThumbState extends State<_Thumb> {
       child: AnimatedScale(
         scale: widget.picked ? 0.9 : 1,
         duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutBack,
+        curve: Motion.settle,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(widget.picked ? 8 : 4),
           child: Stack(

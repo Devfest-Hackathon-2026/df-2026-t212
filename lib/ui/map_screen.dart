@@ -7,7 +7,6 @@ import 'package:flutter/scheduler.dart';
 import 'package:maplibre/maplibre.dart'
     show
         Geographic,
-        LngLatBounds,
         MapController,
         MapCamera,
         MapEvent,
@@ -42,7 +41,7 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final s = Store.instance;
   MapController? _map;
   double _zoom = 12;
@@ -65,6 +64,8 @@ class _MapScreenState extends State<MapScreen>
   // photo crossing the window's edge can turn from one look into the other.
   Set<String> _wasInside = {}, _wasOutside = {};
   Set<String> _covered = {}; // photos whose places sit under a card
+  Set<String> _unpinned = {}; // photos whose card has just gone
+  Map<String, (double, double, int)> _home = {};
   double _speed = 1;
   int _playbackLayout = 0;
   (double, double)? _beforePlayback;
@@ -84,6 +85,14 @@ class _MapScreenState extends State<MapScreen>
 
   late final Ticker _ticker = createTicker(_tick);
   Duration _last = Duration.zero;
+  // How fast playback runs right now, as a share of the chosen speed. It
+  // rises from rest when playback starts and follows speed changes softly.
+  double _rate = 0;
+
+  // The camera is moved from here, frame by frame, so every move has the
+  // same easing; the map's own animations run at a constant pace.
+  late final Ticker _glider = createTicker(_glideTick);
+  _Glide? _glide;
   _Cluster? _card;
 
   List<PhotoItem> get _located =>
@@ -103,10 +112,49 @@ class _MapScreenState extends State<MapScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
+    _glider.dispose();
+    _slide.dispose();
     super.dispose();
   }
 
-  void _play() {
+  // The window travels to where playback starts, and back when it closes,
+  // instead of jumping there.
+  late final AnimationController _slide = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 650),
+  )..addListener(_onSlide);
+  (double, double, double, double)? _slideSpan; // from w0, w1 to w0, w1
+
+  void _onSlide() {
+    final sp = _slideSpan;
+    if (sp == null) return;
+    final e = Motion.travel.transform(_slide.value);
+    setState(() {
+      _w0 = sp.$1 + (sp.$3 - sp.$1) * e;
+      _w1 = sp.$2 + (sp.$4 - sp.$2) * e;
+    });
+  }
+
+  /// Whether the window got all the way there.
+  Future<bool> _slideWindow(double a, double b) async {
+    if (((a - _w0).abs() < 1e-4 && (b - _w1).abs() < 1e-4) ||
+        MediaQuery.disableAnimationsOf(context)) {
+      setState(() {
+        _w0 = a;
+        _w1 = b;
+      });
+      return true;
+    }
+    _slideSpan = (_w0, _w1, a, b);
+    try {
+      await _slide.forward(from: 0).orCancel;
+      return true;
+    } on TickerCanceled {
+      return false;
+    }
+  }
+
+  Future<void> _play() async {
     Haptics.light();
     if (_playing) {
       _stop();
@@ -114,18 +162,19 @@ class _MapScreenState extends State<MapScreen>
     }
     if (!_presenting) _beforePlayback = (_w0, _w1);
     final len = (_w1 - _w0) > 0.95 ? 0.24 : (_w1 - _w0);
+    final restart = _w1 >= 1 - 1e-6;
+    final start = restart ? 0.0 : _w0;
     setState(() {
       _playing = true;
       _presenting = true;
       _card = null;
-      if (_w1 >= 1 - 1e-6) {
-        _w0 = 0;
-        _playbackLayout++;
-      }
-      _w1 = (_w0 + len).clamp(0.0, 1.0);
+      if (restart) _playbackLayout++;
     });
     Shell.barHidden.value = true;
+    final there = await _slideWindow(start, (start + len).clamp(0.0, 1.0));
+    if (!there || !mounted || !_playing) return;
     _last = Duration.zero;
+    _rate = 0;
     _ticker.start();
   }
 
@@ -141,12 +190,10 @@ class _MapScreenState extends State<MapScreen>
       _presenting = false;
       _pinned = {};
       _covered = {};
-      if (_beforePlayback case final range?) {
-        _w0 = range.$1;
-        _w1 = range.$2;
-      }
-      _beforePlayback = null;
+      _unpinned = {};
     });
+    if (_beforePlayback case final range?) _slideWindow(range.$1, range.$2);
+    _beforePlayback = null;
     Shell.barHidden.value = false;
   }
 
@@ -155,9 +202,14 @@ class _MapScreenState extends State<MapScreen>
     _last = now;
     if (dt <= 0 || dt > 0.2) return;
     final len = _w1 - _w0;
+    // Playback gathers pace over about half a second instead of jumping to
+    // speed, and eases into the end of the timeline instead of hitting it.
+    _rate += (_speed - _rate) * (1 - math.exp(-dt * 7));
+    final left = 1 - _w1;
+    final landing = math.sqrt((left / 0.04).clamp(0.0, 1.0)).clamp(0.12, 1.0);
     // A complete journey takes 24 seconds at 1×, independent of window width.
     setState(() {
-      _w0 = (_w0 + dt * _speed * (1 - len) / 24).clamp(0.0, 1 - len);
+      _w0 = (_w0 + dt * _rate * landing * (1 - len) / 24).clamp(0.0, 1 - len);
       _w1 = _w0 + len;
       if (_w1 >= 1 - 1e-6) {
         _ticker.stop();
@@ -181,29 +233,101 @@ class _MapScreenState extends State<MapScreen>
   void _frame(
     List<PhotoItem> items, {
     Duration duration = const Duration(milliseconds: 650),
+    Curve curve = Motion.travel,
+  }) {
+    if (_map == null || items.isEmpty) return;
+    final clear = _clear();
+    final size = MediaQuery.sizeOf(context);
+    final pts = [for (final e in items) _merc(e.lat!, e.lng!)];
+    final lo = pts.reduce(
+      (a, b) => Offset(math.min(a.dx, b.dx), math.min(a.dy, b.dy)),
+    );
+    final hi = pts.reduce(
+      (a, b) => Offset(math.max(a.dx, b.dx), math.max(a.dy, b.dy)),
+    );
+    final span = hi - lo;
+    final roomW = size.width - clear.horizontal - 48,
+        roomH = size.height - clear.vertical - 48;
+    // The zoom at which the photos just fill the free area (512 pt tiles).
+    final zoom = span.dx < 1e-9 && span.dy < 1e-9
+        ? 15.5
+        : (math.log(
+                    math.min(
+                      span.dx < 1e-9
+                          ? double.infinity
+                          : roomW / (span.dx * 512),
+                      span.dy < 1e-9
+                          ? double.infinity
+                          : roomH / (span.dy * 512),
+                    ),
+                  ) /
+                  math.ln2)
+              .clamp(3.0, 16.5);
+    // Center them in the free area, not on the whole screen.
+    final world = 512 * math.pow(2, zoom).toDouble();
+    final center =
+        Offset((lo.dx + hi.dx) / 2, (lo.dy + hi.dy) / 2) +
+        Offset(clear.right - clear.left, clear.bottom - clear.top) / 2 / world;
+    _glideTo(center, zoom, duration: duration, curve: curve);
+  }
+
+  /// Move the camera to [center] (Web Mercator, 0..1) and [zoom] with an
+  /// eased curve. The center moves at an even pace on screen even while the
+  /// zoom changes, so the eye can follow the place it is heading for.
+  void _glideTo(
+    Offset center,
+    double zoom, {
+    required Duration duration,
+    Curve curve = Motion.travel,
   }) {
     final map = _map;
-    if (map == null || items.isEmpty) return;
-    final pts = items.map((e) => Geographic(lon: e.lng!, lat: e.lat!)).toList();
-    final b = LngLatBounds.fromPoints(pts);
-    final clear = _clear();
-    if ((b.longitudeEast - b.longitudeWest).abs() < 1e-4 &&
-        (b.latitudeNorth - b.latitudeSouth).abs() < 1e-4) {
-      // Center in the free area, not the whole screen: at the target zoom,
-      // shift the camera by half the difference between the margins.
-      const zoom = 15.5;
-      final p = pts.first;
-      final perPoint = 360 / (512 * math.pow(2, zoom));
-      final dx = (clear.left - clear.right) / 2,
-          dy = (clear.top - clear.bottom) / 2;
-      final center = Geographic(
-        lon: p.lon - dx * perPoint,
-        lat: p.lat + dy * perPoint * math.cos(p.lat * math.pi / 180),
-      );
-      map.animateCamera(center: center, zoom: zoom, nativeDuration: duration);
+    if (map == null) return;
+    _glider.stop();
+    if (duration == Duration.zero || MediaQuery.disableAnimationsOf(context)) {
+      _glide = null;
+      map.moveCamera(center: _geo(center), zoom: zoom);
       return;
     }
-    map.fitBounds(bounds: b, nativeDuration: duration, padding: clear);
+    final cam = map.getCamera();
+    // A camera never starts with a jolt; and the further it zooms, the
+    // longer it takes, so a big change in scale is not rushed past.
+    _glide = _Glide(
+      from: _merc(cam.center.lat, cam.center.lon),
+      to: center,
+      z0: cam.zoom,
+      z1: zoom,
+      length: duration +
+          Duration(milliseconds: ((zoom - cam.zoom).abs() * 90).round()),
+      curve: curve,
+    );
+    _glider.start();
+  }
+
+  void _glideTick(Duration elapsed) {
+    final g = _glide, map = _map;
+    if (g == null || map == null) {
+      _glider.stop();
+      return;
+    }
+    final t = (elapsed.inMicroseconds / g.length.inMicroseconds).clamp(
+      0.0,
+      1.0,
+    );
+    final e = g.curve.transform(t);
+    final dz = g.z1 - g.z0;
+    // Seen on screen, a pan slows as the map zooms in and quickens as it
+    // zooms out; weigh the path by scale so it reads as one even move.
+    final along = dz.abs() < 1e-3
+        ? e
+        : (1 - math.pow(2, -dz * e)) / (1 - math.pow(2, -dz));
+    map.moveCamera(
+      center: _geo(Offset.lerp(g.from, g.to, along.toDouble())!),
+      zoom: g.z0 + dz * e,
+    );
+    if (t >= 1) {
+      _glider.stop();
+      _glide = null;
+    }
   }
 
   void _fit(List<PhotoItem> located) {
@@ -253,9 +377,10 @@ class _MapScreenState extends State<MapScreen>
       p.dy.clamp(room.top, room.bottom),
     );
     final center = map.toLngLat(size.center(Offset.zero) + (p - want));
-    map.animateCamera(
-      center: center,
-      nativeDuration: const Duration(milliseconds: 420),
+    _glideTo(
+      _merc(center.lat, center.lon),
+      map.getCamera().zoom,
+      duration: const Duration(milliseconds: 600),
     );
   }
 
@@ -282,7 +407,11 @@ class _MapScreenState extends State<MapScreen>
     ]);
     if (pts.every(room.contains)) return;
     _followedAt = now;
-    _frame(inside, duration: const Duration(milliseconds: 1100));
+    _frame(
+      inside,
+      duration: const Duration(milliseconds: 1300),
+      curve: Motion.travel,
+    );
   }
 
   void _onEvent(MapEvent e) {
@@ -291,6 +420,9 @@ class _MapScreenState extends State<MapScreen>
         setState(() => _map = mapController);
       case MapEventStartMoveCamera(reason: CameraChangeReason.apiGesture):
         _wandered = true;
+        // A finger on the map takes over from any move in progress.
+        _glider.stop();
+        _glide = null;
       case MapEventStyleLoaded():
         setState(() => _styled = true);
       case MapEventMoveCamera(:final camera):
@@ -410,6 +542,32 @@ class _MapScreenState extends State<MapScreen>
           for (final k in _pinned) 'dot$k',
         });
         final wasInside = _wasInside, wasOutside = _wasOutside;
+        // Where each photo's marker stood on the last build, and how many it
+        // held, so a group that splits can open out from where it was.
+        final homes = _home;
+        _home = {
+          for (final c in clusters)
+            for (final it in c.items)
+              it.key: (c.center.lat, c.center.lon, c.items.length),
+        };
+        Offset? cameFrom(_Cluster c) {
+          final map = _map;
+          final h = homes[c.items.first.key];
+          if (map == null ||
+              h == null ||
+              h.$3 <= c.items.length ||
+              _risen.contains(c.key) ||
+              !c.items.every((e) => homes[e.key] == h)) {
+            return null;
+          }
+          final p = map.toScreenLocations([
+            Geographic(lon: h.$2, lat: h.$1),
+            c.center,
+          ]);
+          final d = p[0] - p[1];
+          return d.distance < 1 ? null : d;
+        }
+
         _wasInside = {for (final e in inside) e.key};
         _wasOutside = {for (final e in outside) e.key};
         return Stack(
@@ -443,9 +601,13 @@ class _MapScreenState extends State<MapScreen>
                               ? 0
                               : 1,
                           duration: const Duration(milliseconds: 220),
+                          curve: Motion.settle,
                           child: _Fall(
                             it.hues,
                             animate: wasInside.contains(it.key),
+                            // A photo leaving its card was a black point,
+                            // not colors: it fades from that.
+                            fromPoint: _pinned.contains(it.key),
                           ),
                         ),
                       ),
@@ -469,7 +631,7 @@ class _MapScreenState extends State<MapScreen>
                               setState(() => _card = null);
                               _frame(
                                 c.items,
-                                duration: const Duration(milliseconds: 520),
+                                duration: const Duration(milliseconds: 700),
                               );
                             } else {
                               _open(c);
@@ -485,11 +647,17 @@ class _MapScreenState extends State<MapScreen>
                                 ? 0
                                 : 1,
                             duration: const Duration(milliseconds: 220),
+                            curve: Motion.settle,
                             child: _Rise(
+                              from: cameFrom(c),
                               animate: _risen.add(c.key),
                               fromDot:
                                   c.items.length == 1 &&
-                                  wasOutside.contains(c.items.first.key),
+                                  (wasOutside.contains(c.items.first.key) ||
+                                      _unpinned.contains(c.items.first.key)),
+                              fromPoint:
+                                  c.items.length == 1 &&
+                                  _unpinned.contains(c.items.first.key),
                               child: c.items.length == 1
                                   ? SplitSwatch(c.items.first.hues, size: 20)
                                   : _Stack(c),
@@ -541,7 +709,9 @@ class _MapScreenState extends State<MapScreen>
                       ),
                   ],
                 ),
-                if (_presenting)
+                // Cards wait until the window has arrived where playback
+                // starts; photos it only sweeps past on the way get none.
+                if (_presenting && !_slide.isAnimating)
                   _PlaybackPhotos(
                     key: ValueKey(_playbackLayout),
                     items: inside,
@@ -556,6 +726,9 @@ class _MapScreenState extends State<MapScreen>
                         return;
                       }
                       setState(() {
+                        // A photo whose card went while it is still in the
+                        // window turns from its black point into colors.
+                        _unpinned = _pinned.difference(keys);
                         _pinned = keys;
                         _covered = covered;
                       });
@@ -570,6 +743,7 @@ class _MapScreenState extends State<MapScreen>
               child: AnimatedOpacity(
                 opacity: _presenting ? 0 : 1,
                 duration: const Duration(milliseconds: 300),
+                curve: Motion.settle,
                 child: Text('Map', style: Txt.display),
               ),
             ),
@@ -590,6 +764,7 @@ class _MapScreenState extends State<MapScreen>
               child: AnimatedOpacity(
                 opacity: _presenting || located.isEmpty ? 0 : 1,
                 duration: const Duration(milliseconds: 300),
+                curve: Motion.settle,
                 child: IgnorePointer(
                   ignoring: _presenting || located.isEmpty,
                   child: Glass(
@@ -632,7 +807,7 @@ class _MapScreenState extends State<MapScreen>
               ),
             AnimatedPositioned(
               duration: Duration(milliseconds: reduceMotion ? 0 : 360),
-              curve: Curves.easeOutCubic,
+              curve: Motion.settle,
               left: 16,
               right: 16,
               bottom: pad.bottom + (_presenting ? 16 : 82),
@@ -664,6 +839,7 @@ class _MapScreenState extends State<MapScreen>
                           _speed = _speed == 0.5 ? 1 : (_speed == 1 ? 2 : 0.5),
                     ),
                     onScrubStart: () {
+                      _slide.stop(); // the finger takes over
                       if (_playing) _stop();
                       if (_presenting) setState(() => _playbackLayout++);
                     },
@@ -829,6 +1005,39 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
   }
 }
 
+class _Glide {
+  _Glide({
+    required this.from,
+    required this.to,
+    required this.z0,
+    required this.z1,
+    required this.length,
+    required this.curve,
+  });
+  final Offset from, to;
+  final double z0, z1;
+  final Duration length;
+  final Curve curve;
+}
+
+/// Web Mercator in a 0..1 square.
+Offset _merc(double lat, double lng) {
+  final r = lat.clamp(-85.05, 85.05) * math.pi / 180;
+  return Offset(
+    (lng + 180) / 360,
+    (1 - math.log(math.tan(r) + 1 / math.cos(r)) / math.pi) / 2,
+  );
+}
+
+Geographic _geo(Offset m) {
+  final y = math.pi * (1 - 2 * m.dy);
+  final sinh = (math.exp(y) - math.exp(-y)) / 2;
+  return Geographic(
+    lon: m.dx * 360 - 180,
+    lat: math.atan(sinh) * 180 / math.pi,
+  );
+}
+
 class _Cluster {
   final List<PhotoItem> items = [];
 
@@ -882,12 +1091,21 @@ class _Rise extends StatelessWidget {
     required this.child,
     this.animate = true,
     this.fromDot = false,
+    this.fromPoint = false,
+    this.from,
   });
   final Widget child;
+
+  /// Where the group this marker came out of stood, relative to it: the
+  /// marker travels out from there instead of appearing in place.
+  final Offset? from;
 
   /// The photo was a faint dot outside the time window a moment ago: the
   /// same dot grows into its colors, rather than one thing replacing another.
   final bool fromDot;
+
+  /// With [fromDot]: the photo was a black point under a card, not a faint dot.
+  final bool fromPoint;
 
   /// False for a marker that has risen before. The map's marker layer keeps
   /// markers by position, so one shifting in the list is built anew; it
@@ -906,16 +1124,29 @@ class _Rise extends StatelessWidget {
         builder: (_, t, c) => t >= 1
             ? c!
             : Transform.scale(
-                scale: 6 / 20 + (1 - 6 / 20) * t,
+                scale:
+                    (fromPoint ? 0.5 : 6 / 20) +
+                    (1 - (fromPoint ? 0.5 : 6 / 20)) * t,
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
                     Opacity(opacity: t, child: c),
                     Opacity(
                       opacity: 1 - t,
-                      child: const SizedBox.square(
+                      child: SizedBox.square(
                         dimension: 20,
-                        child: DecoratedBox(decoration: _faintDot),
+                        child: DecoratedBox(
+                          decoration: fromPoint
+                              ? BoxDecoration(
+                                  color: Neutral.primary,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Neutral.surface,
+                                    width: 2,
+                                  ),
+                                )
+                              : _faintDot,
+                        ),
                       ),
                     ),
                   ],
@@ -924,12 +1155,25 @@ class _Rise extends StatelessWidget {
         child: child,
       );
     }
+    if (animate && from != null && !MediaQuery.disableAnimationsOf(context)) {
+      final d = from!;
+      return TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 620),
+        curve: Motion.settle,
+        builder: (_, t, c) => Transform.translate(
+          offset: d * (1 - t),
+          child: Transform.scale(scale: 0.86 + 0.14 * t, child: c),
+        ),
+        child: child,
+      );
+    }
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: animate ? 0 : 1, end: 1),
       duration: Duration(
         milliseconds: MediaQuery.disableAnimationsOf(context) ? 120 : 360,
       ),
-      curve: Curves.easeOutCubic,
+      curve: Motion.settle,
       builder: (_, t, c) => Opacity(
         opacity: t,
         child: Transform.scale(
@@ -944,9 +1188,9 @@ class _Rise extends StatelessWidget {
 
 /// A photo leaving the time window: its colors draw back into a faint dot.
 class _Fall extends StatelessWidget {
-  const _Fall(this.hues, {required this.animate});
+  const _Fall(this.hues, {required this.animate, this.fromPoint = false});
   final List<KeptColor> hues;
-  final bool animate;
+  final bool animate, fromPoint;
 
   @override
   Widget build(BuildContext context) {
@@ -964,10 +1208,28 @@ class _Fall extends StatelessWidget {
               minHeight: 20,
               maxHeight: 20,
               child: Transform.scale(
-                scale: 1 - (1 - 6 / 20) * t,
+                // From the colors (20 pt) or the black point (10 pt) down
+                // to the faint dot (6 pt).
+                scale:
+                    (fromPoint ? 0.5 : 1) +
+                    (6 / 20 - (fromPoint ? 0.5 : 1)) * t,
                 child: Stack(
                   children: [
-                    Opacity(opacity: 1 - t, child: SplitSwatch(hues, size: 20)),
+                    Opacity(
+                      opacity: 1 - t,
+                      child: fromPoint
+                          ? Container(
+                              decoration: BoxDecoration(
+                                color: Neutral.primary,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Neutral.surface,
+                                  width: 2,
+                                ),
+                              ),
+                            )
+                          : SplitSwatch(hues, size: 20),
+                    ),
                     Opacity(
                       opacity: t,
                       child: const SizedBox.expand(
@@ -1383,13 +1645,13 @@ class _BubblePaint extends CustomPainter {
     canvas.restore();
     canvas.drawPath(
       path,
-      Paint()..color = Color.fromRGBO(250, 250, 249, 0.72 * presence),
+      Paint()..color = Color.fromRGBO(250, 250, 249, 0.5 * presence),
     );
     // The tail has no frost behind it, and a native blur cannot be
     // feathered, so where it leaves the body it is near opaque in the
     // frost's own tone: the map's detail must not start at the body's
     // edge. Toward the point it thins to glass again.
-    const frost = Color(0xFFF6F6F5);
+    const frost = Color(0xFFF4F4F3);
     canvas.drawPath(
       tail(size),
       Paint()

@@ -109,7 +109,7 @@ class Swatch extends StatelessWidget {
       onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
+        curve: Motion.settle,
         width: size,
         height: size,
         padding: EdgeInsets.all(selected ? 2.5 : 0),
@@ -155,6 +155,7 @@ class PhotoPatch extends StatelessWidget {
       builder: (_, snap) => AnimatedOpacity(
         opacity: snap.data == null ? 0 : 1,
         duration: const Duration(milliseconds: 200),
+        curve: Motion.settle,
         child: snap.data == null
             ? const SizedBox.expand()
             : RawImage(
@@ -169,6 +170,19 @@ class PhotoPatch extends StatelessWidget {
 }
 
 /// The soft shadow under marks drawn on a photo tile (heart, palette).
+/// For an [AnimatedSwitcher]: the new content settles up into place as it
+/// fades in, and the old one sinks a little as it goes.
+Widget softSwitch(Widget child, Animation<double> a) => FadeTransition(
+  opacity: a,
+  child: SlideTransition(
+    position: Tween(
+      begin: const Offset(0, 0.12),
+      end: Offset.zero,
+    ).animate(a),
+    child: child,
+  ),
+);
+
 const tileShadow = BoxShadow(
   color: Color(0x2E000000),
   blurRadius: 6,
@@ -334,6 +348,8 @@ class _DevelopedImageState extends State<DevelopedImage> {
         final f = snap.data;
         return AnimatedSwitcher(
           duration: const Duration(milliseconds: 220),
+          switchInCurve: Motion.settle,
+          switchOutCurve: Curves.easeInCubic,
           child: f == null
               ? KeyedSubtree(
                   key: const ValueKey('empty'),
@@ -496,7 +512,7 @@ class IconAction extends StatelessWidget {
               duration: const Duration(milliseconds: 180),
               transitionBuilder: (c, a) => ScaleTransition(
                 scale: Tween(begin: 0.6, end: 1.0).animate(
-                  CurvedAnimation(parent: a, curve: Curves.easeOutBack),
+                  CurvedAnimation(parent: a, curve: Motion.settle),
                 ),
                 child: FadeTransition(opacity: a, child: c),
               ),
@@ -574,7 +590,7 @@ class _PressableState extends State<_Pressable> {
       child: AnimatedScale(
         scale: _down ? 0.97 : 1,
         duration: const Duration(milliseconds: 140),
-        curve: Curves.easeOutCubic,
+        curve: Motion.settle,
         child: widget.child,
       ),
     );

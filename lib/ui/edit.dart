@@ -23,7 +23,7 @@ class EditRoute extends PageRouteBuilder<void> {
         transitionsBuilder: (_, a, _, child) => FadeTransition(
           opacity: CurvedAnimation(parent: a, curve: Curves.easeOut),
           child: SlideTransition(
-            position: Tween(begin: const Offset(0, 0.04), end: Offset.zero).animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
+            position: Tween(begin: const Offset(0, 0.04), end: Offset.zero).animate(CurvedAnimation(parent: a, curve: Motion.settle)),
             child: child,
           ),
         ),
@@ -609,6 +609,9 @@ class _EditScreenState extends State<EditScreen> {
             Expanded(
               child: AnimatedSwitcher(
                 duration: const Duration(milliseconds: 160),
+                switchInCurve: Motion.settle,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: softSwitch,
                 child: Align(
                   key: ValueKey(status),
                   alignment: Alignment.centerLeft,
@@ -768,6 +771,7 @@ class _EditScreenState extends State<EditScreen> {
                   onTap: canSend ? () => _send(_askText.text) : null,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 140),
+                    curve: Motion.settle,
                     width: 32,
                     height: 32,
                     decoration: BoxDecoration(color: canSend ? Neutral.primary : Neutral.hairline, shape: BoxShape.circle),
@@ -821,6 +825,9 @@ class _EditScreenState extends State<EditScreen> {
               Expanded(
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 160),
+                  switchInCurve: Motion.settle,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: softSwitch,
                   child: Align(
                     key: ValueKey(_toolTitle),
                     alignment: Alignment.centerLeft,
@@ -849,6 +856,9 @@ class _EditScreenState extends State<EditScreen> {
             height: 138,
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
+              switchInCurve: Motion.settle,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: softSwitch,
               child: KeyedSubtree(key: ValueKey(_tool), child: _toolBody()),
             ),
           ),
@@ -872,6 +882,7 @@ class _EditScreenState extends State<EditScreen> {
                           const SizedBox(height: 5),
                           AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
+                            curve: Motion.settle,
                             width: _tool == t ? 16 : 0,
                             height: 2,
                             decoration: BoxDecoration(color: Neutral.primary, borderRadius: BorderRadius.circular(1)),
@@ -1098,7 +1109,7 @@ class _EditScreenState extends State<EditScreen> {
                       : null,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOutCubic,
+                    curve: Motion.settle,
                     width: s,
                     height: s,
                     padding: const EdgeInsets.all(3),
@@ -1183,7 +1194,7 @@ class _PingRing extends StatelessWidget {
         child: TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: 1),
           duration: const Duration(milliseconds: 650),
-          curve: Curves.easeOutCubic,
+          curve: Motion.settle,
           builder: (context, t, _) => Opacity(
             opacity: (1 - t).clamp(0, 1),
             child: Transform.scale(
@@ -1290,6 +1301,7 @@ class _ViewButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         child: AnimatedDefaultTextStyle(
           duration: const Duration(milliseconds: 140),
+          curve: Motion.settle,
           style: Txt.small.copyWith(fontSize: 12.5, color: on ? Neutral.primary : Neutral.secondary, fontWeight: on ? FontWeight.w600 : FontWeight.w400),
           child: Text(label),
         ),
@@ -1469,13 +1481,14 @@ class _MiniToggle extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
+      curve: Motion.settle,
       width: 30,
       height: 18,
       padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(color: on ? Neutral.primary : Neutral.hairline, borderRadius: BorderRadius.circular(9)),
       child: AnimatedAlign(
         duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOutBack,
+        curve: Motion.settle,
         alignment: on ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
           width: 14,

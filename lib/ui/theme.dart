@@ -81,6 +81,17 @@ const systemBarsDark = SystemUiOverlayStyle(
   statusBarColor: Colors.transparent,
 );
 
+/// The two curves every eased motion uses, so the app moves as one thing.
+class Motion {
+  /// Answers at once and settles at length, with no bounce: for things that
+  /// appear, respond, or change state.
+  static const settle = Cubic(0.22, 1, 0.36, 1);
+
+  /// Leaves softly and arrives softly: for things that travel from one place
+  /// to another, such as the map's camera.
+  static const travel = Cubic(0.65, 0, 0.35, 1);
+}
+
 /// Springs used everywhere, so motion feels like one material.
 class Springs {
   static const snappy = SpringDescription(mass: 1, stiffness: 420, damping: 36);

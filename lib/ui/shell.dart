@@ -74,7 +74,7 @@ class _ShellState extends State<Shell> {
                 child: AnimatedOpacity(
                   opacity: _tab == 0 ? 1 : 0,
                   duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOutCubic,
+                  curve: Motion.settle,
                   child: const PhotosScreen(),
                 ),
               ),
@@ -91,7 +91,7 @@ class _ShellState extends State<Shell> {
                 child: AnimatedOpacity(
                   opacity: _tab == 1 ? 1 : 0,
                   duration: Duration(milliseconds: _tab == 1 ? 260 : 0),
-                  curve: Curves.easeOutCubic,
+                  curve: Motion.settle,
                   child: const MapScreen(),
                 ),
               ),
@@ -101,7 +101,7 @@ class _ShellState extends State<Shell> {
             valueListenable: Shell.barHidden,
             builder: (context, hidden, _) => AnimatedPositioned(
               duration: const Duration(milliseconds: 420),
-              curve: hidden ? Curves.easeInCubic : Curves.easeOutBack,
+              curve: hidden ? Curves.easeInCubic : Motion.settle,
               left: 20,
               right: 20,
               bottom: hidden ? -100 : pad.bottom + 10,
@@ -216,7 +216,7 @@ class _TabSwitchState extends State<_TabSwitch> with SingleTickerProviderStateMi
       child: AnimatedScale(
         scale: _down ? 0.97 : 1,
         duration: const Duration(milliseconds: 160),
-        curve: Curves.easeOutCubic,
+        curve: Motion.settle,
         child: SizedBox(
           width: total,
           height: _h,

@@ -263,7 +263,7 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                                       tag: 'photo-${it.key}',
                                       child: DevelopedImage(it, size: 1600, fit: BoxFit.contain, alignment: Alignment.center),
                                     ),
-                                    if (i == _index) AnimatedOpacity(opacity: _showOriginal ? 1 : 0, duration: const Duration(milliseconds: 160), child: _Original(it)),
+                                    if (i == _index) AnimatedOpacity(opacity: _showOriginal ? 1 : 0, duration: const Duration(milliseconds: 180), curve: Motion.settle, child: _Original(it)),
                                   ],
                                 ),
                               ),
@@ -285,6 +285,9 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                       children: [
                         AnimatedSwitcher(
                           duration: const Duration(milliseconds: 200),
+                          switchInCurve: Motion.settle,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: softSwitch,
                           child: Row(
                             key: ValueKey('${item.key}$_hint$_showOriginal'),
                             children: _hint
