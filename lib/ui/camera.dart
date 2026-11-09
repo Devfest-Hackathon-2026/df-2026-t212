@@ -293,13 +293,27 @@ class _CameraScreenState extends State<CameraScreen> {
               final aspect = _feed?.aspect ?? 3 / 4;
               final w = box.maxWidth - 12;
               final h = math.min(w / aspect, box.maxHeight - top - hint - bottom);
-              return Column(
+              // Where the view sits, so the loupe can leave it.
+              final view = Offset((box.maxWidth - h * aspect) / 2, top);
+              final at = _loupe;
+              return Stack(
+                clipBehavior: Clip.none,
                 children: [
-                  SizedBox(height: top, width: double.infinity, child: _topBar()),
-                  SizedBox(height: h, width: h * aspect, child: _viewfinder()),
-                  SizedBox(height: hint, child: _hint()),
-                  const Spacer(),
-                  SizedBox(height: bottom, child: _bottom()),
+                  Column(
+                    children: [
+                      SizedBox(height: top, width: double.infinity, child: _topBar()),
+                      SizedBox(height: h, width: h * aspect, child: _viewfinder()),
+                      SizedBox(height: hint, child: _hint()),
+                      const Spacer(),
+                      SizedBox(height: bottom, child: _bottom()),
+                    ],
+                  ),
+                  if (at != null)
+                    _loupeWidget(
+                      view + Offset(at.dx * h * aspect, at.dy * h),
+                      width: box.maxWidth,
+                      ceiling: 0,
+                    ),
                 ],
               );
             },
@@ -499,7 +513,6 @@ class _CameraScreenState extends State<CameraScreen> {
                   ),
                 ),
                 for (final p in _pings) _PingRing(key: ValueKey(p.id), ping: p),
-                if (_loupe != null) _loupeWidget(Offset(_loupe!.dx * size.width, _loupe!.dy * size.height), size),
                 Positioned(left: 0, right: 0, bottom: 0, child: _reachPanel()),
                 Positioned(
                   left: 0,
@@ -634,13 +647,20 @@ class _CameraScreenState extends State<CameraScreen> {
 
   /// Held above the finger, as in Edit: the scene under it enlarged and in
   /// its own colors, ringed with the color that will be kept.
-  Widget _loupeWidget(Offset p, Size box) {
-    const d = _loupeSize;
+  ///
+  /// It never goes below the finger, which would cover it. It rises out over
+  /// the bar above the view, and where even that runs out, it slides aside
+  /// along the top, toward the side with more room.
+  Widget _loupeWidget(Offset p, {required double width, required double ceiling}) {
+    const d = _loupeSize, gap = 36.0;
     final c = _loupeColor, image = _loupeImage;
-    final top = p.dy - d - 36 < 0 ? p.dy + 36 : p.dy - d - 36;
+    final above = p.dy - d - gap;
+    final aside = ((ceiling - above) / d).clamp(0.0, 1.0);
+    final toward = p.dx < width / 2 ? 1.0 : -1.0;
+    final left = p.dx - d / 2 + toward * aside * (d / 2 + gap);
     return Positioned(
-      left: (p.dx - d / 2).clamp(0, box.width - d),
-      top: top,
+      left: left.clamp(4, width - d - 4),
+      top: math.max(ceiling, above),
       child: IgnorePointer(
         child: Container(
           width: d,
