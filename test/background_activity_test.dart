@@ -69,6 +69,7 @@ void main() {
     final entry = store.activity.first;
     expect(entry.kind, ActivityKind.editRequest);
     expect(entry.complete, isFalse);
+    expect(entry.title, 'Agent editing…');
     await tester.pumpWidget(const MaterialApp(home: Scaffold(body: PhotosScreen())));
     await tester.pump();
     expect(find.text('Agent editing'), findsOneWidget);
@@ -89,6 +90,7 @@ void main() {
     expect(finished.isCompleted, isTrue);
     expect(item.edit!.ambience, .31);
     expect(entry.complete, isTrue);
+    expect(entry.title, 'Edited by agent');
     expect(entry.count(ActivityOutcome.developed), 1);
     expect(entry.keys, [item.key]);
     expect(entry.read, isFalse);
@@ -118,6 +120,7 @@ void main() {
     expect(removedRun.cancelled, isTrue);
     expect(store.byKey(item.key), isNull);
     expect(removedEntry.count(ActivityOutcome.removed), 1);
+    expect(removedEntry.title, 'Agent edit cancelled');
     expect(item.edit!.ambience, .31, reason: 'A late result must not overwrite the removed photo.');
     await tester.pump(const Duration(seconds: 4));
     await tester.runAsync(() async { await Future<void>.delayed(const Duration(milliseconds: 20)); });

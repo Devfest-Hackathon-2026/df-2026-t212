@@ -16,9 +16,36 @@ class ActivityEntry {
   bool read;
   bool get complete => keys.every(outcomes.containsKey);
   int count(ActivityOutcome outcome) => outcomes.values.where((v) => v == outcome).length;
-  String get title => switch(kind) {
-    ActivityKind.importBatch => 'Import', ActivityKind.autoImport => 'Auto import', ActivityKind.editRequest => 'Agent edit', ActivityKind.developBatch => 'Auto develop',
-  };
+  String get title {
+    if (!complete) {
+      return switch (kind) {
+        ActivityKind.importBatch => 'Importing…',
+        ActivityKind.autoImport => 'Auto importing…',
+        ActivityKind.editRequest => 'Agent editing…',
+        ActivityKind.developBatch => 'Auto developing…',
+      };
+    }
+    final operation = switch (kind) {
+      ActivityKind.importBatch => 'Import',
+      ActivityKind.autoImport => 'Auto import',
+      ActivityKind.editRequest => 'Agent edit',
+      ActivityKind.developBatch => 'Auto develop',
+    };
+    final succeeded = count(ActivityOutcome.added) + count(ActivityOutcome.developed);
+    final failed = count(ActivityOutcome.failed);
+    final cancelled = count(ActivityOutcome.cancelled) + count(ActivityOutcome.removed);
+    if (failed > 0 || cancelled > 0) {
+      if (succeeded > 0) return '$operation partially completed';
+      return '$operation ${failed > 0 ? 'failed' : 'cancelled'}';
+    }
+    if (succeeded == 0) return '$operation skipped';
+    return switch (kind) {
+      ActivityKind.importBatch => 'Imported',
+      ActivityKind.autoImport => 'Auto imported',
+      ActivityKind.editRequest => 'Edited by agent',
+      ActivityKind.developBatch => 'Auto developed',
+    };
+  }
   void finish(String key, ActivityOutcome outcome) {
     if (!keys.contains(key) || outcomes.containsKey(key)) return;
     outcomes[key] = outcome;
