@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -11,6 +12,7 @@ import '../core/recipe.dart';
 import '../core/renderer.dart';
 import '../data/photo_source.dart';
 import '../data/store.dart';
+import '../data/subject.dart';
 import 'edit_preview.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
@@ -87,7 +89,19 @@ class _EditScreenState extends State<EditScreen> {
   bool _touched = false;
 
   Offset? _loupe; // normalized
-  Offset? _areaStart, _areaEnd;
+  // Area: tap a thing, then paint to add or erase; two fingers zoom.
+  bool _erase = false;
+  double _brush = 0.05; // tip radius on screen, as a fraction of the photo's short side at 1×
+  bool _sizing = false; // the Brush slider is held: show the tip
+  bool _finding = false; // looking for the outline under a tap
+  Stroke? _live; // the stroke being laid down
+  Area? _beforeStroke;
+  Offset? _tip; // normalized, while painting
+  Matrix4? _pinchFrom;
+  Offset? _pinchAt;
+  final _viewKey = GlobalKey();
+  ui.Image? _veil;
+  bool _veiling = false, _veilAgain = false;
   final List<_Ping> _pings = [];
   int _pingId = 0;
 
@@ -165,7 +179,169 @@ class _EditScreenState extends State<EditScreen> {
     return c.future;
   }
 
-  void _request() => _worker?.request(_r, view: _mask || _sliding ? PreviewView.mask : PreviewView.result);
+  void _request() {
+    _worker?.request(_r, view: _mask || _sliding ? PreviewView.mask : PreviewView.result);
+    _refreshVeil();
+  }
+
+  /// A white veil over what lies outside the area, so painting shows where
+  /// color stays.
+  Future<void> _refreshVeil() async {
+    if (_veiling) {
+      _veilAgain = true;
+      return;
+    }
+    final a = _r.area, px = _px;
+    if (a == null || a.isEmpty || px == null) {
+      if (_veil != null) setState(() => _veil = null);
+      return;
+    }
+    _veiling = true;
+    const w = 320;
+    final h = math.max(1, (w * px.height / px.width).round());
+    final m = areaMask(w, h, a);
+    final bytes = Uint8List(w * h * 4);
+    for (var i = 0; i < m.length; i++) {
+      // Premultiplied: white at this strength.
+      final v = ((1 - m[i]) * 150).round();
+      bytes[i * 4] = bytes[i * 4 + 1] = bytes[i * 4 + 2] = bytes[i * 4 + 3] = v;
+    }
+    final done = Completer<ui.Image>();
+    ui.decodeImageFromPixels(bytes, w, h, ui.PixelFormat.rgba8888, done.complete);
+    final img = await done.future;
+    _veiling = false;
+    if (!mounted) return img.dispose();
+    final old = _veil;
+    setState(() => _veil = img);
+    if (old != null) WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+    if (_veilAgain) {
+      _veilAgain = false;
+      _refreshVeil();
+    }
+  }
+
+  double get _zoomScale => _zoom.value.getMaxScaleOnAxis();
+
+  void _strokeStart(Offset n) {
+    _beforeStroke = _r.area?.copy();
+    _push(_r.copy());
+    final st = Stroke(points: [[n.dx, n.dy]], radius: _brush / _zoomScale, erase: _erase);
+    _live = st;
+    _tip = n;
+    _change(() {
+      final a = _r.area?.copy() ?? Area(edge: 0.015);
+      a.strokes = [...a.strokes, st];
+      _r.area = a;
+    }, record: false);
+  }
+
+  void _strokeMove(Offset n, Size box) {
+    final st = _live;
+    if (st == null) return;
+    final last = st.points.last;
+    _tip = n;
+    // Points a few pixels apart are enough; the line between them is filled.
+    if (Offset((n.dx - last[0]) * box.width, (n.dy - last[1]) * box.height).distance < 3) {
+      setState(() {});
+      return;
+    }
+    _change(() => st.points.add([n.dx, n.dy]), record: false);
+  }
+
+  void _strokeEnd({bool drop = false}) {
+    if (_live == null) return;
+    _live = null;
+    if (drop) {
+      // A second finger came down: it was the start of a pinch, not paint.
+      _change(() {
+        _r.area = _beforeStroke;
+        if (_undo.isNotEmpty) _undo.removeLast();
+      }, record: false);
+    } else {
+      Haptics.tick();
+    }
+    setState(() => _tip = null);
+  }
+
+  Offset _inView(Offset global) => (_viewKey.currentContext!.findRenderObject() as RenderBox).globalToLocal(global);
+
+  void _pinchStart(Offset focal) {
+    _pinchFrom = _zoom.value.clone();
+    _pinchAt = _inView(focal);
+  }
+
+  void _pinchMove(Offset focal, double scale) {
+    final from = _pinchFrom, f0 = _pinchAt;
+    final box = _viewKey.currentContext?.size;
+    if (from == null || f0 == null || box == null) return;
+    final s0 = from.getMaxScaleOnAxis();
+    final k = (s0 * scale).clamp(1.0, 8.0) / s0;
+    final f = _inView(focal);
+    final m = Matrix4.translationValues(f.dx, f.dy, 0)
+      ..multiply(Matrix4.diagonal3Values(k, k, 1))
+      ..multiply(Matrix4.translationValues(-f0.dx, -f0.dy, 0))
+      ..multiply(from);
+    final s = m.getMaxScaleOnAxis();
+    final t = m.getTranslation();
+    m.setTranslationRaw(
+      t.x.clamp(box.width - box.width * s, 0.0),
+      t.y.clamp(box.height - box.height * s, 0.0),
+      0,
+    );
+    _zoom.value = m;
+  }
+
+  /// Tap in Area: pick out the thing there, or with Erase, take a shape away.
+  Future<void> _areaTap(Offset n, Size box) async {
+    final a = _r.area;
+    if (_erase) {
+      final i = a == null ? -1 : a.polygons.lastIndexWhere((p) => _inside(p, n));
+      final j = a == null ? -1 : a.ellipses.lastIndexWhere((e) {
+        final dx = (n.dx - e[0]) / math.max(e[2], 1e-6), dy = (n.dy - e[1]) / math.max(e[3], 1e-6);
+        return dx * dx + dy * dy <= 1;
+      });
+      if (i < 0 && j < 0) return Haptics.tick();
+      Haptics.light();
+      _change(() {
+        final b = a!.copy();
+        if (i >= 0) {
+          b.polygons = [...b.polygons]..removeAt(i);
+        } else {
+          b.ellipses = [...b.ellipses]..removeAt(j);
+        }
+        _r.area = b.isEmpty ? null : b;
+      });
+      return;
+    }
+    final px = _px;
+    if (px == null || _finding) return;
+    Haptics.tick();
+    _ping(Offset(n.dx * box.width, n.dy * box.height), null);
+    setState(() => _finding = true);
+    final polys = await Subject.outline(px, n);
+    if (!mounted) return;
+    setState(() => _finding = false);
+    if (polys == null || polys.isEmpty) {
+      Haptics.warning();
+      setState(() => _note = polys == null ? 'This phone cannot pick things out. Paint instead' : 'Nothing stands out there. Paint it instead');
+      return;
+    }
+    Haptics.light();
+    _change(() {
+      final b = _r.area?.copy() ?? Area(edge: 0.015);
+      b.polygons = [...b.polygons, ...polys];
+      _r.area = b;
+    });
+  }
+
+  static bool _inside(List<List<double>> poly, Offset n) {
+    var c = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      final yi = poly[i][1], yj = poly[j][1];
+      if ((yi > n.dy) != (yj > n.dy) && n.dx < (poly[j][0] - poly[i][0]) * (n.dy - yi) / (yj - yi) + poly[i][0]) c = !c;
+    }
+    return c;
+  }
 
   // ------------------------------------------------------------ agent
 
@@ -491,7 +667,7 @@ class _EditScreenState extends State<EditScreen> {
           height: h,
           child: GestureDetector(
             onTapUp: areaMode
-                ? null
+                ? (d) => _areaTap(norm(d.localPosition), size)
                 : (d) {
                     if (!asking) return _pickAt(norm(d.localPosition), size);
                     // With the keyboard up, the first tap only puts it away so the whole photo shows.
@@ -513,25 +689,24 @@ class _EditScreenState extends State<EditScreen> {
                     setState(() => _loupe = null);
                     if (n != null) _pickAt(n, size);
                   },
-            onPanStart: areaMode ? (d) => setState(() => _areaStart = _areaEnd = norm(d.localPosition)) : null,
-            onPanUpdate: areaMode ? (d) => setState(() => _areaEnd = norm(d.localPosition)) : null,
-            onPanEnd: areaMode
-                ? (_) {
-                    final a = _areaStart, b = _areaEnd;
-                    setState(() => _areaStart = _areaEnd = null);
-                    if (a == null || b == null || (a - b).distance < 0.03) return;
-                    Haptics.light();
-                    _change(() {
-                      final e = [
-                        (a.dx + b.dx) / 2,
-                        (a.dy + b.dy) / 2,
-                        (a.dx - b.dx).abs() / 2,
-                        (a.dy - b.dy).abs() / 2,
-                      ];
-                      final area = _r.area?.copy() ?? Area(edge: 0.03);
-                      area.ellipses = [...area.ellipses, e];
-                      _r.area = area;
-                    });
+            onScaleStart: areaMode
+                ? (d) => d.pointerCount >= 2 ? _pinchStart(d.focalPoint) : _strokeStart(norm(d.localFocalPoint))
+                : null,
+            onScaleUpdate: areaMode
+                ? (d) {
+                    if (d.pointerCount >= 2) {
+                      if (_live != null) _strokeEnd(drop: true);
+                      if (_pinchFrom == null) _pinchStart(d.focalPoint);
+                      _pinchMove(d.focalPoint, d.scale);
+                    } else {
+                      _strokeMove(norm(d.localFocalPoint), size);
+                    }
+                  }
+                : null,
+            onScaleEnd: areaMode
+                ? (d) {
+                    _pinchFrom = _pinchAt = null;
+                    _strokeEnd(drop: d.pointerCount > 0);
                   }
                 : null,
             child: Stack(
@@ -561,7 +736,21 @@ class _EditScreenState extends State<EditScreen> {
                                   placeholder: OriginalImage(it, size: 900),
                                 ),
                         ),
-                      if (areaMode) CustomPaint(painter: _AreaPainter(_r.area, _areaStart, _areaEnd)),
+                      if (areaMode && _veil != null && !_before)
+                        IgnorePointer(
+                          child: RawImage(image: _veil, fit: BoxFit.fill, filterQuality: FilterQuality.medium),
+                        ),
+                      if (areaMode)
+                        IgnorePointer(
+                          child: CustomPaint(
+                            painter: _AreaPainter(
+                              _r.area,
+                              tip: _tip ?? (_sizing ? const Offset(0.5, 0.5) : null),
+                              radius: _brush / _zoomScale * math.min(w, h),
+                              erase: _erase,
+                            ),
+                          ),
+                        ),
                       // Where the vignette starts, while it is slid.
                       IgnorePointer(
                         child: AnimatedOpacity(
@@ -596,6 +785,7 @@ class _EditScreenState extends State<EditScreen> {
           child: Stack(
             children: [
               Positioned.fill(
+                key: _viewKey,
                 child: InteractiveViewer(
                   transformationController: _zoom,
                   minScale: 1,
@@ -624,7 +814,9 @@ class _EditScreenState extends State<EditScreen> {
     final showMask = _mask || _sliding;
     final running = _run != null;
     final offer = _offer != null && !running && !_before && !showMask;
-    final status = _before
+    final status = _finding
+        ? 'Looking for the thing there…'
+        : _before
         ? 'Before'
         : showMask
         ? 'Showing where color is kept'
@@ -644,7 +836,7 @@ class _EditScreenState extends State<EditScreen> {
         child: Row(
           children: [
             const SizedBox(width: 10),
-            if (running && !showMask && !_before) ...[
+            if ((running && !showMask && !_before) || _finding) ...[
               const CupertinoActivityIndicator(radius: 7, color: Neutral.secondary),
               const SizedBox(width: 8),
             ],
@@ -961,7 +1153,7 @@ class _EditScreenState extends State<EditScreen> {
 
   String get _toolTitle => switch (_tool) {
     _Tool.accent => _adding ? 'Tap the photo to add a color' : 'Tap the photo to change this color',
-    _Tool.area => 'Drag to keep color only there',
+    _Tool.area => _erase ? 'Paint to take color away' : 'Tap a thing, or paint over it',
     _Tool.mono => 'The black and white part',
   };
 
@@ -998,31 +1190,44 @@ class _EditScreenState extends State<EditScreen> {
       case _Tool.area:
         return Column(
           children: [
+            SizedBox(
+              height: 40,
+              child: Row(
+                children: [
+                  _modeChip('Add', !_erase, () => setState(() => _erase = false)),
+                  const SizedBox(width: 4),
+                  _modeChip('Erase', _erase, () => setState(() => _erase = true)),
+                  const Spacer(),
+                  TextAction('Clear', onTap: _r.area == null ? null : () => _change(() => _r.area = null)),
+                ],
+              ),
+            ),
             SliderRow(
+              height: 44,
+              label: 'Brush',
+              value: _brush * 100,
+              min: 1,
+              max: 15,
+              defaultValue: 5,
+              advanced: _advanced,
+              onStart: () => setState(() => _sizing = true),
+              onEnd: () => setState(() => _sizing = false),
+              onChanged: (v) => setState(() => _brush = v / 100),
+            ),
+            SliderRow(
+              height: 44,
               label: 'Feather',
-              value: (_r.area?.edge ?? 0.03) * 100,
+              value: (_r.area?.edge ?? 0.015) * 100,
               min: 0,
               max: 10,
-              defaultValue: 3,
+              defaultValue: 1.5,
               advanced: _advanced,
               onStart: () {
                 _push(_r.copy());
                 _slide(true);
               },
               onEnd: () => _slide(false),
-              onChanged: (v) => _change(() => (_r.area ??= Area()).edge = v / 100, record: false),
-            ),
-            Row(
-              children: [
-                Text(
-                  _r.area == null || _r.area!.isEmpty
-                      ? 'Whole photo'
-                      : '${(_r.area!.polygons.length + _r.area!.ellipses.length)} shape(s)',
-                  style: Txt.mono,
-                ),
-                const Spacer(),
-                TextAction('Clear', onTap: _r.area == null ? null : () => _change(() => _r.area = null)),
-              ],
+              onChanged: (v) => _change(() => (_r.area ??= Area(edge: 0.015)).edge = v / 100, record: false),
             ),
           ],
         );
@@ -1095,6 +1300,24 @@ class _EditScreenState extends State<EditScreen> {
         );
     }
   }
+
+  /// One side of Add / Erase: the chosen one filled.
+  Widget _modeChip(String label, bool on, VoidCallback onTap) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: on
+        ? null
+        : () {
+            Haptics.tick();
+            onTap();
+          },
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Motion.settle,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(color: on ? Neutral.primary : Colors.transparent, borderRadius: BorderRadius.circular(16)),
+      child: Text(label, style: Txt.label.copyWith(color: on ? Neutral.surface : Neutral.secondary)),
+    ),
+  );
 
   /// What the photo offers, while the add slot is selected.
   Widget _fromPhoto() => Padding(
@@ -1404,25 +1627,28 @@ class _MiniToggle extends StatelessWidget {
 }
 
 class _AreaPainter extends CustomPainter {
-  _AreaPainter(this.area, this.a, this.b);
+  _AreaPainter(this.area, {this.tip, required this.radius, required this.erase});
   final Area? area;
-  final Offset? a, b;
+  final Offset? tip;
+  final double radius;
+  final bool erase;
 
   @override
   void paint(Canvas canvas, Size s) {
     final line = Paint()
-      ..color = const Color(0xE6FFFFFF)
+      ..color = const Color(0x99FFFFFF)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
+      ..strokeWidth = 1;
     final shadow = Paint()
-      ..color = const Color(0x55000000)
+      ..color = const Color(0x33000000)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
+      ..strokeWidth = 2.5;
     void draw(Path p) {
       canvas.drawPath(p, shadow);
       canvas.drawPath(p, line);
     }
 
+    // The shapes a tap made: with Erase, a tap inside one takes it away.
     for (final poly in area?.polygons ?? const <List<List<double>>>[]) {
       if (poly.length < 3) continue;
       final p = Path()..moveTo(poly[0][0] * s.width, poly[0][1] * s.height);
@@ -1442,11 +1668,25 @@ class _AreaPainter extends CustomPainter {
         ),
       );
     }
-    if (a != null && b != null) {
-      draw(
-        Path()..addOval(
-          Rect.fromPoints(Offset(a!.dx * s.width, a!.dy * s.height), Offset(b!.dx * s.width, b!.dy * s.height)),
-        ),
+    final t = tip;
+    if (t != null) {
+      final c = Offset(t.dx * s.width, t.dy * s.height);
+      canvas.drawCircle(c, radius, Paint()..color = erase ? const Color(0x33000000) : const Color(0x33FFFFFF));
+      canvas.drawCircle(
+        c,
+        radius,
+        Paint()
+          ..color = const Color(0x66000000)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.5,
+      );
+      canvas.drawCircle(
+        c,
+        radius,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
       );
     }
   }

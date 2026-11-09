@@ -62,8 +62,38 @@ class KeptColor {
 }
 
 /// Where color may stay. Coordinates are normalized to the photo (0..1).
+/// One stroke of the area brush: a line of [points] with a round tip.
+class Stroke {
+  Stroke({required this.points, required this.radius, this.erase = false});
+
+  /// [[x, y], ...] in 0..1 of the photo.
+  List<List<double>> points;
+
+  /// Half the line's thickness, as a fraction of the photo's short side.
+  double radius;
+
+  /// Takes the area away where it passes, instead of adding to it.
+  bool erase;
+
+  Stroke copy() => Stroke(points: points.map((q) => List.of(q)).toList(), radius: radius, erase: erase);
+
+  Map<String, dynamic> toJson() => {'points': points, 'radius': radius, if (erase) 'erase': true};
+
+  static Stroke? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final pts = ((j['points'] as List?) ?? [])
+        .whereType<List>()
+        .where((q) => q.length >= 2 && q.every((e) => e is num))
+        .map((q) => q.cast<num>().take(2).map((e) => e.toDouble()).toList())
+        .toList();
+    final r = (j['radius'] as num?)?.toDouble();
+    if (pts.isEmpty || r == null || r <= 0) return null;
+    return Stroke(points: pts, radius: r, erase: j['erase'] == true);
+  }
+}
+
 class Area {
-  Area({this.polygons = const [], this.ellipses = const [], this.edge = 0.03});
+  Area({this.polygons = const [], this.ellipses = const [], this.strokes = const [], this.edge = 0.03});
 
   /// Each polygon is a flat list of points: [[x, y], ...].
   List<List<List<double>>> polygons;
@@ -71,18 +101,30 @@ class Area {
   /// Each ellipse is [cx, cy, rx, ry].
   List<List<double>> ellipses;
 
+  /// Paint over the shapes, in the order it was laid down.
+  List<Stroke> strokes;
+
   /// Feather, as a fraction of the photo's short side.
   double edge;
 
-  bool get isEmpty => polygons.isEmpty && ellipses.isEmpty;
+  bool get isEmpty => polygons.isEmpty && ellipses.isEmpty && strokes.isEmpty;
+
+  /// Erasing before anything was kept starts from the whole photo.
+  bool get startsWhole => polygons.isEmpty && ellipses.isEmpty && strokes.isNotEmpty && strokes.first.erase;
 
   Area copy() => Area(
         polygons: polygons.map((p) => p.map((q) => List.of(q)).toList()).toList(),
         ellipses: ellipses.map((e) => List.of(e)).toList(),
+        strokes: strokes.map((s) => s.copy()).toList(),
         edge: edge,
       );
 
-  Map<String, dynamic> toJson() => {'polygons': polygons, 'ellipses': ellipses, 'edge': edge};
+  Map<String, dynamic> toJson() => {
+        'polygons': polygons,
+        'ellipses': ellipses,
+        if (strokes.isNotEmpty) 'strokes': strokes.map((s) => s.toJson()).toList(),
+        'edge': edge,
+      };
 
   factory Area.fromJson(Map<String, dynamic> j) => Area(
         // Models sometimes send short or stray arrays; keep only well-formed shapes.
@@ -100,6 +142,7 @@ class Area {
             .where((e) => e.length >= 4 && e.every((v) => v is num))
             .map((e) => e.cast<num>().take(4).map((v) => v.toDouble()).toList())
             .toList(),
+        strokes: ((j['strokes'] as List?) ?? []).map(Stroke.fromJson).whereType<Stroke>().toList(),
         edge: (j['edge'] as num?)?.toDouble() ?? 0.03,
       );
 }

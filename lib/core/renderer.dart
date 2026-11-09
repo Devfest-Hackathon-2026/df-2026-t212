@@ -267,6 +267,11 @@ Float32List areaMask(int w, int h, Area? area) {
       }
     }
   }
+  if (area.startsWhole) m.fillRange(0, m.length, 1);
+  final short = math.min(w, h).toDouble();
+  for (final st in area.strokes) {
+    _paintStroke(m, w, h, st.points, math.max(0.5, st.radius * short), st.erase ? 0 : 1);
+  }
   final sigma = area.edge * math.min(w, h) / 2;
   final r = sigma.round();
   if (r >= 1) {
@@ -276,6 +281,28 @@ Float32List areaMask(int w, int h, Area? area) {
     }
   }
   return m;
+}
+
+/// Lays [v] along the line through [pts] with a round tip of radius [rad] px.
+void _paintStroke(Float32List m, int w, int h, List<List<double>> pts, double rad, double v) {
+  final r2 = rad * rad;
+  for (var i = 0; i < pts.length; i++) {
+    final ax = pts[i][0] * w, ay = pts[i][1] * h;
+    final b = pts[math.min(i + 1, pts.length - 1)];
+    final bx = b[0] * w, by = b[1] * h;
+    final dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    final x0 = (math.min(ax, bx) - rad).floor().clamp(0, w - 1), x1 = (math.max(ax, bx) + rad).ceil().clamp(0, w - 1);
+    final y0 = (math.min(ay, by) - rad).floor().clamp(0, h - 1), y1 = (math.max(ay, by) + rad).ceil().clamp(0, h - 1);
+    for (var y = y0; y <= y1; y++) {
+      final py = y + 0.5;
+      for (var x = x0; x <= x1; x++) {
+        final px = x + 0.5;
+        final t = len2 == 0 ? 0.0 : (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0);
+        final ex = ax + t * dx - px, ey = ay + t * dy - py;
+        if (ex * ex + ey * ey <= r2) m[y * w + x] = v;
+      }
+    }
+  }
 }
 
 // ------------------------------------------------------------ render
