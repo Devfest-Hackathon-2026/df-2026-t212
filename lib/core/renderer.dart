@@ -135,7 +135,7 @@ class HuePeak {
 }
 
 /// Chroma-weighted hue histogram, strongest bins first.
-List<HuePeak> huePeaks(Lab lab, {int bins = 36, int top = 8}) {
+List<HuePeak> huePeaks(Lab lab, {int bins = 36, int top = 8, double minChroma = 0.04}) {
   final hist = List<double>.filled(bins, 0), count = List<int>.filled(bins, 0);
   final sumC = List<double>.filled(bins, 0), sumL = List<double>.filled(bins, 0);
   final sx = List<double>.filled(bins, 0), sy = List<double>.filled(bins, 0);
@@ -144,7 +144,7 @@ List<HuePeak> huePeaks(Lab lab, {int bins = 36, int top = 8}) {
   for (var i = 0; i < n; i++) {
     final a = lab.a[i], b = lab.b[i];
     final c = math.sqrt(a * a + b * b);
-    if (c <= 0.04) continue;
+    if (c <= minChroma) continue;
     final hdeg = (math.atan2(b, a) * 180 / math.pi + 360) % 360;
     final k = (hdeg / (360 / bins)).floor() % bins;
     hist[k] += c;

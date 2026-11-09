@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/recipe.dart';
+import '../core/camera_palette.dart';
 import '../core/renderer.dart';
 import '../data/live_camera.dart';
 import '../data/photo_source.dart';
@@ -251,7 +252,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     return f.path;
   }
 
-  /// Finds the strong colors in view, the most subject-like first: strong,
+  /// Finds the distinct colors in view, the most subject-like first: visible,
   /// and near the middle. Nothing is kept for the person; the view stays in
   /// full color until they choose.
   Future<void> _scanView() async {
@@ -285,48 +286,9 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// only once the view has come to rest and no finger is near, so nothing
   /// slides under a finger reaching for it.
   void _takeColors(Rgba px, bool mayLeave) {
-    final lab = toLab(px);
-    final peaks = huePeaks(lab, top: 18).where((p) => p.meanChroma > 0.04 && p.share > 0.006).toList();
-    double score(HuePeak p) {
-      final d = math.sqrt(math.pow(p.center[0] - 0.5, 2) + math.pow(p.center[1] - 0.5, 2));
-      return p.share * (1 - 0.8 * (d / 0.71).clamp(0.0, 1.0)) * (0.5 + p.meanChroma * 4);
-    }
-
-    // Six of as many hues as the view holds: each one taken makes those
-    // near it in hue count for much less, so a wide skin or a wall cannot
-    // fill the row by itself while the denim and the leaves wait.
-    double mid(HuePeak p) => (p.from + p.to) / 2;
-    double gap(double x, double y) => ((x - y + 540) % 360 - 180).abs();
-    final left = [...peaks];
-    final chosen = <HuePeak>[];
-    while (chosen.length < 6 && left.isNotEmpty) {
-      HuePeak? best;
-      var bestS = 0.0;
-      for (final p in left) {
-        var s = score(p);
-        for (final c in chosen) {
-          final g = gap(mid(p), mid(c));
-          s *= 1 - 0.9 * math.exp(-math.pow(g / 28, 2));
-        }
-        if (best == null || s > bestS) {
-          best = p;
-          bestS = s;
-        }
-      }
-      chosen.add(best!);
-      left.remove(best);
-    }
-    peaks
-      ..clear()
-      ..addAll(chosen);
-    KeptColor color(HuePeak p) {
-      final h = (p.from + p.to) / 2 * math.pi / 180;
-      return KeptColor(l: p.meanL, a: p.meanChroma * math.cos(h), b: p.meanChroma * math.sin(h));
-    }
-
+    final fresh = cameraPalette(px);
     double hue(KeptColor k) => math.atan2(k.b, k.a) * 180 / math.pi;
     double apart(double x, double y) => ((x - y + 540) % 360 - 180).abs();
-    final fresh = peaks.take(6).map(color).toList();
     // Each one shown takes its nearest match and keeps its place.
     void follow(List<_Seen> list) {
       for (final seen in list) {
@@ -582,7 +544,8 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         cur
           ..l = c.l
           ..a = c.a
-          ..b = c.b;
+          ..b = c.b
+          ..chromaMin = c.chromaMin;
       } else if (_addSlot >= 0) {
         final from = _from;
         final like = from != null && from < _r.colors.length
@@ -1708,7 +1671,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                       child: Align(
                         widthFactor: 1,
-                        child: Text('No strong colors', style: Txt.small.copyWith(color: _dim)),
+                        child: Text('No distinct colors', style: Txt.small.copyWith(color: _dim)),
                       ),
                     )
                   : _swatchRow(38, 26),
@@ -1727,7 +1690,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         height: 44,
         child: Align(
           alignment: Alignment.centerLeft,
-          child: Text('No strong colors.', style: Txt.small.copyWith(color: _dim)),
+          child: Text('No distinct colors.', style: Txt.small.copyWith(color: _dim)),
         ),
       );
     }
