@@ -449,7 +449,9 @@ class _MapScreenState extends State<MapScreen>
                       for (final c in clusters)
                         Marker(
                           point: c.center,
-                          size: Size.square(c.items.length == 1 ? 22 : 38),
+                          size: Size.square(
+                            c.items.length == 1 ? 22 : c.diameter + 14,
+                          ),
                           child: GestureDetector(
                             key: ValueKey(c.key),
                             onTap: () {
@@ -730,6 +732,13 @@ class _PlaybackPhotosState extends State<_PlaybackPhotos> {
 
 class _Cluster {
   final List<PhotoItem> items = [];
+
+  /// A heap grows with what it holds, by area rather than by width, so a
+  /// big one stays a size the eye can still weigh. It is drawn after the
+  /// grouping is done and never feeds back into it, so a large dot does
+  /// not reach out and swallow its neighbours.
+  double get diameter =>
+      (24 + 7 * (math.log(items.length / 2) / math.ln2)).clamp(24.0, 54.0);
   String get key => items.map((e) => e.key).join('|').hashCode.toString();
 
   /// Whether the photos were taken in more than one spot (about 15 m apart).
@@ -801,10 +810,10 @@ class _Stack extends StatelessWidget {
       children: [
         // A second dot peeking from behind says "more than one".
         Transform.translate(
-          offset: const Offset(-5, -3),
+          offset: Offset(-c.diameter * 0.19, -c.diameter * 0.12),
           child: Container(
-            width: 24,
-            height: 24,
+            width: c.diameter - 2,
+            height: c.diameter - 2,
             decoration: const BoxDecoration(
               color: Neutral.surface,
               shape: BoxShape.circle,
@@ -818,7 +827,7 @@ class _Stack extends StatelessWidget {
             ),
           ),
         ),
-        SplitSwatch(c.colors.take(5).toList(), size: 26, border: 2.2),
+        SplitSwatch(c.colors.take(6).toList(), size: c.diameter, border: 2.2),
         Positioned(
           right: -5,
           top: -5,
