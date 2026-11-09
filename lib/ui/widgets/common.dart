@@ -461,10 +461,22 @@ class TextAction extends StatelessWidget {
 
 /// An icon action for states a word cannot show at a glance (favorite on or off).
 class IconAction extends StatelessWidget {
-  const IconAction(this.icon, {super.key, required this.label, this.onTap, this.activeIcon, this.active = false});
+  const IconAction(
+    this.icon, {
+    super.key,
+    required this.label,
+    this.onTap,
+    this.activeIcon,
+    this.active = false,
+    this.busy = false,
+  });
   final G icon;
   final G? activeIcon;
   final bool active;
+
+  /// Turns while the work behind the tap is under way, so the press does
+  /// not look unanswered; taps wait until it is done.
+  final bool busy;
 
   /// For screen readers.
   final String label;
@@ -478,7 +490,7 @@ class IconAction extends StatelessWidget {
       selected: activeIcon == null ? null : active,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onTap == null
+        onTap: onTap == null || busy
             ? null
             : () {
                 Haptics.tick();
@@ -494,12 +506,19 @@ class IconAction extends StatelessWidget {
                 scale: Tween(begin: 0.6, end: 1.0).animate(CurvedAnimation(parent: a, curve: Motion.settle)),
                 child: FadeTransition(opacity: a, child: c),
               ),
-              child: Glyph(
-                active && activeIcon != null ? activeIcon! : icon,
-                key: ValueKey(active),
-                size: 24,
-                color: onTap == null ? Neutral.tertiary : Neutral.primary,
-              ),
+              child: busy
+                  ? const SizedBox(
+                      key: ValueKey('busy'),
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 1.8, color: Neutral.primary),
+                    )
+                  : Glyph(
+                      active && activeIcon != null ? activeIcon! : icon,
+                      key: ValueKey(active),
+                      size: 24,
+                      color: onTap == null ? Neutral.tertiary : Neutral.primary,
+                    ),
             ),
           ),
         ),

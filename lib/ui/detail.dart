@@ -120,10 +120,22 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
     }
   }
 
+  bool _sharing = false;
+
   Future<void> _share() async {
-    final f = await s.rendered(item, 2048);
-    if (f == null) return;
-    await SharePlus.instance.share(ShareParams(files: [XFile(f.path)]));
+    if (_sharing) return;
+    setState(() => _sharing = true);
+    try {
+      final f = await s.rendered(item, 2048);
+      if (f == null) return;
+      // The button turns until the sheet is up, not until it is closed.
+      final shown = SharePlus.instance.share(ShareParams(files: [XFile(f.path)]));
+      await Future.any([shown, Future.delayed(const Duration(milliseconds: 450))]);
+      if (mounted) setState(() => _sharing = false);
+      await shown;
+    } finally {
+      if (mounted && _sharing) setState(() => _sharing = false);
+    }
   }
 
   void _more() {
@@ -406,7 +418,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              IconAction(G.share, label: 'Share', onTap: _share),
+                              IconAction(G.share, label: 'Share', busy: _sharing, onTap: _share),
                               _EditButton(onTap: () => Navigator.of(context).push(EditRoute(item))),
                               widget.review
                                   ? IconAction(G.trash, label: 'Delete', onTap: _delete)

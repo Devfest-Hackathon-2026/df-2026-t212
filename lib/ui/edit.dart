@@ -34,7 +34,7 @@ class EditRoute extends PageRouteBuilder<void> {
       );
 }
 
-enum _Tool { accent, range, area, mono }
+enum _Tool { accent, area, mono }
 
 /// One job: override the agent's work. The tools are the agent's tools.
 ///
@@ -63,6 +63,10 @@ class _EditScreenState extends State<EditScreen> {
 
   /// Selected slot. Equal to the number of colors: the empty "add" slot.
   int _active = 0;
+
+  /// The color selected before the add slot was: a new color starts from
+  /// its Width and Edge, as in the camera.
+  int? _from;
   bool _advanced = false;
 
   Rgba? _px;
@@ -235,12 +239,14 @@ class _EditScreenState extends State<EditScreen> {
     Haptics.light();
     _change(() {
       if (_adding) {
+        final like = _r.colors.isEmpty ? null : _r.colors[math.min(_from ?? _r.colors.length - 1, _r.colors.length - 1)];
         _r.colors.add(
           c
-            ..width = 14
-            ..softness = 16,
+            ..width = like?.width ?? 16
+            ..softness = like?.softness ?? 20,
         );
         _active = _r.colors.length - 1;
+        _from = null;
       } else {
         final old = _r.colors[_active];
         _r.colors[_active] = c
@@ -361,6 +367,7 @@ class _EditScreenState extends State<EditScreen> {
     _change(() {
       _r.colors.removeAt(i);
       _active = math.min(i, _addSlot);
+      _from = null;
     });
   }
 
@@ -379,10 +386,7 @@ class _EditScreenState extends State<EditScreen> {
   }
 
   void _setTool(_Tool t) {
-    setState(() {
-      _tool = t;
-      if (t == _Tool.range && _adding && _r.colors.isNotEmpty) _active = _r.colors.length - 1;
-    });
+    setState(() => _tool = t);
   }
 
   void _done() {
@@ -951,105 +955,43 @@ class _EditScreenState extends State<EditScreen> {
 
   String _label(_Tool t) => switch (t) {
     _Tool.accent => 'Color',
-    _Tool.range => 'Reach',
     _Tool.area => 'Area',
     _Tool.mono => 'Tone',
   };
 
   String get _toolTitle => switch (_tool) {
     _Tool.accent => _adding ? 'Tap the photo to add a color' : 'Tap the photo to change this color',
-    _Tool.range => 'How far the color reaches',
-    _Tool.area => 'Drag on the photo to keep color only there',
+    _Tool.area => 'Drag to keep color only there',
     _Tool.mono => 'The black and white part',
   };
 
   Widget _toolBody() {
     switch (_tool) {
       case _Tool.accent:
+        final c = _cur;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var i = 0; i < Recipe.maxColors; i++)
-                  Padding(padding: const EdgeInsets.only(right: 14), child: _slot(i)),
-              ],
-            ),
-            const Spacer(),
-            Text('From this photo', style: Txt.mono),
-            const SizedBox(height: 8),
             SizedBox(
-              height: 28,
+              height: 44,
               child: Row(
                 children: [
-                  for (final c in _candidates)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 10),
-                      child: Swatch(c, size: 28, from: _it, onTap: () => _pick(c.copy())),
-                    ),
-                  if (_candidates.isEmpty) Text(_lab == null ? '' : 'No strong colors.', style: Txt.small),
-                ],
-              ),
-            ),
-          ],
-        );
-      case _Tool.range:
-        final c = _cur;
-        if (c == null) return Center(child: Text('Keep a color first.', style: Txt.small));
-        return Column(
-          children: [
-            SizedBox(
-              height: 30,
-              child: Row(
-                children: [
-                  for (var i = 0; i < _r.colors.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 10),
-                      child: Swatch(
-                        _r.colors[i],
-                        size: 26,
-                        from: _it,
-                        selected: i == _active,
-                        onTap: () {
-                          Haptics.tick();
-                          setState(() => _active = i);
-                        },
-                      ),
-                    ),
+                  for (var i = 0; i <= _addSlot; i++) Padding(padding: const EdgeInsets.only(right: 8), child: _slot(i)),
+                  const Spacer(),
+                  if (_advanced && c != null) Text(oklabToHex(c.l, c.a, c.b).toUpperCase(), style: Txt.mono),
                 ],
               ),
             ),
             const SizedBox(height: 4),
-            SliderRow(
-              label: 'Width',
-              value: c.width,
-              min: 0,
-              max: 60,
-              defaultValue: 14,
-              advanced: _advanced,
-              detail: '${((c.hue - c.width + 360) % 360).round()}°–${((c.hue + c.width) % 360).round()}°',
-              onStart: () {
-                _push(_r.copy());
-                _slide(true);
-              },
-              onEnd: () => _slide(false),
-              onChanged: (v) => _change(() => c.width = v, record: false),
-            ),
-            SliderRow(
-              label: 'Softness',
-              value: c.softness,
-              min: 0,
-              max: 60,
-              defaultValue: 16,
-              advanced: _advanced,
-              detail: '+${c.softness.round()}°',
-              onStart: () {
-                _push(_r.copy());
-                _slide(true);
-              },
-              onEnd: () => _slide(false),
-              onChanged: (v) => _change(() => c.softness = v, record: false),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                switchInCurve: Motion.settle,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: softSwitch,
+                layoutBuilder: (cur, prev) => Stack(alignment: Alignment.topLeft, children: [...prev, ?cur]),
+                child: c == null ? KeyedSubtree(key: const ValueKey('add'), child: _fromPhoto()) : _reach(c),
+              ),
             ),
           ],
         );
@@ -1057,7 +999,7 @@ class _EditScreenState extends State<EditScreen> {
         return Column(
           children: [
             SliderRow(
-              label: 'Edge',
+              label: 'Feather',
               value: (_r.area?.edge ?? 0.03) * 100,
               min: 0,
               max: 10,
@@ -1154,88 +1096,136 @@ class _EditScreenState extends State<EditScreen> {
     }
   }
 
-  /// One of the three color slots: a kept color, the slot to add into, or empty.
+  /// What the photo offers, while the add slot is selected.
+  Widget _fromPhoto() => Padding(
+    padding: const EdgeInsets.only(top: 6),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('From this photo', style: Txt.mono),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 28,
+          child: Row(
+            children: [
+              for (final c in _candidates)
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: Swatch(c, size: 28, from: _it, onTap: () => _pick(c.copy())),
+                ),
+              if (_candidates.isEmpty) Text(_lab == null ? '' : 'No strong colors.', style: Txt.small),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+
+  /// How far the selected color reaches: the same Width and Edge as the camera.
+  Widget _reach(KeptColor c) => Column(
+    key: const ValueKey('reach'),
+    children: [
+      SliderRow(
+        height: 44,
+        label: 'Width',
+        value: c.width,
+        min: 0,
+        max: 60,
+        defaultValue: 16,
+        advanced: _advanced,
+        detail: '${((c.hue - c.width + 360) % 360).round()}°–${((c.hue + c.width) % 360).round()}°',
+        onStart: () {
+          _push(_r.copy());
+          _slide(true);
+        },
+        onEnd: () => _slide(false),
+        onChanged: (v) => _change(() => c.width = v, record: false),
+      ),
+      SliderRow(
+        height: 44,
+        label: 'Edge',
+        value: c.softness,
+        min: 0,
+        max: 60,
+        defaultValue: 20,
+        advanced: _advanced,
+        detail: '+${c.softness.round()}°',
+        onStart: () {
+          _push(_r.copy());
+          _slide(true);
+        },
+        onEnd: () => _slide(false),
+        onChanged: (v) => _change(() => c.softness = v, record: false),
+      ),
+    ],
+  );
+
+  /// A kept color, or the slot to add one into. The selected one is ringed
+  /// and carries the cross that takes it away, as in the camera.
   Widget _slot(int i) {
     final filled = i < _r.colors.length;
-    final isAdd = i == _r.colors.length;
-    final sel = filled ? i == _active : (isAdd && _adding);
+    final sel = filled ? i == _active : _adding;
     final c = filled ? _r.colors[i] : null;
-    const s = 50.0;
+    const s = 38.0;
     return SizedBox(
-      width: s + 8,
-      child: Column(
+      width: s + 6,
+      height: s + 6,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
         children: [
-          SizedBox(
-            width: s + 8,
-            height: s + 8,
-            child: Stack(
-              clipBehavior: Clip.none,
-              alignment: Alignment.center,
-              children: [
-                GestureDetector(
-                  onTap: filled || isAdd
-                      ? () {
-                          Haptics.tick();
-                          setState(() => _active = filled ? i : _r.colors.length);
-                        }
-                      : null,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    curve: Motion.settle,
-                    width: s,
-                    height: s,
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(15),
-                      border: Border.all(color: sel ? Neutral.primary : Colors.transparent, width: 1.5),
-                    ),
-                    child: filled
-                        ? DecoratedBox(
-                            position: DecorationPosition.foreground,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(11),
-                              border: Border.all(color: const Color(0x14000000), width: 0.6),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(11),
-                              child: ColoredBox(color: colorOf(c!), child: PhotoPatch(_it, c)),
-                            ),
-                          )
-                        : CustomPaint(
-                            painter: DashedSlot(plus: isAdd, strong: sel),
-                          ),
-                  ),
-                ),
-                if (filled && sel)
-                  Positioned(
-                    top: -2,
-                    right: -2,
-                    child: GestureDetector(
-                      onTap: () => _remove(i),
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        decoration: BoxDecoration(
-                          color: Neutral.primary,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Neutral.surface, width: 2),
-                        ),
-                        child: const Center(child: Glyph(G.close, size: 12, color: Neutral.surface, weight: 1.5)),
+          GestureDetector(
+            onTap: () {
+              if (sel) return;
+              Haptics.tick();
+              setState(() {
+                if (!filled && !_adding) _from = _active;
+                _active = i;
+              });
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Motion.settle,
+              width: s,
+              height: s,
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: sel ? Neutral.primary : Colors.transparent, width: 1.5),
+              ),
+              child: filled
+                  ? DecoratedBox(
+                      position: DecorationPosition.foreground,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(9),
+                        border: Border.all(color: const Color(0x14000000), width: 0.6),
                       ),
-                    ),
-                  ),
-              ],
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(9),
+                        child: ColoredBox(color: colorOf(c!), child: PhotoPatch(_it, c)),
+                      ),
+                    )
+                  : CustomPaint(painter: DashedSlot(plus: true, strong: sel, radius: 9)),
             ),
           ),
-          SizedBox(
-            height: 16,
-            child: Center(
-              child: Text(
-                filled ? (_advanced ? oklabToHex(c!.l, c.a, c.b).toUpperCase() : '') : (isAdd ? 'Add' : ''),
-                style: Txt.mono.copyWith(fontSize: 9.5, color: sel ? Neutral.primary : Neutral.tertiary),
+          if (filled && sel)
+            Positioned(
+              top: -3,
+              right: -3,
+              child: GestureDetector(
+                onTap: () => _remove(i),
+                child: Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: Neutral.primary,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Neutral.surface, width: 2),
+                  ),
+                  child: const Center(child: Glyph(G.close, size: 10, color: Neutral.surface, weight: 1.5)),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );

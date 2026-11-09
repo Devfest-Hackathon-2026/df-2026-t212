@@ -5,8 +5,9 @@ import '../theme.dart';
 /// The empty color slot: a dashed outline, with a plus where a color can be
 /// added.
 class DashedSlot extends CustomPainter {
-  DashedSlot({required this.plus, required this.strong});
+  DashedSlot({required this.plus, required this.strong, this.radius = 11});
   final bool plus, strong;
+  final double radius;
 
   @override
   void paint(Canvas canvas, Size s) {
@@ -16,7 +17,7 @@ class DashedSlot extends CustomPainter {
       ..strokeWidth = 1.2;
     final path = Path()
       ..addRRect(
-        RRect.fromRectAndRadius(Offset.zero & s, const Radius.circular(11)),
+        RRect.fromRectAndRadius(Offset.zero & s, Radius.circular(radius)),
       );
     for (final m in path.computeMetrics()) {
       for (var d = 0.0; d < m.length; d += 7) {
@@ -35,7 +36,7 @@ class DashedSlot extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(DashedSlot o) => o.plus != plus || o.strong != strong;
+  bool shouldRepaint(DashedSlot o) => o.plus != plus || o.strong != strong || o.radius != radius;
 }
 
 /// A labelled [ThinSlider], with its value shown in detail mode.
