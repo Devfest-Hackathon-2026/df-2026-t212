@@ -210,6 +210,8 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
     location.stopUpdatingLocation()
     watchVolume(false)
     watchMotion(false)
+    zoomLink?.invalidate()
+    zoomLink = nil
     queue.async {
       if self.session.isRunning { self.session.stopRunning() }
     }
@@ -257,6 +259,8 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   /// Puts [lens] in, on a format that develops every frame and still takes
   /// full-size photos. Called inside a session configuration.
   private func use(_ lens: AVCaptureDevice) throws {
+    zoomLink?.invalidate()
+    zoomLink = nil
     if let input { session.removeInput(input) }
     let next = try AVCaptureDeviceInput(device: lens)
     guard session.canAddInput(next) else { throw NSError(domain: "camera", code: 2) }
@@ -366,7 +370,11 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
         Int((Double($0.width) * Double($0.height) / 1e6).rounded())
       })).sorted()
     }
-    if !front, (mps.last ?? 0) >= 40, !stops.contains(where: { abs($0 - 2) < 0.2 }) { stops.append(2) }
+    var big = (mps.last ?? 0) >= 40
+    if #available(iOS 16.0, *), !big {
+      big = camera.formats.contains { f in f.supportedMaxPhotoDimensions.contains { Double($0.width) * Double($0.height) >= 40e6 } }
+    }
+    if !front, big, !stops.contains(where: { abs($0 - 2) < 0.2 }) { stops.append(2) }
     stops = stops.map { ($0 * 10).rounded() / 10 }.filter { $0 >= 0.4 }.sorted()
     info["zoom"] = [
       "stops": stops.isEmpty ? [1.0] : stops,
@@ -413,18 +421,67 @@ final class LiveCamera: NSObject, FlutterTexture, AVCaptureVideoDataOutputSample
   /// Zooms to a factor as shown (0.5, 1, 2…), smoothly when [ramp]. Returns
   /// the factor it reached.
   private func zoom(to shown: Double, ramp: Bool) -> Double? {
-    guard let camera, (try? camera.lockForConfiguration()) != nil else { return nil }
-    defer { camera.unlockForConfiguration() }
+    guard let camera else { return nil }
     let mult = Self.multiplier(camera)
     let top = min(camera.maxAvailableVideoZoomFactor, CGFloat(15 / mult))
     let f = min(max(CGFloat(shown / mult), camera.minAvailableVideoZoomFactor), top)
-    if ramp {
-      camera.ramp(toVideoZoomFactor: f, withRate: 12)
-    } else {
+    zoomLink?.invalidate()
+    zoomLink = nil
+    if ramp, abs(log(f) - log(camera.videoZoomFactor)) > 0.01 {
+      // The system's own ramp runs at one rate, so it starts and stops
+      // hard. This one leaves quickly and settles, in the log of the
+      // factor, where every lens step is the same distance.
+      zoomFrom = log(camera.videoZoomFactor)
+      zoomTo = log(f)
+      zoomStart = CACurrentMediaTime()
+      zoomTime = 0.2 + 0.08 * min(abs(zoomTo - zoomFrom), 2)
+      let link = CADisplayLink(target: self, selector: #selector(zoomStep))
+      link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+      link.add(to: .main, forMode: .common)
+      zoomLink = link
+    } else if (try? camera.lockForConfiguration()) != nil {
       if camera.isRampingVideoZoom { camera.cancelVideoZoomRamp() }
       camera.videoZoomFactor = f
+      camera.unlockForConfiguration()
     }
     return Double(f) * mult
+  }
+
+  private var zoomLink: CADisplayLink?
+  private var zoomFrom: CGFloat = 0, zoomTo: CGFloat = 0
+  private var zoomStart: CFTimeInterval = 0, zoomTime: CFTimeInterval = 0.25
+
+  @objc private func zoomStep() {
+    guard let camera else {
+      zoomLink?.invalidate()
+      zoomLink = nil
+      return
+    }
+    let t = min((CACurrentMediaTime() - zoomStart) / zoomTime, 1)
+    let e = Self.ease(t)
+    let f = exp(zoomFrom + (zoomTo - zoomFrom) * CGFloat(e))
+    if (try? camera.lockForConfiguration()) != nil {
+      camera.videoZoomFactor = min(max(f, camera.minAvailableVideoZoomFactor), camera.maxAvailableVideoZoomFactor)
+      camera.unlockForConfiguration()
+    }
+    if t >= 1 {
+      zoomLink?.invalidate()
+      zoomLink = nil
+    }
+  }
+
+  /// cubic-bezier(0.25, 0.1, 0.25, 1): a soft start, a long settle.
+  private static func ease(_ t: Double) -> Double {
+    let (x1, y1, x2, y2) = (0.25, 0.1, 0.25, 1.0)
+    func bez(_ u: Double, _ a: Double, _ b: Double) -> Double {
+      3 * (1 - u) * (1 - u) * u * a + 3 * (1 - u) * u * u * b + u * u * u
+    }
+    var lo = 0.0, hi = 1.0, u = t
+    for _ in 0..<20 {
+      u = (lo + hi) / 2
+      if bez(u, x1, x2) < t { lo = u } else { hi = u }
+    }
+    return bez(u, y1, y2)
   }
 
   /// A normalized point of the upright view, in the sensor's coordinates.
