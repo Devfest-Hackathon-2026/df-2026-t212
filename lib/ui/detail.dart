@@ -31,10 +31,16 @@ class DetailScreen extends StatefulWidget {
   State<DetailScreen> createState() => _DetailScreenState();
 }
 
-class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderStateMixin {
+class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMixin {
   final s = Store.instance;
+  late final List<PhotoItem> _items = [...widget.items];
   late final PageController _page = PageController(initialPage: widget.index);
   late int _index = widget.index;
+
+  /// A deleted photo sinks away, and the next one rises into its place.
+  late final AnimationController _gone = AnimationController(vsync: this);
+  bool _rising = false;
+  bool _deleting = false;
   double _drag = 0;
   bool _showOriginal = false;
   static bool _hintShown = false;
@@ -59,11 +65,45 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
   void dispose() {
     if (_bare.value > 0) SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _bare.dispose();
+    _gone.dispose();
     _page.dispose();
     super.dispose();
   }
 
-  PhotoItem get item => widget.items[_index];
+  PhotoItem get item => _items[_index];
+
+  Future<void> _delete() async {
+    if (_deleting) return;
+    _deleting = true;
+    final gone = await s.delete([item]);
+    _deleting = false;
+    if (!mounted || gone.isEmpty) return;
+    Haptics.firm();
+    await _leave();
+  }
+
+  /// The current photo is no longer here: show the next, or close when
+  /// there is none.
+  Future<void> _leave() async {
+    _rising = false;
+    await _gone.animateTo(1, duration: const Duration(milliseconds: 200), curve: Curves.easeInCubic);
+    if (!mounted) return;
+    final was = item;
+    setState(() {
+      _items.remove(was);
+      if (_items.isNotEmpty) _index = _index.clamp(0, _items.length - 1);
+      _rising = true;
+    });
+    if (_items.isEmpty) {
+      Navigator.pop(context);
+      return;
+    }
+    if (_page.hasClients && _page.page?.round() != _index) _page.jumpToPage(_index);
+    s.markSeen(item);
+    _gone.value = 1;
+    await _gone.animateTo(0, duration: const Duration(milliseconds: 380), curve: Motion.settle);
+    _rising = false;
+  }
 
   @override
   void initState() {
@@ -124,9 +164,9 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                 row('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
                 row('Why this color?', _why),
                 const Hairline(),
-                row('Remove from After Hue', () {
+                row('Remove from After Hue only', () {
                   s.remove(item);
-                  Navigator.pop(context);
+                  _leave();
                 }, quiet: true),
               ],
             ),
@@ -190,7 +230,7 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
     return ListenableBuilder(
       listenable: Listenable.merge([s, _bare]),
       builder: (context, _) {
-        if (!widget.items.contains(item) || !s.items.contains(item)) return const SizedBox();
+        if (_items.isEmpty) return const SizedBox();
         final bare = Curves.easeInOut.transform(_bare.value);
         // Bars fold away so the photo grows into the whole screen.
         Widget fold(Widget child, Alignment from) => ClipRect(
@@ -217,7 +257,7 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                         const Spacer(),
                         Opacity(
                           opacity: fade,
-                          child: Text('${_index + 1} / ${widget.items.length}', style: Txt.mono),
+                          child: Text('${_index + 1} / ${_items.length}', style: Txt.mono),
                         ),
                         const SizedBox(width: 16),
                       ],
@@ -251,14 +291,14 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                       scale: 1 - (_drag.abs() / 2000),
                       child: PageView.builder(
                         controller: _page,
-                        itemCount: widget.items.length,
+                        itemCount: _items.length,
                         onPageChanged: (i) {
                           setState(() => _index = i);
-                          s.markSeen(widget.items[i]);
+                          s.markSeen(_items[i]);
                         },
                         itemBuilder: (context, i) {
-                          final it = widget.items[i];
-                          return Padding(
+                          final it = _items[i];
+                          final page = Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 6),
                             child: Center(
                               child: AspectRatio(
@@ -287,6 +327,18 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                                 ),
                               ),
                             ),
+                          );
+                          if (i != _index) return page;
+                          return AnimatedBuilder(
+                            animation: _gone,
+                            builder: (_, child) {
+                              final t = _gone.value;
+                              return Opacity(
+                                opacity: (1 - t).clamp(0.0, 1.0),
+                                child: Transform.scale(scale: _rising ? 1 - 0.04 * t : 1 - 0.14 * t, child: child),
+                              );
+                            },
+                            child: page,
                           );
                         },
                       ),
@@ -348,6 +400,8 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                             ),
                             const SizedBox(width: 8),
                             IconAction(Icons.ios_share_rounded, label: 'Share', onTap: _share),
+                            const SizedBox(width: 8),
+                            IconAction(Icons.delete_outline_rounded, label: 'Delete', onTap: _delete),
                             const SizedBox(width: 8),
                             IconAction(Icons.more_horiz_rounded, label: 'More', onTap: _more),
                           ],

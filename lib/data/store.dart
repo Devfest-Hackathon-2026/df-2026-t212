@@ -855,6 +855,24 @@ class Store extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Deletes [its]. A copy whose photo another kept item still shows only
+  /// leaves After Hue; the rest leave the iPhone too (iOS asks first, and
+  /// they wait in Recently Deleted). Returns the items that went.
+  Future<List<PhotoItem>> delete(List<PhotoItem> its) async {
+    final going = its.toSet();
+    final shared = <PhotoItem>[], last = <PhotoItem>[];
+    for (final it in going) {
+      (items.any((e) => e.id == it.id && !going.contains(e)) ? shared : last).add(it);
+    }
+    final deleted = await PhotoSource.delete(last.map((e) => e.id).toSet().toList());
+    final gone = [...shared, ...last.where((e) => deleted.contains(e.id))];
+    if (last.isNotEmpty && deleted.isEmpty) return const [];
+    for (final it in gone) {
+      remove(it);
+    }
+    return gone;
+  }
+
   PhotoItem duplicate(PhotoItem it) {
     final copy = PhotoItem(
       id: it.id,

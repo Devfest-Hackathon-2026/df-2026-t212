@@ -16,7 +16,7 @@ import '../data/store.dart';
 
 import 'dart:isolate';
 
-import 'edit.dart';
+import 'detail.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 
@@ -1726,9 +1726,23 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                   ? const SizedBox(width: 48, height: 48)
                   : GestureDetector(
                       key: ValueKey(last.key),
-                      onTap: () {
+                      onTap: () async {
                         Haptics.light();
-                        Navigator.push(context, EditRoute(last));
+                        // What was just taken, then the rest, newest first.
+                        final all = Store.instance.items.where((e) => e.shown).toList();
+                        final list = all.contains(last) ? all : [last, ...all];
+                        await Navigator.push(context, DetailRoute(items: list, index: list.indexOf(last)));
+                        // Deleted there: the thumbnail goes with it.
+                        if (mounted && !Store.instance.items.contains(_last)) {
+                          final o = _shotOrig, d = _shotDev;
+                          setState(() {
+                            _last = null;
+                            _shotOrig = null;
+                            _shotDev = null;
+                          });
+                          o?.dispose();
+                          d?.dispose();
+                        }
                       },
                       child: AnimatedRotation(
                         turns: _turns,

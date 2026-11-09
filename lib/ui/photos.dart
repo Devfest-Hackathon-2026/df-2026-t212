@@ -8,7 +8,6 @@ import '../core/recipe.dart';
 import '../data/photo_source.dart';
 import '../data/store.dart';
 import 'detail.dart';
-import 'edit.dart';
 import 'settings.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
@@ -47,14 +46,8 @@ class _PhotosScreenState extends State<PhotosScreen> {
   }
 
   void _open(PhotoItem it, List<PhotoItem> all) {
-    if (it.state != Develop.done && !_selecting) {
-      // Not developed yet: open it in Edit. If the agent is on it, its work
-      // shows live there and the first change takes over.
-      Haptics.light();
-      Navigator.of(context).push(EditRoute(it));
-      return;
-    }
-    final list = all.where((e) => e.state == Develop.done).toList();
+    // Every photo opens to be looked at first; Edit is one tap from there.
+    final list = all;
     if (_selecting) {
       setState(() => _selected.contains(it.key) ? _selected.remove(it.key) : _selected.add(it.key));
       Haptics.tick();
@@ -337,7 +330,6 @@ class _PhotosScreenState extends State<PhotosScreen> {
             selected: _selected.contains(it.key),
             onTap: () => _open(it, all),
             onLongPress: () {
-              if (it.state != Develop.done) return;
               Haptics.light();
               setState(() => _selected.add(it.key));
             },
@@ -433,11 +425,11 @@ class _PhotosScreenState extends State<PhotosScreen> {
               },
             ),
             TextAction(
-              'Remove',
-              onTap: () {
-                for (final it in sel) {
-                  s.remove(it);
-                }
+              'Delete',
+              onTap: () async {
+                final gone = await s.delete(sel);
+                if (!mounted || gone.isEmpty) return;
+                Haptics.firm();
                 setState(_selected.clear);
               },
             ),

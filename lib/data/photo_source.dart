@@ -37,6 +37,17 @@ class PhotoSource {
 
   static Future<void> presentLimitedPicker() => PhotoManager.presentLimited();
 
+  /// Deletes photos from the library. iOS asks the person first, and the
+  /// photos go to Recently Deleted. Returns the ids that were deleted.
+  static Future<Set<String>> delete(List<String> ids) async {
+    if (ids.isEmpty) return {};
+    try {
+      return (await PhotoManager.editor.deleteWithIds(ids)).toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// Photos taken in the last [months], newest first.
   static Future<List<PhotoRef>> recent({int months = 12, bool skipScreenshots = true}) async {
     final since = DateTime.now().subtract(Duration(days: 30 * months));
