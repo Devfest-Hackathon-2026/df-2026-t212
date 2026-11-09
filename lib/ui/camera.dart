@@ -56,7 +56,11 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
 
   /// The colors in view, each keeping its place while it stays in view, so
   /// a finger reaching for one finds it where it was.
-  final List<_Seen> _candidates = [];
+  /// Six fixed places: a color keeps its place for as long as it is in
+  /// view, one that leaves leaves its place empty, and a new one takes the
+  /// first empty place. Nothing ever moves under a finger.
+  final List<_Seen?> _slots = List.filled(6, null);
+  Iterable<_Seen> get _candidates => _slots.whereType<_Seen>();
 
   /// Colors seen once, waiting for a second look before they join.
   final List<_Seen> _maybe = [];
@@ -320,8 +324,11 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     for (final c in _candidates) {
       if (mayLeave && !c.leaving && c.missed > 1) c.leaving = true;
     }
-    final room = 6 - _candidates.where((c) => !c.leaving).length;
-    _candidates.addAll(joining.take(math.max(0, room)));
+    for (final c in joining) {
+      final i = _slots.indexOf(null);
+      if (i < 0) break;
+      _slots[i] = c;
+    }
     if (before != shown()) setState(() {});
   }
 
@@ -330,10 +337,11 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     _touchedAt = DateTime.now();
   }
 
-  /// Takes a leaving color out once it has shrunk away.
+  /// Empties a leaving color's place once it has faded.
   void _gone(_Seen c) {
-    if (!mounted || !_candidates.contains(c)) return;
-    setState(() => _candidates.remove(c));
+    final i = _slots.indexOf(c);
+    if (!mounted || i < 0) return;
+    setState(() => _slots[i] = null);
   }
 
   /// The view as 12 by 9 patches of brightness.
@@ -1349,19 +1357,24 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       },
                     ),
                   ),
-                _onPersonsBottom(
-                  size,
-                  (width) => Column(
-                    mainAxisSize: MainAxisSize.min,
+                _onPersonsBottom(size, (width) {
+                  final lift = _quarter == 0 && (_feed?.stops.length ?? 0) > 1 ? 60.0 : 14.0;
+                  // The scale floats over the pill; the pill never moves.
+                  return Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.bottomCenter,
                     children: [
-                      _reachDial(),
                       Padding(
-                        padding: EdgeInsets.only(bottom: _quarter == 0 && (_feed?.stops.length ?? 0) > 1 ? 60 : 14),
+                        padding: EdgeInsets.only(bottom: lift),
                         child: _reachPill(),
                       ),
+                      Positioned(
+                        bottom: lift + 44,
+                        child: IgnorePointer(child: _reachDial()),
+                      ),
                     ],
-                  ),
-                ),
+                  );
+                }),
                 _onPersonsBottom(size, (width) => SizedBox(width: width, child: _reachPanel())),
               ],
             ),
@@ -1416,7 +1429,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// Lets the dial go a moment after the finger leaves.
   void _closeDial() {
     _dialHide?.cancel();
-    _dialHide = Timer(const Duration(milliseconds: 900), () {
+    _dialHide = Timer(const Duration(milliseconds: 300), () {
       if (mounted) setState(() => _dial = null);
     });
   }
@@ -1578,42 +1591,52 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   }
 
   /// The scale above the pill while one of its halves is slid.
+  String _dialShown = 'width';
+
   Widget _reachDial() {
     final c = _cur;
-    final key = _dial;
-    final open = c != null && (key == 'width' || key == 'edge');
-    final value = !open ? 0.0 : (key == 'width' ? c.width : c.softness);
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 280),
+    final open = c != null && (_dial == 'width' || _dial == 'edge');
+    if (open) _dialShown = _dial!;
+    if (c == null) return const SizedBox.shrink();
+    // Kept while it fades, so it fades with what it last showed.
+    final key = _dialShown;
+    final value = key == 'width' ? c.width : c.softness;
+    return AnimatedOpacity(
+      opacity: open ? 1 : 0,
+      duration: Duration(milliseconds: open ? 160 : 180),
       curve: Motion.settle,
-      child: !open
-          ? const SizedBox(width: 0, height: 0)
-          : Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Glass(
-                dark: true,
-                radius: 16,
-                padding: const EdgeInsets.fromLTRB(0, 6, 0, 4),
-                child: SizedBox(
-                  width: 250,
-                  height: 46,
-                  child: Column(
-                    children: [
-                      Text(
-                        '${key == 'width' ? 'Width' : 'Edge'} ${value.round()}',
-                        style: Txt.small.copyWith(color: _ink, fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                      Expanded(
-                        child: CustomPaint(
-                          size: Size.infinite,
-                          painter: _ScalePainter(value: value, min: 0, max: 60, def: key == 'width' ? 16 : 20),
-                        ),
-                      ),
-                    ],
+      child: AnimatedScale(
+        scale: open ? 1 : 0.94,
+        alignment: Alignment.bottomCenter,
+        duration: const Duration(milliseconds: 220),
+        curve: Motion.settle,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Glass(
+            dark: true,
+            radius: 16,
+            padding: const EdgeInsets.fromLTRB(0, 6, 0, 4),
+            child: SizedBox(
+              width: 250,
+              height: 46,
+              child: Column(
+                children: [
+                  Text(
+                    '${key == 'width' ? 'Width' : 'Edge'} ${value.round()}',
+                    style: Txt.small.copyWith(color: _ink, fontSize: 12, fontWeight: FontWeight.w600),
                   ),
-                ),
+                  Expanded(
+                    child: CustomPaint(
+                      size: Size.infinite,
+                      painter: _ScalePainter(value: value, min: 0, max: 60, def: key == 'width' ? 16 : 20),
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1665,6 +1688,15 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// The colors in view in a row, each [slot] wide and answering over all
   /// of it, not only the swatch.
   Widget _swatchRow(double slot, double dot) {
+    if (_candidates.isEmpty && !_sideways) {
+      return SizedBox(
+        height: 44,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text('No strong colors.', style: Txt.small.copyWith(color: _dim)),
+        ),
+      );
+    }
     return Listener(
       // While a finger is on the row, nothing leaves it.
       onPointerDown: (_) => _touching = true,
@@ -1673,40 +1705,42 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (final c in _candidates)
-            GestureDetector(
-              key: ValueKey(c.id),
-              behavior: HitTestBehavior.opaque,
-              onTap: c.leaving ? null : () => _pick(c.color.copy()),
-              // A leaving one shrinks away and the ones after it close up.
-              child: TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0, end: c.leaving ? 0 : 1),
-                duration: Duration(milliseconds: c.leaving ? 260 : 320),
-                curve: Motion.settle,
-                onEnd: c.leaving ? () => _gone(c) : null,
-                builder: (context, t, child) => SizedBox(
-                  width: slot * t,
-                  child: OverflowBox(
-                    maxWidth: slot,
-                    child: Center(
-                      child: Transform.scale(scale: t, child: child),
+          for (final c in _slots)
+            SizedBox(
+              width: slot,
+              height: 44,
+              child: c == null
+                  ? null
+                  : GestureDetector(
+                      key: ValueKey(c.id),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: c.leaving ? null : () => _pick(c.color.copy()),
+                      // Grows in, and fades out in its own place.
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0, end: c.leaving ? 0 : 1),
+                        duration: Duration(milliseconds: c.leaving ? 220 : 300),
+                        curve: Motion.settle,
+                        onEnd: c.leaving ? () => _gone(c) : null,
+                        builder: (context, t, child) => Center(
+                          child: Opacity(
+                            opacity: t.clamp(0.0, 1.0),
+                            child: Transform.scale(scale: 0.6 + 0.4 * t, child: child),
+                          ),
+                        ),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 400),
+                          curve: Motion.settle,
+                          width: dot,
+                          height: dot,
+                          decoration: BoxDecoration(
+                            color: colorOf(c.color),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 400),
-                  curve: Motion.settle,
-                  width: dot,
-                  height: dot,
-                  decoration: BoxDecoration(
-                    color: colorOf(c.color),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
-                  ),
-                ),
-              ),
             ),
-          if (_candidates.isEmpty && !_sideways) Text('No strong colors.', style: Txt.small.copyWith(color: _dim)),
         ],
       ),
     );
