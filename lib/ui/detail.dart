@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
@@ -99,7 +98,12 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                 },
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 15),
-            child: Text(label, style: Txt.label.copyWith(color: onTap == null ? Neutral.tertiary : (quiet ? Neutral.secondary : Neutral.primary))),
+            child: Text(
+              label,
+              style: Txt.label.copyWith(
+                color: onTap == null ? Neutral.tertiary : (quiet ? Neutral.secondary : Neutral.primary),
+              ),
+            ),
           ),
         );
         return SafeArea(
@@ -157,7 +161,10 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                 ],
               ),
               const SizedBox(height: 14),
-              Text(r?.why ?? 'No reason was recorded for this photo.', style: Txt.body.copyWith(color: Neutral.secondary)),
+              Text(
+                r?.why ?? 'No reason was recorded for this photo.',
+                style: Txt.body.copyWith(color: Neutral.secondary),
+              ),
             ],
           ),
         ),
@@ -260,10 +267,22 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                                   fit: StackFit.expand,
                                   children: [
                                     Hero(
+                                      createRectTween: straightRect,
                                       tag: 'photo-${it.key}',
-                                      child: DevelopedImage(it, size: 1600, fit: BoxFit.contain, alignment: Alignment.center),
+                                      child: DevelopedImage(
+                                        it,
+                                        size: 1600,
+                                        fit: BoxFit.contain,
+                                        alignment: Alignment.center,
+                                      ),
                                     ),
-                                    if (i == _index) AnimatedOpacity(opacity: _showOriginal ? 1 : 0, duration: const Duration(milliseconds: 180), curve: Motion.settle, child: _Original(it)),
+                                    if (i == _index)
+                                      AnimatedOpacity(
+                                        opacity: _showOriginal ? 1 : 0,
+                                        duration: const Duration(milliseconds: 180),
+                                        curve: Motion.settle,
+                                        child: _Original(it),
+                                      ),
                                   ],
                                 ),
                               ),
@@ -291,7 +310,12 @@ class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderSt
                           child: Row(
                             key: ValueKey('${item.key}$_hint$_showOriginal'),
                             children: _hint
-                                ? [Text('Press and hold to see the original', style: Txt.mono.copyWith(color: Neutral.primary))]
+                                ? [
+                                    Text(
+                                      'Press and hold to see the original',
+                                      style: Txt.mono.copyWith(color: Neutral.primary),
+                                    ),
+                                  ]
                                 : _showOriginal
                                 ? [Text('Original', style: Txt.mono.copyWith(color: Neutral.primary))]
                                 : [
@@ -367,7 +391,8 @@ class _Original extends StatelessWidget {
   Widget build(BuildContext context) {
     return FutureBuilder<Uint8List?>(
       future: _cache[item.id] ??= Store.instance.original(item, 1600),
-      builder: (_, snap) => snap.data == null ? const SizedBox() : Image.memory(snap.data!, fit: BoxFit.contain, gaplessPlayback: true),
+      builder: (_, snap) =>
+          snap.data == null ? const SizedBox() : Image.memory(snap.data!, fit: BoxFit.contain, gaplessPlayback: true),
     );
   }
 }

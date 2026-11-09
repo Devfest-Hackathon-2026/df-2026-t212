@@ -354,17 +354,19 @@ class _PhotosScreenState extends State<PhotosScreen> {
     final batch = n < Store.moreBatch ? n : Store.moreBatch;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
-      child: Column(children: [
-        TextAction(
-          batch == 1 ? 'Develop 1 older photo' : 'Develop $batch older photos',
-          onTap: () {
-            Haptics.tick();
-            s.developMore();
-          },
-        ),
-        const SizedBox(height: 6),
-        Text('$n not looked at yet', style: Txt.mono),
-      ]),
+      child: Column(
+        children: [
+          TextAction(
+            batch == 1 ? 'Develop 1 older photo' : 'Develop $batch older photos',
+            onTap: () {
+              Haptics.tick();
+              s.developMore();
+            },
+          ),
+          const SizedBox(height: 6),
+          Text('$n not looked at yet', style: Txt.mono),
+        ],
+      ),
     );
   }
 
@@ -486,6 +488,7 @@ class _Tile extends StatelessWidget {
               children: [
                 if (item.state == Develop.done)
                   Hero(
+                    createRectTween: straightRect,
                     tag: 'photo-${item.key}',
                     child: ColorReturnOnce(
                       play: play,
@@ -546,19 +549,22 @@ class _Tile extends StatelessWidget {
                       right: 6,
                       bottom: 7,
                       child: IgnorePointer(
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          for (final c in item.hues)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 3),
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(4),
-                                  boxShadow: const [tileShadow],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (final c in item.hues)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 3),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(4),
+                                    boxShadow: const [tileShadow],
+                                  ),
+                                  child: Swatch(c, size: 12, from: item),
                                 ),
-                                child: Swatch(c, size: 12, from: item),
                               ),
-                            ),
-                        ]),
+                          ],
+                        ),
                       ),
                     ),
                 ],

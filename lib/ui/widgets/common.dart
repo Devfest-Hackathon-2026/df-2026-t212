@@ -66,10 +66,7 @@ class Glass extends StatelessWidget {
             padding: padding,
             decoration: BoxDecoration(
               borderRadius: r,
-              border: Border.all(
-                color: dark ? const Color(0x26FFFFFF) : const Color(0x70FFFFFF),
-                width: 0.6,
-              ),
+              border: Border.all(color: dark ? const Color(0x26FFFFFF) : const Color(0x70FFFFFF), width: 0.6),
               color: dark
                   ? const Color(0x38222224)
                   : clear
@@ -88,15 +85,7 @@ class Glass extends StatelessWidget {
 /// it is filled with a piece of that photo where the color lives, so it has
 /// the photo's own texture; the flat color shows while that piece loads.
 class Swatch extends StatelessWidget {
-  const Swatch(
-    this.color, {
-    super.key,
-    this.size = 22,
-    this.selected = false,
-    this.onTap,
-    this.onLongPress,
-    this.from,
-  });
+  const Swatch(this.color, {super.key, this.size = 22, this.selected = false, this.onTap, this.onLongPress, this.from});
   final KeptColor color;
   final double size;
   final bool selected;
@@ -116,10 +105,7 @@ class Swatch extends StatelessWidget {
         padding: EdgeInsets.all(selected ? 2.5 : 0),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(size * 0.3),
-          border: Border.all(
-            color: selected ? Neutral.primary : Colors.transparent,
-            width: 1.2,
-          ),
+          border: Border.all(color: selected ? Neutral.primary : Colors.transparent, width: 1.2),
         ),
         child: DecoratedBox(
           position: DecorationPosition.foreground,
@@ -131,9 +117,7 @@ class Swatch extends StatelessWidget {
             borderRadius: BorderRadius.circular(size * (selected ? 0.22 : 0.3)),
             child: ColoredBox(
               color: colorOf(color),
-              child: from == null
-                  ? const SizedBox.expand()
-                  : PhotoPatch(from!, color),
+              child: from == null ? const SizedBox.expand() : PhotoPatch(from!, color),
             ),
           ),
         ),
@@ -159,12 +143,7 @@ class PhotoPatch extends StatelessWidget {
         curve: Motion.settle,
         child: snap.data == null
             ? const SizedBox.expand()
-            : RawImage(
-                image: snap.data,
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
-              ),
+            : RawImage(image: snap.data, fit: BoxFit.cover, width: double.infinity, height: double.infinity),
       ),
     );
   }
@@ -176,19 +155,12 @@ class PhotoPatch extends StatelessWidget {
 Widget softSwitch(Widget child, Animation<double> a) => FadeTransition(
   opacity: a,
   child: SlideTransition(
-    position: Tween(
-      begin: const Offset(0, 0.12),
-      end: Offset.zero,
-    ).animate(a),
+    position: Tween(begin: const Offset(0, 0.12), end: Offset.zero).animate(a),
     child: child,
   ),
 );
 
-const tileShadow = BoxShadow(
-  color: Color(0x2E000000),
-  blurRadius: 6,
-  offset: Offset(0, 0.5),
-);
+const tileShadow = BoxShadow(color: Color(0x2E000000), blurRadius: 6, offset: Offset(0, 0.5));
 
 /// The favorite mark on a tile: white, with a soft shadow so it reads on any
 /// photo. The tile's palette carries the color.
@@ -204,15 +176,8 @@ class TileHeart extends StatelessWidget {
         Transform.translate(
           offset: tileShadow.offset,
           child: ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(
-              sigmaX: tileShadow.blurSigma,
-              sigmaY: tileShadow.blurSigma,
-            ),
-            child: Icon(
-              Icons.favorite_rounded,
-              size: size,
-              color: tileShadow.color,
-            ),
+            imageFilter: ui.ImageFilter.blur(sigmaX: tileShadow.blurSigma, sigmaY: tileShadow.blurSigma),
+            child: Icon(Icons.favorite_rounded, size: size, color: tileShadow.color),
           ),
         ),
         Icon(Icons.favorite_rounded, size: size, color: Colors.white),
@@ -276,8 +241,7 @@ class ColorReturnOnce extends StatefulWidget {
   State<ColorReturnOnce> createState() => _ColorReturnOnceState();
 }
 
-class _ColorReturnOnceState extends State<ColorReturnOnce>
-    with SingleTickerProviderStateMixin {
+class _ColorReturnOnceState extends State<ColorReturnOnce> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: widget.duration,
@@ -329,61 +293,88 @@ class DevelopedImage extends StatefulWidget {
 }
 
 class _DevelopedImageState extends State<DevelopedImage> {
+  // Renders already on disk, so a photo seen once is there on the first
+  // frame next time instead of flashing blank: by exact size, and by look
+  // at any size, to stand in while a larger one is made.
+  static final Map<String, File> _ready = {};
+  static final Map<String, File> _anySize = {};
+
   Future<File?>? _f;
-  String? _sig;
+  File? _now;
+  String? _sig, _base;
 
   void _load() {
     final r = widget.recipe ?? widget.item.edit;
-    final sig = '${widget.item.key}${r?.signature}${widget.size}';
+    final base = '${widget.item.key}${r?.signature}';
+    final sig = '$base@${widget.size}';
     if (sig == _sig) return;
     _sig = sig;
-    _f = Store.instance.rendered(widget.item, widget.size, recipe: r);
+    _base = base;
+    _now = _ready[sig];
+    _f = _now != null
+        ? null
+        : Store.instance.rendered(widget.item, widget.size, recipe: r).then((f) {
+            if (f != null) {
+              _ready[sig] = f;
+              _anySize[base] = f;
+            }
+            return f;
+          });
+  }
+
+  /// [f], fading in over [under] once it is decoded, unless it already is.
+  Widget _image(File f, Widget? under) => Image.file(
+    f,
+    fit: widget.fit,
+    alignment: widget.alignment ?? focusAlignment(widget.item),
+    width: double.infinity,
+    height: double.infinity,
+    gaplessPlayback: true,
+    frameBuilder: (context, child, frame, sync) {
+      if (sync || under == null) return child;
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          under,
+          AnimatedOpacity(
+            opacity: frame == null ? 0 : 1,
+            duration: const Duration(milliseconds: 220),
+            curve: Motion.settle,
+            child: child,
+          ),
+        ],
+      );
+    },
+  );
+
+  Widget _standIn() {
+    final other = _anySize[_base];
+    if (other != null) return _image(other, null);
+    return widget.placeholder ?? const ColoredBox(color: Neutral.hairline, child: SizedBox.expand());
   }
 
   @override
   Widget build(BuildContext context) {
     _load();
+    final now = _now;
+    if (now != null) return _image(now, _standIn());
     return FutureBuilder<File?>(
       future: _f,
       builder: (context, snap) {
         final f = snap.data;
-        return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          switchInCurve: Motion.settle,
-          switchOutCurve: Curves.easeInCubic,
-          child: f == null
-              ? KeyedSubtree(
-                  key: const ValueKey('empty'),
-                  child:
-                      widget.placeholder ??
-                      const ColoredBox(
-                        color: Neutral.hairline,
-                        child: SizedBox.expand(),
-                      ),
-                )
-              : Image.file(
-                  f,
-                  key: ValueKey(f.path),
-                  fit: widget.fit,
-                  alignment: widget.alignment ?? focusAlignment(widget.item),
-                  width: double.infinity,
-                  height: double.infinity,
-                  gaplessPlayback: true,
-                ),
-        );
+        return f == null ? _standIn() : _image(f, _standIn());
       },
     );
   }
 }
 
+/// A Hero's way from one place to the other: straight, not the arc
+/// Material draws.
+RectTween straightRect(Rect? begin, Rect? end) => RectTween(begin: begin, end: end);
+
 /// The untouched photo, in black and white while it waits to be developed.
 class OriginalImage extends StatefulWidget {
-  const OriginalImage(
-    this.item, {
-    super.key,
-    this.size = 420,
-    this.mono = true,
-  });
+  const OriginalImage(this.item, {super.key, this.size = 420, this.mono = true});
   final PhotoItem item;
   final int size;
   final bool mono;
@@ -396,8 +387,8 @@ class _OriginalImageState extends State<OriginalImage> {
   static final Map<String, Future<Uint8List?>> _cache = {};
   late Future<Uint8List?> _f = _load();
 
-  Future<Uint8List?> _load() => _cache['${widget.item.id}_${widget.size}'] ??=
-      Store.instance.original(widget.item, widget.size);
+  Future<Uint8List?> _load() =>
+      _cache['${widget.item.id}_${widget.size}'] ??= Store.instance.original(widget.item, widget.size);
 
   @override
   void didUpdateWidget(OriginalImage old) {
@@ -412,10 +403,7 @@ class _OriginalImageState extends State<OriginalImage> {
       builder: (context, snap) {
         final b = snap.data;
         if (b == null) {
-          return const ColoredBox(
-            color: Neutral.hairline,
-            child: SizedBox.expand(),
-          );
+          return const ColoredBox(color: Neutral.hairline, child: SizedBox.expand());
         }
         final image = Image.memory(
           b,
@@ -434,10 +422,7 @@ class _OriginalImageState extends State<OriginalImage> {
 Alignment focusAlignment(PhotoItem it) {
   final f = it.edit?.focus;
   if (f == null || f.length < 2) return Alignment.center;
-  return Alignment(
-    (f[0].clamp(0.0, 1.0) * 2 - 1),
-    (f[1].clamp(0.0, 1.0) * 2 - 1),
-  );
+  return Alignment((f[0].clamp(0.0, 1.0) * 2 - 1), (f[1].clamp(0.0, 1.0) * 2 - 1));
 }
 
 /// Text-only button, achromatic.
@@ -463,9 +448,7 @@ class TextAction extends StatelessWidget {
         child: Text(
           label,
           style: (style ?? Txt.label).copyWith(
-            color: onTap == null
-                ? Neutral.tertiary
-                : (color ?? Neutral.primary),
+            color: (color ?? Neutral.primary).withValues(alpha: onTap == null ? 0.35 : 1),
           ),
         ),
       ),
@@ -475,14 +458,7 @@ class TextAction extends StatelessWidget {
 
 /// An icon action for states a word cannot show at a glance (favorite on or off).
 class IconAction extends StatelessWidget {
-  const IconAction(
-    this.icon, {
-    super.key,
-    required this.label,
-    this.onTap,
-    this.activeIcon,
-    this.active = false,
-  });
+  const IconAction(this.icon, {super.key, required this.label, this.onTap, this.activeIcon, this.active = false});
   final IconData icon;
   final IconData? activeIcon;
   final bool active;
@@ -512,9 +488,7 @@ class IconAction extends StatelessWidget {
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
               transitionBuilder: (c, a) => ScaleTransition(
-                scale: Tween(begin: 0.6, end: 1.0).animate(
-                  CurvedAnimation(parent: a, curve: Motion.settle),
-                ),
+                scale: Tween(begin: 0.6, end: 1.0).animate(CurvedAnimation(parent: a, curve: Motion.settle)),
                 child: FadeTransition(opacity: a, child: c),
               ),
               child: Icon(
@@ -532,12 +506,7 @@ class IconAction extends StatelessWidget {
 }
 
 class PrimaryButton extends StatelessWidget {
-  const PrimaryButton(
-    this.label, {
-    super.key,
-    required this.onTap,
-    this.secondary = false,
-  });
+  const PrimaryButton(this.label, {super.key, required this.onTap, this.secondary = false});
   final String label;
   final VoidCallback onTap;
   final bool secondary;
@@ -557,12 +526,7 @@ class PrimaryButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           border: secondary ? Border.all(color: Neutral.hairline) : null,
         ),
-        child: Text(
-          label,
-          style: Txt.label.copyWith(
-            color: secondary ? Neutral.primary : Neutral.surface,
-          ),
-        ),
+        child: Text(label, style: Txt.label.copyWith(color: secondary ? Neutral.primary : Neutral.surface)),
       ),
     );
   }
@@ -602,8 +566,7 @@ class _PressableState extends State<_Pressable> {
 String metaLine(PhotoItem it) {
   final t = it.taken;
   String two(int v) => v.toString().padLeft(2, '0');
-  final date =
-      '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  final date = '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
   if (!it.hasLocation) return date;
   // A name reads better than numbers; numbers only where no name is known.
   if (placeNear(it.lat, it.lng) case final name?) return '$date  ·  $name';
@@ -626,40 +589,21 @@ const months = [
   'November',
   'December',
 ];
-const monthsShort = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
+const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /// Hairline divider.
 class Hairline extends StatelessWidget {
   const Hairline({super.key});
   @override
-  Widget build(BuildContext context) =>
-      Container(height: 0.6, color: Neutral.hairline);
+  Widget build(BuildContext context) => Container(height: 0.6, color: Neutral.hairline);
 }
 
 /// A split swatch for photos with several kept colors (map markers, grid dots).
 /// Given the photo each color came [from], every slice is a piece of that
 /// photo, as a [Swatch] is; flat colors show while the pieces are cut.
 class SplitSwatch extends StatelessWidget {
-  const SplitSwatch(
-    this.colors, {
-    super.key,
-    this.size = 18,
-    this.border = 2,
-    this.from,
-  }) : assert(from == null || from.length == colors.length);
+  const SplitSwatch(this.colors, {super.key, this.size = 18, this.border = 2, this.from})
+    : assert(from == null || from.length == colors.length);
   final List<KeptColor> colors;
   final double size, border;
   final List<PhotoItem>? from;
@@ -674,20 +618,11 @@ class SplitSwatch extends StatelessWidget {
       decoration: const BoxDecoration(
         color: Neutral.surface,
         shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x26000000),
-            blurRadius: 6,
-            offset: Offset(0, 1.5),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Color(0x26000000), blurRadius: 6, offset: Offset(0, 1.5))],
       ),
       padding: EdgeInsets.all(border),
       child: from == null
-          ? CustomPaint(
-              size: Size.square(size - border * 2),
-              painter: PiePainter([for (final c in colors) colorOf(c)]),
-            )
+          ? CustomPaint(size: Size.square(size - border * 2), painter: PiePainter([for (final c in colors) colorOf(c)]))
           : _PhotoPie(colors, from!, size: size - border * 2),
     );
   }
@@ -711,8 +646,7 @@ class _PhotoPieState extends State<_PhotoPie> {
   @override
   void didUpdateWidget(_PhotoPie old) {
     super.didUpdateWidget(old);
-    if (!listEquals(old.from, widget.from) ||
-        !listEquals(old.colors, widget.colors)) {
+    if (!listEquals(old.from, widget.from) || !listEquals(old.colors, widget.colors)) {
       _asked = false;
     }
   }
@@ -720,18 +654,13 @@ class _PhotoPieState extends State<_PhotoPie> {
   @override
   Widget build(BuildContext context) {
     final store = Store.instance;
-    final ready = [
-      for (var i = 0; i < widget.colors.length; i++)
-        store.patchReady(widget.from[i], widget.colors[i]),
-    ];
+    final ready = [for (var i = 0; i < widget.colors.length; i++) store.patchReady(widget.from[i], widget.colors[i])];
     if (!_asked && ready.contains(null)) {
       _asked = true;
-      Future.wait([
-        for (var i = 0; i < widget.colors.length; i++)
-          store.patch(widget.from[i], widget.colors[i]),
-      ]).then((_) {
-        if (mounted) setState(() {});
-      });
+      Future.wait([for (var i = 0; i < widget.colors.length; i++) store.patch(widget.from[i], widget.colors[i])])
+          .then((_) {
+            if (mounted) setState(() {});
+          });
     }
     final flat = [for (final c in widget.colors) colorOf(c)];
     final images = [for (final r in ready) r?.image];
@@ -775,33 +704,15 @@ class PiePainter extends CustomPainter {
         // The piece covers the whole dot, as a photo fills its frame.
         final k = math.max(s.width / image.width, s.height / image.height);
         final m = Matrix4.identity()
-          ..translateByDouble(
-            (s.width - image.width * k) / 2,
-            (s.height - image.height * k) / 2,
-            0,
-            1,
-          )
+          ..translateByDouble((s.width - image.width * k) / 2, (s.height - image.height * k) / 2, 0, 1)
           ..scaleByDouble(k, k, 1, 1);
-        p.shader = ImageShader(
-          image,
-          TileMode.clamp,
-          TileMode.clamp,
-          m.storage,
-          filterQuality: FilterQuality.medium,
-        );
+        p.shader = ImageShader(image, TileMode.clamp, TileMode.clamp, m.storage, filterQuality: FilterQuality.medium);
       }
       // Overlap a hair so no seam of white shows between slices.
-      canvas.drawArc(
-        rect,
-        -3.141592653589793 / 2 + sweep * i,
-        sweep + (i == colors.length - 1 ? 0 : 0.02),
-        true,
-        p,
-      );
+      canvas.drawArc(rect, -3.141592653589793 / 2 + sweep * i, sweep + (i == colors.length - 1 ? 0 : 0.02), true, p);
     }
   }
 
   @override
-  bool shouldRepaint(PiePainter old) =>
-      !listEquals(old.colors, colors) || !listEquals(old.images, images);
+  bool shouldRepaint(PiePainter old) => !listEquals(old.colors, colors) || !listEquals(old.images, images);
 }

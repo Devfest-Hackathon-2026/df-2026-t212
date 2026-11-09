@@ -1433,7 +1433,8 @@ class _Card extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     metaLine(item).split('  ·  ').first,
-                    style: Txt.mono.copyWith(fontSize: 10.5),
+                    // Over glass, quieter text is the ink made fainter, not gray.
+                    style: Txt.mono.copyWith(fontSize: 10.5, color: const Color(0x99161616)),
                   ),
                 ],
               ),

@@ -54,8 +54,21 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   int _active = 0;
   bool _panel = false;
 
-  /// Strong colors in view now.
-  List<KeptColor> _candidates = [];
+  /// The colors in view, each keeping its place while it stays in view, so
+  /// a finger reaching for one finds it where it was.
+  final List<_Seen> _candidates = [];
+
+  /// Colors seen once, waiting for a second look before they join.
+  final List<_Seen> _maybe = [];
+  int _seenId = 0;
+
+  /// A coarse look at the view, to tell when the phone is moving.
+  Uint8List? _glance;
+  DateTime _movedAt = DateTime(0);
+
+  /// A finger is on the colors, or just left them: nothing leaves then.
+  bool _touching = false;
+  DateTime _touchedAt = DateTime(0);
 
   /// The person has chosen a color; nothing is chosen for them after that.
   bool _chosen = false;
@@ -193,8 +206,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     // Let exposure settle before reading the colors.
     await Future<void>.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    await _scanView();
-    _scan = Timer.periodic(const Duration(milliseconds: 2500), (_) => _scanView());
+    unawaited(_scanView());
   }
 
   void _fail(String code) {
@@ -221,8 +233,36 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   /// and near the middle. Nothing is kept for the person; the view stays in
   /// full color until they choose.
   Future<void> _scanView() async {
+    _scan?.cancel();
     final px = await LiveCamera.thumb();
-    if (px == null || !mounted) return;
+    if (!mounted) return;
+    // Looks come quickly while the phone moves, so the colors follow it,
+    // and a little slower while it rests.
+    var next = const Duration(milliseconds: 150);
+    if (px != null) {
+      final now = _coarse(px);
+      var d = 0.0;
+      final last = _glance;
+      if (last != null) {
+        for (var i = 0; i < now.length; i++) {
+          d += (now[i] - last[i]).abs();
+        }
+        d /= now.length;
+      }
+      _glance = now;
+      final t = DateTime.now();
+      if (last == null || d > 3) _movedAt = t;
+      final settled = t.difference(_movedAt) > const Duration(milliseconds: 300);
+      if (!settled) next = const Duration(milliseconds: 50);
+      _takeColors(px, settled && !_touching && t.difference(_touchedAt) > const Duration(milliseconds: 700));
+    }
+    if (mounted) _scan = Timer(next, _scanView);
+  }
+
+  /// New colors join at the end as soon as they show twice. Colors leave
+  /// only once the view has come to rest and no finger is near, so nothing
+  /// slides under a finger reaching for it.
+  void _takeColors(Rgba px, bool mayLeave) {
     final lab = toLab(px);
     final peaks = huePeaks(lab, top: 8).where((p) => p.meanChroma > 0.04).toList();
     double score(HuePeak p) {
@@ -236,7 +276,83 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
       return KeptColor(l: p.meanL, a: p.meanChroma * math.cos(h), b: p.meanChroma * math.sin(h));
     }
 
-    setState(() => _candidates = peaks.take(6).map(color).toList());
+    double hue(KeptColor k) => math.atan2(k.b, k.a) * 180 / math.pi;
+    double apart(double x, double y) => ((x - y + 540) % 360 - 180).abs();
+    final fresh = peaks.take(6).map(color).toList();
+    // Each one shown takes its nearest match and keeps its place.
+    void follow(List<_Seen> list) {
+      for (final seen in list) {
+        KeptColor? best;
+        var bestD = 20.0;
+        for (final k in fresh) {
+          final d = apart(hue(k), hue(seen.color));
+          if (d < bestD) {
+            bestD = d;
+            best = k;
+          }
+        }
+        if (best != null) {
+          seen
+            ..color = best
+            ..missed = 0;
+          fresh.remove(best);
+        } else {
+          seen.missed++;
+        }
+      }
+    }
+
+    // Redraw only when something shows differently, not on every look.
+    String shown() => _candidates
+        .map(
+          (c) =>
+              '${c.id}${c.leaving}${(c.color.l * 40).round()}${(c.color.a * 200).round()}${(c.color.b * 200).round()}',
+        )
+        .join(',');
+    final before = shown();
+    follow(_candidates.where((c) => !c.leaving).toList());
+    follow(_maybe);
+    // Twice seen, a color joins; seen once and gone, it never showed.
+    final joining = _maybe.where((m) => m.missed == 0 && m.looks++ >= 1).toList();
+    _maybe.removeWhere((m) => m.missed > 0 || joining.contains(m));
+    _maybe.addAll(fresh.map((k) => _Seen(_seenId++, k)));
+    for (final c in _candidates) {
+      if (mayLeave && !c.leaving && c.missed > 1) c.leaving = true;
+    }
+    final room = 6 - _candidates.where((c) => !c.leaving).length;
+    _candidates.addAll(joining.take(math.max(0, room)));
+    if (before != shown()) setState(() {});
+  }
+
+  void _letGo() {
+    _touching = false;
+    _touchedAt = DateTime.now();
+  }
+
+  /// Takes a leaving color out once it has shrunk away.
+  void _gone(_Seen c) {
+    if (!mounted || !_candidates.contains(c)) return;
+    setState(() => _candidates.remove(c));
+  }
+
+  /// The view as 12 by 9 patches of brightness.
+  static Uint8List _coarse(Rgba p) {
+    const gw = 12, gh = 9;
+    final out = Uint8List(gw * gh);
+    final sums = List<int>.filled(gw * gh, 0), counts = List<int>.filled(gw * gh, 0);
+    for (var y = 0; y < p.height; y += 2) {
+      final gy = y * gh ~/ p.height;
+      for (var x = 0; x < p.width; x += 2) {
+        final i = (y * p.width + x) * 4;
+        final g = gy * gw + x * gw ~/ p.width;
+        sums[g] += (p.pixels[i] * 54 + p.pixels[i + 1] * 183 + p.pixels[i + 2] * 19) >> 8;
+        counts[g]++;
+      }
+    }
+    for (var i = 0; i < out.length; i++) {
+      out[i] = counts[i] == 0 ? 0 : sums[i] ~/ counts[i];
+    }
+    return out;
   }
 
   void _look() => LiveCamera.look(_r);
@@ -582,7 +698,9 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
 
   static const _bg = Color(0xFF232323);
   static const _ink = Color(0xFFF2F2F0);
-  static const _dim = Color(0xFF8E8E8C);
+  // Quieter text over the blurred view stays white and only grows fainter:
+  // gray goes muddy over a blur.
+  static const _dim = Color(0x99FFFFFF);
 
   @override
   Widget build(BuildContext context) {
@@ -625,6 +743,9 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                           SizedBox(height: bottom, child: _bottom()),
                         ],
                       ),
+                      // The options drop from the button that calls them,
+                      // over the corner of the view.
+                      Positioned(top: top - 6, right: 8, child: _optionsMenu()),
                       if (at != null)
                         _loupeWidget(view + Offset(at.dx * h * aspect, at.dy * h), width: box.maxWidth, ceiling: 0),
                       _flight(),
@@ -795,24 +916,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     );
   }
 
-  /// The hint, or the options in its place, one easing into the other.
   Widget _hint() {
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 280),
-      switchInCurve: Motion.settle,
-      switchOutCurve: Curves.easeInCubic,
-      transitionBuilder: (child, a) => FadeTransition(
-        opacity: a,
-        child: SlideTransition(
-          position: Tween(begin: const Offset(0, 0.25), end: Offset.zero).animate(a),
-          child: child,
-        ),
-      ),
-      child: _options ? KeyedSubtree(key: const ValueKey('options'), child: _optionsRow()) : _hintText(),
-    );
-  }
-
-  Widget _hintText() {
     final show = _feed != null && !_chosen;
     return Center(
       key: const ValueKey('hint'),
@@ -830,8 +934,32 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   }
 
   /// The system camera's lesser settings, as its own icons: timer, grid,
-  /// photo size. Each shows its state in itself, with no words.
-  Widget _optionsRow() {
+  /// photo size, each showing its state in itself, with no words. They
+  /// grow out of the button at the top right and fold back into it.
+  Widget _optionsMenu() {
+    return IgnorePointer(
+      ignoring: !_options,
+      child: AnimatedOpacity(
+        opacity: _options ? 1 : 0,
+        duration: Duration(milliseconds: _options ? 200 : 140),
+        curve: Motion.settle,
+        child: AnimatedScale(
+          scale: _options ? 1 : 0.6,
+          alignment: Alignment.topRight,
+          duration: Duration(milliseconds: _options ? 280 : 180),
+          curve: _options ? Motion.settle : Curves.easeInCubic,
+          child: Glass(
+            dark: true,
+            radius: 24,
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(mainAxisSize: MainAxisSize.min, children: _optionItems()),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _optionItems() {
     final sizes = _feed?.resolutions ?? const <int>[];
     Widget opt(Widget icon, bool on, VoidCallback tap, {String? badge}) => GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -840,7 +968,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         tap();
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
           curve: Motion.settle,
@@ -900,61 +1028,58 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
       ),
     );
     final mp = _mp == 0 && sizes.isNotEmpty ? sizes.last : _mp;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        opt(
-          Icon(
-            _timer == 0 ? Icons.timer_off_outlined : Icons.timer_outlined,
-            key: ValueKey(_timer == 0),
-            size: 19,
-            color: _timer > 0 ? _ink : _dim,
-          ),
-          _timer > 0,
-          badge: _timer > 0 ? '$_timer' : null,
-          () => setState(
-            () => _timer = switch (_timer) {
-              0 => 3,
-              3 => 10,
-              _ => 0,
-            },
-          ),
+    return [
+      opt(
+        Icon(
+          _timer == 0 ? Icons.timer_off_outlined : Icons.timer_outlined,
+          key: ValueKey(_timer == 0),
+          size: 19,
+          color: _timer > 0 ? _ink : _dim,
         ),
-        opt(
-          Icon(
-            _grid ? Icons.grid_on_rounded : Icons.grid_off_rounded,
-            key: ValueKey(_grid),
-            size: 19,
-            color: _grid ? _ink : _dim,
-          ),
-          _grid,
-          () => setState(() => _grid = !_grid),
+        _timer > 0,
+        badge: _timer > 0 ? '$_timer' : null,
+        () => setState(
+          () => _timer = switch (_timer) {
+            0 => 3,
+            3 => 10,
+            _ => 0,
+          },
         ),
-        if (sizes.length > 1)
-          opt(
-            Column(
-              key: ValueKey(mp),
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '$mp',
-                  style: Txt.small.copyWith(color: _ink, fontSize: 12, fontWeight: FontWeight.w600, height: 1),
-                ),
-                Text(
-                  'MP',
-                  style: Txt.small.copyWith(color: _dim, fontSize: 7.5, fontWeight: FontWeight.w600, height: 1.1),
-                ),
-              ],
-            ),
-            mp == sizes.last,
-            () {
-              final i = sizes.indexOf(mp);
-              setState(() => _mp = sizes[(i + 1) % sizes.length]);
-              LiveCamera.resolution(_mp);
-            },
+      ),
+      opt(
+        Icon(
+          _grid ? Icons.grid_on_rounded : Icons.grid_off_rounded,
+          key: ValueKey(_grid),
+          size: 19,
+          color: _grid ? _ink : _dim,
+        ),
+        _grid,
+        () => setState(() => _grid = !_grid),
+      ),
+      if (sizes.length > 1)
+        opt(
+          Column(
+            key: ValueKey(mp),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$mp',
+                style: Txt.small.copyWith(color: _ink, fontSize: 12, fontWeight: FontWeight.w600, height: 1),
+              ),
+              Text(
+                'MP',
+                style: Txt.small.copyWith(color: _dim, fontSize: 7.5, fontWeight: FontWeight.w600, height: 1.1),
+              ),
+            ],
           ),
-      ],
-    );
+          mp == sizes.last,
+          () {
+            final i = sizes.indexOf(mp);
+            setState(() => _mp = sizes[(i + 1) % sizes.length]);
+            LiveCamera.resolution(_mp);
+          },
+        ),
+    ];
   }
 
   Widget _viewfinder() {
@@ -1305,7 +1430,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     final hidden = _feed == null || _panel || _dial == 'zoom';
     void openPanel() {
       Haptics.light();
-      setState(() => _panel = true);
+      setState(() {
+        _panel = true;
+        _options = false;
+      });
     }
 
     return IgnorePointer(
@@ -1453,28 +1581,54 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                   ],
                   Text('In view', style: Txt.mono.copyWith(color: _dim)),
                   const SizedBox(height: 8),
-                  SizedBox(
-                    height: 26,
-                    child: Row(
-                      children: [
-                        for (final k in _candidates)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 10),
-                            child: GestureDetector(
-                              onTap: () => _pick(k.copy()),
-                              child: Container(
-                                width: 26,
-                                height: 26,
-                                decoration: BoxDecoration(
-                                  color: colorOf(k),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
+                  Listener(
+                    // While a finger is on the row, nothing leaves it.
+                    onPointerDown: (_) => _touching = true,
+                    onPointerUp: (_) => _letGo(),
+                    onPointerCancel: (_) => _letGo(),
+                    child: SizedBox(
+                      height: 44,
+                      child: Row(
+                        children: [
+                          for (final c in _candidates)
+                            GestureDetector(
+                              key: ValueKey(c.id),
+                              behavior: HitTestBehavior.opaque,
+                              onTap: c.leaving ? null : () => _pick(c.color.copy()),
+                              // The whole 44-point square answers, not only
+                              // the swatch in it. A leaving one shrinks away
+                              // and the ones after it close up smoothly.
+                              child: TweenAnimationBuilder<double>(
+                                tween: Tween(begin: 0, end: c.leaving ? 0 : 1),
+                                duration: Duration(milliseconds: c.leaving ? 260 : 320),
+                                curve: Motion.settle,
+                                onEnd: c.leaving ? () => _gone(c) : null,
+                                builder: (context, t, child) => SizedBox(
+                                  width: 46 * t,
+                                  height: 44,
+                                  child: OverflowBox(
+                                    maxWidth: 46,
+                                    child: Center(
+                                      child: Transform.scale(scale: t, child: child),
+                                    ),
+                                  ),
+                                ),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 400),
+                                  curve: Motion.settle,
+                                  width: 32,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: colorOf(c.color),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: const Color(0x33FFFFFF), width: 0.6),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        if (_candidates.isEmpty) Text('No strong colors.', style: Txt.small.copyWith(color: _dim)),
-                      ],
+                          if (_candidates.isEmpty) Text('No strong colors.', style: Txt.small.copyWith(color: _dim)),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -2175,6 +2329,18 @@ class _PathClip extends CustomClipper<Path> {
   bool shouldReclip(_PathClip old) => true;
 }
 
+/// A color in view and how many looks it has been missing.
+class _Seen {
+  _Seen(this.id, this.color);
+  final int id;
+  KeptColor color;
+  int missed = 0;
+  int looks = 0;
+
+  /// Shrinking out of the row; no longer answers a tap.
+  bool leaving = false;
+}
+
 /// Thirds, as the system camera's grid.
 class _GridPainter extends CustomPainter {
   const _GridPainter();
@@ -2287,7 +2453,7 @@ class _DashedDot extends CustomPainter {
   @override
   void paint(Canvas canvas, Size s) {
     final p = Paint()
-      ..color = strong ? const Color(0xFFF2F2F0) : const Color(0xFF7A7A78)
+      ..color = strong ? const Color(0xFFF2F2F0) : const Color(0x80FFFFFF)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2;
     final c = s.center(Offset.zero);

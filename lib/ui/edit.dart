@@ -24,7 +24,10 @@ class EditRoute extends PageRouteBuilder<void> {
         transitionsBuilder: (_, a, _, child) => FadeTransition(
           opacity: CurvedAnimation(parent: a, curve: Curves.easeOut),
           child: SlideTransition(
-            position: Tween(begin: const Offset(0, 0.04), end: Offset.zero).animate(CurvedAnimation(parent: a, curve: Motion.settle)),
+            position: Tween(
+              begin: const Offset(0, 0.04),
+              end: Offset.zero,
+            ).animate(CurvedAnimation(parent: a, curve: Motion.settle)),
             child: child,
           ),
         ),
@@ -411,7 +414,11 @@ class _EditScreenState extends State<EditScreen> {
                   _HistoryButton(redo: false, onTap: _undo.isEmpty ? null : _stepBack),
                   _HistoryButton(redo: true, onTap: _redo.isEmpty ? null : _stepForward),
                   const Spacer(),
-                  if (running) ...[const CupertinoActivityIndicator(radius: 8, color: Neutral.primary), TextAction('Stop', onTap: () => setState(_takeOver))] else TextAction('Auto', onTap: _auto),
+                  if (running) ...[
+                    const CupertinoActivityIndicator(radius: 8, color: Neutral.primary),
+                    TextAction('Stop', onTap: () => setState(_takeOver)),
+                  ] else
+                    TextAction('Auto', onTap: _auto),
                   TextAction('Done', onTap: _done),
                   const SizedBox(width: 6),
                 ],
@@ -419,7 +426,12 @@ class _EditScreenState extends State<EditScreen> {
               // While asking, the photo takes the whole screen below the bar.
               Expanded(child: _photo()),
               // While asking, room for the Ask panel, so the whole photo shows until the keyboard comes up.
-              if (_asking) SizedBox(height: _askHeight + MediaQuery.viewPaddingOf(context).bottom + 20) else ...[_viewBar(), _panel(pad)],
+              if (_asking)
+                SizedBox(height: _askHeight + MediaQuery.viewPaddingOf(context).bottom + 20)
+              else ...[
+                _viewBar(),
+                _panel(pad),
+              ],
             ],
           ),
           if (_asking)
@@ -505,7 +517,12 @@ class _EditScreenState extends State<EditScreen> {
                     if (a == null || b == null || (a - b).distance < 0.03) return;
                     Haptics.light();
                     _change(() {
-                      final e = [(a.dx + b.dx) / 2, (a.dy + b.dy) / 2, (a.dx - b.dx).abs() / 2, (a.dy - b.dy).abs() / 2];
+                      final e = [
+                        (a.dx + b.dx) / 2,
+                        (a.dy + b.dy) / 2,
+                        (a.dx - b.dx).abs() / 2,
+                        (a.dy - b.dy).abs() / 2,
+                      ];
                       final area = _r.area?.copy() ?? Area(edge: 0.03);
                       area.ellipses = [...area.ellipses, e];
                       _r.area = area;
@@ -527,10 +544,17 @@ class _EditScreenState extends State<EditScreen> {
                         RawImage(image: _preview, fit: BoxFit.fill, filterQuality: FilterQuality.medium)
                       else
                         Hero(
+                          createRectTween: straightRect,
                           tag: 'photo-${it.key}',
                           child: it.edit == null
                               ? OriginalImage(it, size: 900)
-                              : DevelopedImage(it, size: 1600, fit: BoxFit.cover, alignment: Alignment.center, placeholder: OriginalImage(it, size: 900)),
+                              : DevelopedImage(
+                                  it,
+                                  size: 1600,
+                                  fit: BoxFit.cover,
+                                  alignment: Alignment.center,
+                                  placeholder: OriginalImage(it, size: 900),
+                                ),
                         ),
                       if (areaMode) CustomPaint(painter: _AreaPainter(_r.area, _areaStart, _areaEnd)),
                     ],
@@ -606,7 +630,10 @@ class _EditScreenState extends State<EditScreen> {
         child: Row(
           children: [
             const SizedBox(width: 10),
-            if (running && !showMask && !_before) ...[const CupertinoActivityIndicator(radius: 7, color: Neutral.secondary), const SizedBox(width: 8)],
+            if (running && !showMask && !_before) ...[
+              const CupertinoActivityIndicator(radius: 7, color: Neutral.secondary),
+              const SizedBox(width: 8),
+            ],
             Expanded(
               child: AnimatedSwitcher(
                 duration: const Duration(milliseconds: 160),
@@ -616,7 +643,12 @@ class _EditScreenState extends State<EditScreen> {
                 child: Align(
                   key: ValueKey(status),
                   alignment: Alignment.centerLeft,
-                  child: Text(status, style: Txt.small.copyWith(fontSize: 12, height: 1.2), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  child: Text(
+                    status,
+                    style: Txt.small.copyWith(fontSize: 12, height: 1.2),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
             ),
@@ -736,7 +768,8 @@ class _EditScreenState extends State<EditScreen> {
               _marks.isEmpty
                   ? 'Tap the photo to mark things. Tap again to switch.'
                   : '${[if (keeps > 0) '$keeps keep color', if (removes > 0) '$removes no color'].join(' · ')} · tap a mark to switch',
-              style: Txt.small,
+              // Over glass, quieter text is the ink made fainter, not gray.
+              style: Txt.small.copyWith(color: const Color(0x99161616)),
             ),
             const SizedBox(height: 14),
           ] else
@@ -775,7 +808,10 @@ class _EditScreenState extends State<EditScreen> {
                     curve: Motion.settle,
                     width: 32,
                     height: 32,
-                    decoration: BoxDecoration(color: canSend ? Neutral.primary : Neutral.hairline, shape: BoxShape.circle),
+                    decoration: BoxDecoration(
+                      color: canSend ? Neutral.primary : Neutral.hairline,
+                      shape: BoxShape.circle,
+                    ),
                     child: const Icon(Icons.arrow_upward_rounded, size: 18, color: Neutral.surface),
                   ),
                 ),
@@ -879,7 +915,10 @@ class _EditScreenState extends State<EditScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       child: Column(
                         children: [
-                          Text(_label(t), style: Txt.label.copyWith(color: _tool == t ? Neutral.primary : Neutral.tertiary)),
+                          Text(
+                            _label(t),
+                            style: Txt.label.copyWith(color: _tool == t ? Neutral.primary : Neutral.tertiary),
+                          ),
                           const SizedBox(height: 5),
                           AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
@@ -922,7 +961,10 @@ class _EditScreenState extends State<EditScreen> {
           children: [
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [for (var i = 0; i < Recipe.maxColors; i++) Padding(padding: const EdgeInsets.only(right: 14), child: _slot(i))],
+              children: [
+                for (var i = 0; i < Recipe.maxColors; i++)
+                  Padding(padding: const EdgeInsets.only(right: 14), child: _slot(i)),
+              ],
             ),
             const Spacer(),
             Text('From this photo', style: Txt.mono),
@@ -1020,7 +1062,12 @@ class _EditScreenState extends State<EditScreen> {
             ),
             Row(
               children: [
-                Text(_r.area == null || _r.area!.isEmpty ? 'Whole photo' : '${(_r.area!.polygons.length + _r.area!.ellipses.length)} shape(s)', style: Txt.mono),
+                Text(
+                  _r.area == null || _r.area!.isEmpty
+                      ? 'Whole photo'
+                      : '${(_r.area!.polygons.length + _r.area!.ellipses.length)} shape(s)',
+                  style: Txt.mono,
+                ),
                 const Spacer(),
                 TextAction('Clear', onTap: _r.area == null ? null : () => _change(() => _r.area = null)),
               ],
@@ -1303,7 +1350,11 @@ class _ViewButton extends StatelessWidget {
         child: AnimatedDefaultTextStyle(
           duration: const Duration(milliseconds: 140),
           curve: Motion.settle,
-          style: Txt.small.copyWith(fontSize: 12.5, color: on ? Neutral.primary : Neutral.secondary, fontWeight: on ? FontWeight.w600 : FontWeight.w400),
+          style: Txt.small.copyWith(
+            fontSize: 12.5,
+            color: on ? Neutral.primary : Neutral.secondary,
+            fontWeight: on ? FontWeight.w600 : FontWeight.w400,
+          ),
           child: Text(label),
         ),
       ),
@@ -1367,10 +1418,22 @@ class _AreaPainter extends CustomPainter {
       draw(p..close());
     }
     for (final e in area?.ellipses ?? const <List<double>>[]) {
-      draw(Path()..addOval(Rect.fromCenter(center: Offset(e[0] * s.width, e[1] * s.height), width: e[2] * 2 * s.width, height: e[3] * 2 * s.height)));
+      draw(
+        Path()..addOval(
+          Rect.fromCenter(
+            center: Offset(e[0] * s.width, e[1] * s.height),
+            width: e[2] * 2 * s.width,
+            height: e[3] * 2 * s.height,
+          ),
+        ),
+      );
     }
     if (a != null && b != null) {
-      draw(Path()..addOval(Rect.fromPoints(Offset(a!.dx * s.width, a!.dy * s.height), Offset(b!.dx * s.width, b!.dy * s.height))));
+      draw(
+        Path()..addOval(
+          Rect.fromPoints(Offset(a!.dx * s.width, a!.dy * s.height), Offset(b!.dx * s.width, b!.dy * s.height)),
+        ),
+      );
     }
   }
 
