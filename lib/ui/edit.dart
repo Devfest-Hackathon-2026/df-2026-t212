@@ -76,6 +76,7 @@ class _EditScreenState extends State<EditScreen> {
   bool _mask = false; // show where color is kept
   bool _sliding = false; // a reach slider is being dragged: show the mask
   bool _before = false; // holding "Before"
+  bool _vignetting = false; // the vignette is being slid: show its edge
 
   AgentRun? _run;
   StreamSubscription<Recipe>? _runSub;
@@ -557,6 +558,15 @@ class _EditScreenState extends State<EditScreen> {
                                 ),
                         ),
                       if (areaMode) CustomPaint(painter: _AreaPainter(_r.area, _areaStart, _areaEnd)),
+                      // Where the vignette starts, while it is slid.
+                      IgnorePointer(
+                        child: AnimatedOpacity(
+                          opacity: _vignetting && _r.vignette > 0 ? 1 : 0,
+                          duration: const Duration(milliseconds: 220),
+                          curve: Motion.settle,
+                          child: CustomPaint(painter: _VignetteRing(_r.vignetteRadius)),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -1109,21 +1119,35 @@ class _EditScreenState extends State<EditScreen> {
               max: 100,
               defaultValue: 0,
               advanced: _advanced,
-              onStart: () => _push(_r.copy()),
-              onEnd: () {},
+              onStart: () {
+                _push(_r.copy());
+                setState(() => _vignetting = true);
+              },
+              onEnd: () => setState(() => _vignetting = false),
               onChanged: (v) => _change(() => _r.vignette = v / 100, record: false),
             ),
-            SliderRow(
-              height: 34,
-              label: 'Radius',
-              value: _r.vignetteRadius * 100,
-              min: 30,
-              max: 130,
-              defaultValue: Recipe.defaultVignetteRadius * 100,
-              advanced: _advanced,
-              onStart: () => _push(_r.copy()),
-              onEnd: () {},
-              onChanged: (v) => _change(() => _r.vignetteRadius = v / 100, record: false),
+            // The vignette's own size: there only while there is a vignette.
+            AnimatedSize(
+              duration: const Duration(milliseconds: 260),
+              curve: Motion.settle,
+              alignment: Alignment.topCenter,
+              child: _r.vignette <= 0
+                  ? const SizedBox(width: double.infinity)
+                  : SliderRow(
+                      height: 34,
+                      label: 'Radius',
+                      value: _r.vignetteRadius * 100,
+                      min: 30,
+                      max: 130,
+                      defaultValue: Recipe.defaultVignetteRadius * 100,
+                      advanced: _advanced,
+                      onStart: () {
+                        _push(_r.copy());
+                        setState(() => _vignetting = true);
+                      },
+                      onEnd: () => setState(() => _vignetting = false),
+                      onChanged: (v) => _change(() => _r.vignetteRadius = v / 100, record: false),
+                    ),
             ),
           ],
         );
@@ -1533,4 +1557,36 @@ class _HookPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HookPainter o) => o.color != color || o.redo != redo;
+}
+
+/// The middle of the vignette's falloff: a circle about the center, its
+/// radius in half-diagonals as the renderer measures it.
+class _VignetteRing extends CustomPainter {
+  _VignetteRing(this.radius);
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final r = radius * math.sqrt(size.width * size.width + size.height * size.height) / 2;
+    canvas.drawCircle(
+      c,
+      r,
+      Paint()
+        ..color = const Color(0x59000000)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
+    );
+    canvas.drawCircle(
+      c,
+      r,
+      Paint()
+        ..color = const Color(0xE6FFFFFF)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_VignetteRing old) => old.radius != radius;
 }
