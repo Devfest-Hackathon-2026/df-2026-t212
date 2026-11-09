@@ -14,6 +14,79 @@ import '../core/renderer.dart';
 abstract class DevelopAgent {
   String get name;
   Future<Recipe> develop(Rgba photo, {void Function(String)? log, AgentRun? run});
+
+  /// Cheap look before developing: is there a subject whose colors are
+  /// worth keeping? Photos that are not wait for a person.
+  Future<Verdict> judge(Rgba photo) async => const Verdict(true);
+
+  /// Change [current] the way the person asks, and nothing else.
+  Future<Recipe> revise(Rgba photo, Recipe current, Revision request, {void Function(String)? log, AgentRun? run}) =>
+      Future.error(AgentError('Asking needs the cloud agent'));
+}
+
+class AgentError implements Exception {
+  AgentError(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+enum MarkIntent { keep, remove, picked }
+
+/// A point the person marked on the photo. It stands for the object there,
+/// not the pixel.
+class Mark {
+  const Mark(this.x, this.y, this.intent, {this.color});
+  final double x, y;
+  final MarkIntent intent;
+
+  /// For [MarkIntent.picked]: the color the person picked there.
+  final KeptColor? color;
+
+  /// Whether a keep weight [w] at the mark does what the person asked.
+  bool met(double w) => intent == MarkIntent.remove ? w <= 0.15 : w >= 0.6;
+}
+
+/// What the person asks the agent to change: words, marks, or both.
+class Revision {
+  const Revision({this.text, this.marks = const []});
+  final String? text;
+  final List<Mark> marks;
+}
+
+/// Whether a photo goes to the agent, and why not.
+class Verdict {
+  const Verdict(this.develop, {this.subject, this.reason});
+  final bool develop;
+  final String? subject;
+  final String? reason;
+}
+
+/// What a judge model is told, shared by Apple's on-device model and the cloud one.
+const judgeInstructions = '''
+You screen photos for After Hue. A photo is developed by turning everything black and white except the colors of its subject.
+Say yes when there is a clear subject whose own colors would stand out against a black and white rest: a flower, food, a painted wall, a sign, clothing, a car, a lit window at night, autumn leaves.
+Say no for screenshots, documents, receipts, whiteboards, blurry or accidental shots, and photos where color is everywhere at once with no subject, or nowhere.
+Answer in plain English. subject is 2-5 words. reason is under 8 words, written for the photographer.
+''';
+
+/// On-device screen, free: photos with almost no color, or color only as a
+/// faint cast over everything, are not worth a model call.
+Future<Verdict> screenOnDevice(Rgba photo) => Isolate.run(() => _screen(photo));
+
+Verdict _screen(Rgba photo) {
+  final lab = toLab(photo);
+  final n = lab.l.length;
+  var colored = 0;
+  for (var i = 0; i < n; i++) {
+    final a = lab.a[i], b = lab.b[i];
+    if (a * a + b * b > 0.06 * 0.06) colored++;
+  }
+  final share = colored / n;
+  if (share < 0.015) return const Verdict(false, reason: 'Almost no color');
+  final peaks = huePeaks(lab, top: 3);
+  if (peaks.isEmpty || peaks.first.meanChroma < 0.055) return const Verdict(false, reason: 'Color too faint');
+  return const Verdict(true);
 }
 
 /// One agent run that a person can watch and take over. Each tool call
@@ -43,6 +116,12 @@ class AgentRun {
     if (!_changes.isClosed) _changes.close();
   }
 
+  /// For a revision: the settled recipe, a one-line note on what changed,
+  /// or why it failed.
+  Recipe? result;
+  String? note;
+  String? error;
+
   /// [f], unless the run is cancelled first.
   Future<T> guard<T>(Future<T> f) {
     if (cancelled) throw AgentCancelled();
@@ -58,26 +137,64 @@ class AgentCancelled implements Exception {
 /// The tools the agent works with. The human Edit screen changes the same
 /// fields, so anything the agent does, a person can redo or undo.
 class EditSession {
-  EditSession(this.photo) : lab = toLab(photo);
+  EditSession(this.photo, {Recipe? start, this.marks = const []})
+      : lab = toLab(photo),
+        recipe = start?.copy() ?? Recipe();
 
   final Rgba photo;
   final Lab lab;
-  final Recipe recipe = Recipe();
+  final Recipe recipe;
+  final List<Mark> marks;
   int renders = 0;
   RenderResult? last;
   bool finished = false;
 
+  /// For a revision: what the agent says it changed.
+  String? change;
+
   /// Renders off the UI thread.
-  Future<String> renderAsync() async {
-    renders++;
+  Future<String> renderAsync({bool count = true}) async {
+    if (count) renders++;
     last = await _render(photo, recipe.copy(), lab);
     return rendered();
   }
 
   static Future<RenderResult> _render(Rgba p, Recipe r, Lab l) => Isolate.run(() => render(p, r, lab: l));
 
-  String rendered() => 'rendered. kept color covers ${(last!.keptShare * 100).toStringAsFixed(1)}% of the photo. '
-      'The result and its keep-weight map (white = color kept) follow.';
+  String rendered() {
+    final s = 'rendered. kept color covers ${(last!.keptShare * 100).toStringAsFixed(1)}% of the photo. '
+        'The result and its keep-weight map (white = color kept) follow.';
+    return marks.isEmpty ? s : '$s\nmarks: ${markReport()}';
+  }
+
+  /// Each mark's keep weight and whether it does what was asked:
+  /// "#1 keep 0.92 ok, #2 remove 0.41 NOT YET".
+  String markReport() => [
+        for (var k = 0; k < marks.length; k++)
+          () {
+            final m = marks[k], w = weightAt(m.x, m.y);
+            return '#${k + 1} ${m.intent.name} ${w.toStringAsFixed(2)} ${m.met(w) ? 'ok' : 'NOT YET'}';
+          }(),
+      ].join(', ');
+
+  bool get marksMet => last != null && marks.every((m) => m.met(weightAt(m.x, m.y)));
+
+  /// Mean keep weight in a small patch around a normalized point.
+  double weightAt(double x, double y) {
+    final r = last;
+    if (r == null) return 0;
+    final w = photo.width, h = photo.height;
+    final rad = math.max(2, (math.min(w, h) * 0.012).round());
+    final cx = (x * w).round().clamp(0, w - 1), cy = (y * h).round().clamp(0, h - 1);
+    var sum = 0.0, n = 0;
+    for (var yy = math.max(0, cy - rad); yy <= math.min(h - 1, cy + rad); yy++) {
+      for (var xx = math.max(0, cx - rad); xx <= math.min(w - 1, cx + rad); xx++) {
+        sum += r.weight[yy * w + xx];
+        n++;
+      }
+    }
+    return n == 0 ? 0 : sum / n;
+  }
 
   String execute(String name, Map<String, dynamic> args) {
     double? d(String k) => (args[k] as num?)?.toDouble();
@@ -142,15 +259,19 @@ class EditSession {
         recipe.area = a.isEmpty ? null : a;
         return a.isEmpty ? 'area cleared' : 'ok';
       case 'set_mono_tone':
-        recipe.contrast = (d('contrast') ?? 0.1).clamp(-0.3, 0.4);
+        if (args['contrast'] != null) recipe.contrast = d('contrast')!.clamp(-0.3, 0.4);
+        if (args['atmosphere'] != null) recipe.ambience = d('atmosphere')!.clamp(0.0, 1.0);
+        if (args['vignette'] != null) recipe.vignette = d('vignette')!.clamp(0.0, 1.0);
+        if (args['vignette_radius'] != null) recipe.vignetteRadius = d('vignette_radius')!.clamp(0.3, 1.3);
         return 'ok';
       case 'render':
         renders++;
         last = render(photo, recipe, lab: lab);
         return rendered();
       case 'finish':
-        recipe.subject = args['subject'] as String?;
-        recipe.why = args['why'] as String?;
+        recipe.subject = args['subject'] as String? ?? recipe.subject;
+        recipe.why = args['why'] as String? ?? recipe.why;
+        change = args['change'] as String?;
         if (args['focus'] is List) {
           recipe.focus = (args['focus'] as List).cast<num>().map((e) => e.toDouble()).toList();
         }
@@ -171,7 +292,7 @@ List<double>? _range(Object? v) {
 // ------------------------------------------------------------ on-device fallback
 
 /// Used when no model is configured. Picks the strongest color near the center.
-class LocalAgent implements DevelopAgent {
+class LocalAgent extends DevelopAgent {
   @override
   String get name => 'on-device';
 
@@ -220,8 +341,9 @@ class LocalAgent implements DevelopAgent {
 
 // ------------------------------------------------------------ image helpers for models
 
-/// JPEG with a 10% coordinate grid, so the model can point at things.
-Future<Uint8List> gridJpeg(Rgba photo) => Isolate.run(() {
+/// JPEG with a 10% coordinate grid, so the model can point at things, and
+/// the person's [marks] as numbered rings: green keep, red remove, cyan picked.
+Future<Uint8List> gridJpeg(Rgba photo, {List<Mark> marks = const []}) => Isolate.run(() {
       final im = _toImage(photo);
       final yellow = img.ColorRgb8(255, 230, 0);
       for (var k = 1; k < 10; k++) {
@@ -230,6 +352,23 @@ Future<Uint8List> gridJpeg(Rgba photo) => Isolate.run(() {
         img.drawLine(im, x1: 0, y1: y, x2: im.width - 1, y2: y, color: yellow);
         img.drawString(im, (k / 10).toStringAsFixed(1), font: img.arial14, x: x + 3, y: 2, color: yellow);
         img.drawString(im, (k / 10).toStringAsFixed(1), font: img.arial14, x: 3, y: y + 2, color: yellow);
+      }
+      final r = math.max(8, (math.min(im.width, im.height) * 0.025).round());
+      final black = img.ColorRgb8(0, 0, 0);
+      for (var k = 0; k < marks.length; k++) {
+        final m = marks[k];
+        final c = switch (m.intent) {
+          MarkIntent.keep => img.ColorRgb8(0, 230, 90),
+          MarkIntent.remove => img.ColorRgb8(255, 50, 50),
+          MarkIntent.picked => img.ColorRgb8(0, 210, 255),
+        };
+        final x = (m.x * im.width).round(), y = (m.y * im.height).round();
+        img.drawCircle(im, x: x, y: y, radius: r + 2, color: black);
+        for (var t = -1; t <= 1; t++) {
+          img.drawCircle(im, x: x, y: y, radius: r + t, color: c);
+        }
+        img.fillCircle(im, x: x, y: y, radius: 2, color: c);
+        img.drawString(im, '#${k + 1}', font: img.arial24, x: x + r + 4, y: y - 12, color: c);
       }
       return Uint8List.fromList(img.encodeJpg(im, quality: 80));
     });

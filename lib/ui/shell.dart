@@ -66,28 +66,37 @@ class _ShellState extends State<Shell> {
               ),
             ),
           ),
-          // Both screens stay alive; switching is a short cross-fade with a
-          // touch of depth, not a cut.
-          for (final (i, screen) in const [PhotosScreen(), MapScreen()].indexed)
-            Positioned.fill(
-              child: IgnorePointer(
-                ignoring: _tab != i,
-                child: TickerMode(
-                  enabled: _tab == i,
-                  child: AnimatedOpacity(
-                    opacity: _tab == i ? 1 : 0,
-                    duration: const Duration(milliseconds: 260),
-                    curve: Curves.easeOutCubic,
-                    child: AnimatedScale(
-                      scale: _tab == i ? 1 : 0.985,
-                      duration: const Duration(milliseconds: 360),
-                      curve: Curves.easeOutCubic,
-                      child: screen,
-                    ),
-                  ),
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: _tab != 0,
+              child: TickerMode(
+                enabled: _tab == 0,
+                child: AnimatedOpacity(
+                  opacity: _tab == 0 ? 1 : 0,
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
+                  child: const PhotosScreen(),
                 ),
               ),
             ),
+          ),
+          // MapLibre is a native view. Remove it from composition when hidden
+          // so UIKit cannot leave its last frame over the Photos tab.
+          Positioned.fill(
+            child: Offstage(
+              offstage: _tab != 1,
+              // Fades in on arrival; leaves at once, while Photos fades in over it.
+              child: TickerMode(
+                enabled: _tab == 1,
+                child: AnimatedOpacity(
+                  opacity: _tab == 1 ? 1 : 0,
+                  duration: Duration(milliseconds: _tab == 1 ? 260 : 0),
+                  curve: Curves.easeOutCubic,
+                  child: const MapScreen(),
+                ),
+              ),
+            ),
+          ),
           ValueListenableBuilder<bool>(
             valueListenable: Shell.barHidden,
             builder: (context, hidden, _) => AnimatedPositioned(
@@ -189,6 +198,7 @@ class _TabSwitchState extends State<_TabSwitch> with SingleTickerProviderStateMi
   Widget build(BuildContext context) {
     final total = _widths.reduce((a, b) => a + b);
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTapDown: (_) => setState(() => _down = true),
       onTapCancel: () => setState(() => _down = false),
       onTapUp: (d) {

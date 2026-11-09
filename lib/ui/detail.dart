@@ -1,6 +1,6 @@
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/store.dart';
@@ -10,13 +10,16 @@ import 'widgets/common.dart';
 
 class DetailRoute extends PageRouteBuilder<void> {
   DetailRoute({required List<PhotoItem> items, required int index})
-      : super(
-          opaque: false,
-          transitionDuration: const Duration(milliseconds: 420),
-          reverseTransitionDuration: const Duration(milliseconds: 320),
-          pageBuilder: (_, _, _) => DetailScreen(items: items, index: index),
-          transitionsBuilder: (_, a, _, child) => FadeTransition(opacity: CurvedAnimation(parent: a, curve: Curves.easeOut), child: child),
-        );
+    : super(
+        opaque: false,
+        transitionDuration: const Duration(milliseconds: 420),
+        reverseTransitionDuration: const Duration(milliseconds: 320),
+        pageBuilder: (_, _, _) => DetailScreen(items: items, index: index),
+        transitionsBuilder: (_, a, _, child) => FadeTransition(
+          opacity: CurvedAnimation(parent: a, curve: Curves.easeOut),
+          child: child,
+        ),
+      );
 }
 
 /// One job: look at one photo, and compare it with the original.
@@ -29,7 +32,7 @@ class DetailScreen extends StatefulWidget {
   State<DetailScreen> createState() => _DetailScreenState();
 }
 
-class _DetailScreenState extends State<DetailScreen> {
+class _DetailScreenState extends State<DetailScreen> with SingleTickerProviderStateMixin {
   final s = Store.instance;
   late final PageController _page = PageController(initialPage: widget.index);
   late int _index = widget.index;
@@ -37,6 +40,29 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _showOriginal = false;
   static bool _hintShown = false;
   bool _hint = false;
+
+  /// One tap on the photo hides everything else, on black, as in Photos.
+  late final AnimationController _bare = AnimationController(vsync: this, duration: const Duration(milliseconds: 240));
+
+  void _toggleBare() {
+    final on = _bare.value < 0.5;
+    if (on) {
+      _bare.forward();
+      _hint = false;
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+    } else {
+      _bare.reverse();
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_bare.value > 0) SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _bare.dispose();
+    _page.dispose();
+    super.dispose();
+  }
 
   PhotoItem get item => widget.items[_index];
 
@@ -63,39 +89,43 @@ class _DetailScreenState extends State<DetailScreen> {
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (ctx) {
         Widget row(String label, VoidCallback? onTap, {bool quiet = false}) => GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: onTap == null
-                  ? null
-                  : () {
-                      Haptics.tick();
-                      Navigator.pop(ctx);
-                      onTap();
-                    },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 15),
-                child: Text(label, style: Txt.label.copyWith(color: onTap == null ? Neutral.tertiary : (quiet ? Neutral.secondary : Neutral.primary))),
-              ),
-            );
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap == null
+              ? null
+              : () {
+                  Haptics.tick();
+                  Navigator.pop(ctx);
+                  onTap();
+                },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 15),
+            child: Text(label, style: Txt.label.copyWith(color: onTap == null ? Neutral.tertiary : (quiet ? Neutral.secondary : Neutral.primary))),
+          ),
+        );
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              row('Duplicate', () {
-                s.duplicate(item);
-                _toast('Duplicated');
-              }),
-              row('Copy Edit', () {
-                s.copyEdit(item);
-                _toast('Edit copied');
-              }),
-              row('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
-              row('Why this color?', _why),
-              const Hairline(),
-              row('Remove from After Hue', () {
-                s.remove(item);
-                Navigator.pop(context);
-              }, quiet: true),
-            ]),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                row('Duplicate', () {
+                  s.duplicate(item);
+                  _toast('Duplicated');
+                }),
+                row('Copy Edit', () {
+                  s.copyEdit(item);
+                  _toast('Edit copied');
+                }),
+                row('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
+                row('Why this color?', _why),
+                const Hairline(),
+                row('Remove from After Hue', () {
+                  s.remove(item);
+                  Navigator.pop(context);
+                }, quiet: true),
+              ],
+            ),
           ),
         );
       },
@@ -111,13 +141,25 @@ class _DetailScreenState extends State<DetailScreen> {
       builder: (_) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (r?.subject != null) Text(_cap(r!.subject!), style: Txt.title),
-            const SizedBox(height: 10),
-            Row(children: [for (final c in item.hues) Padding(padding: const EdgeInsets.only(right: 6), child: Swatch(c, size: 22))]),
-            const SizedBox(height: 14),
-            Text(r?.why ?? 'No reason was recorded for this photo.', style: Txt.body.copyWith(color: Neutral.secondary)),
-          ]),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (r?.subject != null) Text(_cap(r!.subject!), style: Txt.title),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  for (final c in item.hues)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Swatch(c, size: 22, from: item),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(r?.why ?? 'No reason was recorded for this photo.', style: Txt.body.copyWith(color: Neutral.secondary)),
+            ],
+          ),
         ),
       ),
     );
@@ -125,37 +167,61 @@ class _DetailScreenState extends State<DetailScreen> {
 
   String _cap(String t) => t.isEmpty ? t : t[0].toUpperCase() + t.substring(1);
 
-  void _toast(String t) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(milliseconds: 1400),
-        backgroundColor: Neutral.primary,
-        content: Text(t, style: Txt.small.copyWith(color: Neutral.surface)),
-      ));
+  void _toast(String t) => ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(milliseconds: 1400),
+      backgroundColor: Neutral.primary,
+      content: Text(t, style: Txt.small.copyWith(color: Neutral.surface)),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
     final pad = MediaQuery.paddingOf(context);
     final fade = (1 - (_drag.abs() / 400)).clamp(0.0, 1.0);
     return ListenableBuilder(
-      listenable: s,
+      listenable: Listenable.merge([s, _bare]),
       builder: (context, _) {
         if (!widget.items.contains(item) || !s.items.contains(item)) return const SizedBox();
+        final bare = Curves.easeInOut.transform(_bare.value);
+        // Bars fold away so the photo grows into the whole screen.
+        Widget fold(Widget child, Alignment from) => ClipRect(
+          child: Align(
+            alignment: from,
+            heightFactor: 1 - bare,
+            child: IgnorePointer(
+              ignoring: bare > 0,
+              child: Opacity(opacity: 1 - bare, child: child),
+            ),
+          ),
+        );
         return Scaffold(
-          backgroundColor: Neutral.bg.withValues(alpha: fade),
+          backgroundColor: Color.lerp(Neutral.bg, Colors.black, bare)!.withValues(alpha: fade),
           body: Column(
             children: [
-              SizedBox(height: pad.top + 4),
-              Row(children: [
-                TextAction('Close', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
-                const Spacer(),
-                Opacity(
-                  opacity: fade,
-                  child: Text('${_index + 1} / ${widget.items.length}', style: Txt.mono),
+              fold(
+                Column(
+                  children: [
+                    SizedBox(height: pad.top + 4),
+                    Row(
+                      children: [
+                        TextAction('Close', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
+                        const Spacer(),
+                        Opacity(
+                          opacity: fade,
+                          child: Text('${_index + 1} / ${widget.items.length}', style: Txt.mono),
+                        ),
+                        const SizedBox(width: 16),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 16),
-              ]),
+                Alignment.bottomCenter,
+              ),
               Expanded(
                 child: GestureDetector(
+                  onTap: _toggleBare,
                   onVerticalDragUpdate: (d) => setState(() => _drag += d.delta.dy),
                   onVerticalDragEnd: (d) {
                     if (_drag > 120 || d.velocity.pixelsPerSecond.dy > 800) {
@@ -190,15 +256,16 @@ class _DetailScreenState extends State<DetailScreen> {
                             child: Center(
                               child: AspectRatio(
                                 aspectRatio: it.width / it.height,
-                                child: Stack(fit: StackFit.expand, children: [
-                                  Hero(tag: 'photo-${it.key}', child: DevelopedImage(it, size: 1600, fit: BoxFit.contain, alignment: Alignment.center)),
-                                  if (i == _index)
-                                    AnimatedOpacity(
-                                      opacity: _showOriginal ? 1 : 0,
-                                      duration: const Duration(milliseconds: 160),
-                                      child: _Original(it),
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    Hero(
+                                      tag: 'photo-${it.key}',
+                                      child: DevelopedImage(it, size: 1600, fit: BoxFit.contain, alignment: Alignment.center),
                                     ),
-                                ]),
+                                    if (i == _index) AnimatedOpacity(opacity: _showOriginal ? 1 : 0, duration: const Duration(milliseconds: 160), child: _Original(it)),
+                                  ],
+                                ),
                               ),
                             ),
                           );
@@ -208,42 +275,61 @@ class _DetailScreenState extends State<DetailScreen> {
                   ),
                 ),
               ),
-              Opacity(
-                opacity: fade,
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(20, 14, 20, pad.bottom + 8),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      child: Row(
-                        key: ValueKey('${item.key}${_hint}${_showOriginal}'),
-                        children: _hint
-                            ? [Text('Press and hold to see the original', style: Txt.mono.copyWith(color: Neutral.primary))]
-                            : _showOriginal
+              fold(
+                Opacity(
+                  opacity: fade,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(20, 14, 20, pad.bottom + 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          child: Row(
+                            key: ValueKey('${item.key}$_hint$_showOriginal'),
+                            children: _hint
+                                ? [Text('Press and hold to see the original', style: Txt.mono.copyWith(color: Neutral.primary))]
+                                : _showOriginal
                                 ? [Text('Original', style: Txt.mono.copyWith(color: Neutral.primary))]
                                 : [
                                     for (final c in item.hues)
                                       Padding(
                                         padding: const EdgeInsets.only(right: 8),
-                                        child: Swatch(c, size: 24, onTap: () => _similar(c)),
+                                        child: Swatch(c, size: 24, from: item, onTap: () => _similar(c)),
                                       ),
                                     const SizedBox(width: 6),
-                                    Expanded(child: Text(metaLine(item), style: Txt.mono, overflow: TextOverflow.ellipsis)),
+                                    Expanded(
+                                      child: Text(metaLine(item), style: Txt.mono, overflow: TextOverflow.ellipsis),
+                                    ),
                                   ],
-                      ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            TextAction('Edit', onTap: () => Navigator.of(context).push(EditRoute(item))),
+                            const Spacer(),
+                            IconAction(
+                              Icons.favorite_border_rounded,
+                              activeIcon: Icons.favorite_rounded,
+                              active: item.favorite,
+                              label: 'Favorite',
+                              onTap: () {
+                                Haptics.light();
+                                s.toggleFavorite(item);
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            IconAction(Icons.ios_share_rounded, label: 'Share', onTap: _share),
+                            const SizedBox(width: 8),
+                            IconAction(Icons.more_horiz_rounded, label: 'More', onTap: _more),
+                          ],
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 10),
-                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                      TextAction('Edit', onTap: () => Navigator.of(context).push(EditRoute(item))),
-                      TextAction(item.favorite ? 'Favorited' : 'Favorite', onTap: () {
-                        Haptics.light();
-                        s.toggleFavorite(item);
-                      }),
-                      TextAction('Share', onTap: _share),
-                      TextAction('More', onTap: _more),
-                    ]),
-                  ]),
+                  ),
                 ),
+                Alignment.topCenter,
               ),
             ],
           ),

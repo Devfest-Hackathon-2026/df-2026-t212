@@ -106,7 +106,17 @@ class Area {
 
 /// A non-destructive edit. The original photo is never rewritten.
 class Recipe {
-  Recipe({List<KeptColor>? colors, this.area, this.contrast = 0.1, this.subject, this.why, this.focus})
+  Recipe({
+    List<KeptColor>? colors,
+    this.area,
+    this.contrast = 0.1,
+    this.ambience = defaultAmbience,
+    this.vignette = 0,
+    this.vignetteRadius = defaultVignetteRadius,
+    this.subject,
+    this.why,
+    this.focus,
+  })
       : colors = colors ?? [];
 
   List<KeptColor> colors;
@@ -114,6 +124,18 @@ class Recipe {
 
   /// Tone of the black-and-white part.
   double contrast;
+
+  /// How much of the light's color the black-and-white part keeps, 0-1.
+  /// 0 is pure grey; higher keeps the warmth of a sunset or the blue of
+  /// dusk as a faint tint, so the mono part still feels like the place.
+  double ambience;
+  static const defaultAmbience = 0.4;
+
+  /// Darkening toward the edges, as in Photos: strength 0-1, and the radius
+  /// where it is half way, in units of the half-diagonal (corners are 1).
+  double vignette;
+  double vignetteRadius;
+  static const defaultVignetteRadius = 0.8;
 
   /// Short description of the subject, from the agent. Used for search.
   String? subject;
@@ -130,6 +152,9 @@ class Recipe {
         colors: colors.map((c) => c.copy()).toList(),
         area: area?.copy(),
         contrast: contrast,
+        ambience: ambience,
+        vignette: vignette,
+        vignetteRadius: vignetteRadius,
         subject: subject,
         why: why,
         focus: focus == null ? null : List.of(focus!),
@@ -142,6 +167,9 @@ class Recipe {
         'colors': colors.map((c) => c.toJson()).toList(),
         if (area != null) 'area': area!.toJson(),
         'contrast': contrast,
+        'ambience': ambience,
+        if (vignette > 0) 'vignette': vignette,
+        if (vignette > 0) 'vignetteRadius': vignetteRadius,
         if (subject != null) 'subject': subject,
         if (why != null) 'why': why,
         if (focus != null) 'focus': focus,
@@ -151,6 +179,9 @@ class Recipe {
         colors: ((j['colors'] as List?) ?? []).map((c) => KeptColor.fromJson(c as Map<String, dynamic>)).toList(),
         area: j['area'] == null ? null : Area.fromJson(j['area'] as Map<String, dynamic>),
         contrast: (j['contrast'] as num?)?.toDouble() ?? 0.1,
+        ambience: (j['ambience'] as num?)?.toDouble() ?? defaultAmbience,
+        vignette: (j['vignette'] as num?)?.toDouble() ?? 0,
+        vignetteRadius: (j['vignetteRadius'] as num?)?.toDouble() ?? defaultVignetteRadius,
         subject: j['subject'] as String?,
         why: j['why'] as String?,
         focus: (j['focus'] as List?)?.cast<num>().map((e) => e.toDouble()).toList(),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -33,6 +34,7 @@ class _ImportSheetState extends State<ImportSheet> {
   final Set<String> _picked = {};
   int _page = 0;
   bool _loading = false, _end = false, _importing = false;
+  Set<String>? _shots;
 
   @override
   void initState() {
@@ -45,12 +47,17 @@ class _ImportSheetState extends State<ImportSheet> {
     _loading = true;
     final next = await PhotoSource.library(page: _page, size: _pageSize);
     if (!mounted) return;
+    final skip = Store.instance.skipScreenshots;
+    final shots = _shots ??= skip ? await PhotoSource.screenshotIds() : const <String>{};
+    if (!mounted) return;
     setState(() {
-      _assets.addAll(next);
+      _assets.addAll(skip ? next.where((a) => !shots.contains(a.id) && !PhotoSource.isScreenshot(a)) : next);
       _page++;
       _end = next.length < _pageSize;
       _loading = false;
     });
+    // A page of nothing but screenshots: keep going.
+    if (skip && !_end && _assets.length < 40) unawaited(_more());
   }
 
   Future<void> _import() async {
@@ -112,7 +119,7 @@ class _ImportSheetState extends State<ImportSheet> {
                     itemCount: _assets.length,
                     itemBuilder: (context, i) {
                       final a = _assets[i];
-                      final already = Store.instance.contains(a.id);
+                      final already = Store.instance.inLibrary(a.id);
                       final picked = _picked.contains(a.id);
                       return _Thumb(
                         key: ValueKey(a.id),

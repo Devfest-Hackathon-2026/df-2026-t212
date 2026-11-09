@@ -74,17 +74,31 @@ class _OnboardingState extends State<Onboarding> {
                 image: _samples[2],
                 text: 'Photos are resized and sent to an AI model for analysis. '
                     'Location and time stay on this device.',
-                footer: GestureDetector(
-                  onTap: _changeRange,
-                  child: Text.rich(
-                    TextSpan(children: [
-                      TextSpan(text: Store.instance.months >= 1200 ? 'All photos' : 'Last ${Store.instance.months} months'),
-                      const TextSpan(text: '  ·  '),
-                      TextSpan(text: 'Change', style: Txt.mono.copyWith(color: Neutral.primary, decoration: TextDecoration.underline)),
-                    ]),
-                    style: Txt.mono,
+                footer: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  GestureDetector(
+                    onTap: _changeRange,
+                    child: Text.rich(
+                      TextSpan(children: [
+                        TextSpan(text: Store.instance.months >= 1200 ? 'All photos' : 'Last ${Store.instance.months} months'),
+                        const TextSpan(text: '  ·  '),
+                        TextSpan(text: 'Change', style: Txt.mono.copyWith(color: Neutral.primary, decoration: TextDecoration.underline)),
+                      ]),
+                      style: Txt.mono,
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 10),
+                  _Check(
+                    label: 'Develop automatically',
+                    hint: 'Newest ${Store.firstBatch}, then new photos. Up to ${Store.dailyLimit} a day.',
+                    value: Store.instance.autoDevelop,
+                    onChanged: (v) => setState(() => Store.instance.autoDevelop = v),
+                  ),
+                  _Check(
+                    label: 'Skip screenshots',
+                    value: Store.instance.skipScreenshots,
+                    onChanged: (v) => setState(() => Store.instance.skipScreenshots = v),
+                  ),
+                ]),
                 actions: [PrimaryButton('Start', onTap: () => Store.instance.finishOnboarding())],
               ),
             ],
@@ -164,7 +178,7 @@ class RangeSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Photos to develop', style: Txt.title),
+            Text('Photos to show', style: Txt.title),
             const SizedBox(height: 6),
             Text('Newest photos come first, so a longer range does not slow down the first ones.', style: Txt.small),
             const SizedBox(height: 12),
@@ -187,5 +201,37 @@ class RangeSheet extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// A compact labelled switch for the last onboarding page.
+class _Check extends StatelessWidget {
+  const _Check({required this.label, required this.value, required this.onChanged, this.hint});
+  final String label;
+  final String? hint;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: Txt.small.copyWith(color: Neutral.primary, fontSize: 14)),
+          if (hint != null) Text(hint!, style: Txt.mono.copyWith(fontSize: 10.5)),
+        ]),
+      ),
+      Transform.scale(
+        scale: 0.8,
+        alignment: Alignment.centerRight,
+        child: Switch.adaptive(
+          value: value,
+          onChanged: (v) {
+            Haptics.tick();
+            onChanged(v);
+          },
+        ),
+      ),
+    ]);
   }
 }

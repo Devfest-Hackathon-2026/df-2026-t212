@@ -24,7 +24,6 @@ class PreviewWorker {
 
   int _id = 0;
   int _shown = -1;
-  bool _shownFull = false;
   bool _proxyBusy = false;
   (Recipe, PreviewView)? _proxyNext;
   Timer? _full;
@@ -73,9 +72,9 @@ class PreviewWorker {
       _proxyNext = null;
       if (next != null) _ask(next.$1, next.$2, proxy: true);
     }
-    // Drop anything older than what is on screen, and a proxy that would
-    // replace a sharper image of the same moment.
-    if (id < _shown || (proxy && _shownFull && id < _id)) return;
+    // Drop anything older than what is on screen. A proxy shows even while
+    // the next one is queued: that is what makes a drag feel live.
+    if (id < _shown) return;
     final bytes = data.materialize().asUint8List();
     final c = Completer<ui.Image>();
     ui.decodeImageFromPixels(bytes, w, h, ui.PixelFormat.rgba8888, c.complete);
@@ -85,7 +84,6 @@ class PreviewWorker {
       return;
     }
     _shown = id;
-    _shownFull = !proxy;
     if (!_out.isClosed) _out.add(im);
   }
 

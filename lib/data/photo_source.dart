@@ -37,8 +37,8 @@ class PhotoSource {
 
   static Future<void> presentLimitedPicker() => PhotoManager.presentLimited();
 
-  /// Photos taken in the last [months], newest first. Screenshots are skipped.
-  static Future<List<PhotoRef>> recent({int months = 12}) async {
+  /// Photos taken in the last [months], newest first.
+  static Future<List<PhotoRef>> recent({int months = 12, bool skipScreenshots = true}) async {
     final since = DateTime.now().subtract(Duration(days: 30 * months));
     final filter = FilterOptionGroup(
       imageOption: const FilterOption(sizeConstraint: SizeConstraint(minWidth: 400, minHeight: 400)),
@@ -50,11 +50,12 @@ class PhotoSource {
     final all = paths.first;
     final count = await all.assetCountAsync;
     final out = <PhotoRef>[];
+    final shots = skipScreenshots ? await screenshotIds() : const <String>{};
     const page = 200;
     for (var p = 0; p * page < count; p++) {
       final assets = await all.getAssetListPaged(page: p, size: page);
       for (final a in assets) {
-        if (_looksLikeScreenshot(a)) continue;
+        if (skipScreenshots && (shots.contains(a.id) || isScreenshot(a))) continue;
         out.add(await refOf(a));
       }
     }
@@ -93,7 +94,37 @@ class PhotoSource {
   static Future<Uint8List?> thumb(AssetEntity a, {int side = 240}) =>
       a.thumbnailDataWithSize(ThumbnailSize.square(side));
 
-  static bool _looksLikeScreenshot(AssetEntity a) {
+  /// Everything in the system Screenshots album. The asset's own subtype
+  /// flag and title are often empty on iOS, so the album is the reliable test.
+  static Future<Set<String>> screenshotIds() async {
+    try {
+      final paths = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        hasAll: false,
+        pathFilterOption: const PMPathFilter(
+          darwin: PMDarwinPathFilter(
+            type: [PMDarwinAssetCollectionType.smartAlbum],
+            subType: [PMDarwinAssetCollectionSubtype.smartAlbumScreenshots],
+          ),
+        ),
+      );
+      final ids = <String>{};
+      // Only the Screenshots album itself, in case the filter is ignored.
+      for (final p in paths.where((p) => p.albumTypeEx?.darwin?.subtype == PMDarwinAssetCollectionSubtype.smartAlbumScreenshots)) {
+        final n = await p.assetCountAsync;
+        for (var i = 0; i < n; i += 500) {
+          for (final a in await p.getAssetListRange(start: i, end: i + 500 > n ? n : i + 500)) {
+            ids.add(a.id);
+          }
+        }
+      }
+      return ids;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static bool isScreenshot(AssetEntity a) {
     final t = a.title?.toLowerCase() ?? '';
     return t.startsWith('screenshot') || t.contains('screen shot') || (a.subtype & 4) != 0;
   }

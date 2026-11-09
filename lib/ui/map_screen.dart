@@ -1,10 +1,26 @@
-import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart' hide Path;
+import 'package:maplibre/maplibre.dart'
+    show
+        Geographic,
+        LngLatBounds,
+        MapController,
+        MapCamera,
+        MapEvent,
+        MapEventClick,
+        MapEventMapCreated,
+        MapEventStyleLoaded,
+        MapEventStartMoveCamera,
+        CameraChangeReason,
+        MapEventMoveCamera,
+        MapGestures,
+        MapLibreMap,
+        MapOptions,
+        Marker,
+        WidgetLayer;
 
 import '../core/recipe.dart';
 import '../data/places.dart';
@@ -15,7 +31,8 @@ import 'theme.dart';
 import 'widgets/common.dart';
 
 /// Colors by place and time. A light, achromatic canvas so only the user's
-/// colors carry color.
+/// colors carry color: OpenFreeMap vector tiles drawn by MapLibre in our own
+/// pale style (assets/map/style.json), with streets kept and names quiet.
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
 
@@ -23,33 +40,43 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMixin {
+class _MapScreenState extends State<MapScreen>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final s = Store.instance;
-  final _map = MapController();
+  MapController? _map;
   double _zoom = 12;
   bool _fitted = false;
+  bool _styled = false;
+  bool _wandered = false; // the person has moved the map themself
+  int _framedCount = 0;
 
   // Time window, normalized over [_t0, _t1].
   double _w0 = 0, _w1 = 1;
   bool _playing = false;
+  bool _presenting = false;
+  double _speed = 1;
+  int _playbackLayout = 0;
+  (double, double)? _beforePlayback;
+  DateTime _t0 = DateTime.now();
+  DateTime _t1 = DateTime.now().add(const Duration(hours: 1));
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed && _playing) _stop();
+  }
+
   late final Ticker _ticker = createTicker(_tick);
   Duration _last = Duration.zero;
   _Cluster? _card;
 
-  List<PhotoItem> get _located => s.visible.where((e) => e.hasLocation && e.state == Develop.done).toList();
-
-  DateTime get _t0 {
-    final l = _located;
-    if (l.isEmpty) return DateTime.now().subtract(const Duration(days: 365));
-    return l.map((e) => e.taken).reduce((a, b) => a.isBefore(b) ? a : b);
-  }
-
-  DateTime get _t1 {
-    final l = _located;
-    if (l.isEmpty) return DateTime.now();
-    final m = l.map((e) => e.taken).reduce((a, b) => a.isAfter(b) ? a : b);
-    return m.add(const Duration(hours: 1));
-  }
+  List<PhotoItem> get _located =>
+      s.visible.where((e) => e.hasLocation && e.state == Develop.done).toList();
 
   double _norm(DateTime t) {
     final a = _t0.millisecondsSinceEpoch, b = _t1.millisecondsSinceEpoch;
@@ -63,6 +90,7 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
     super.dispose();
   }
@@ -73,12 +101,17 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
       _stop();
       return;
     }
-    final len = (_w1 - _w0).clamp(0.08, 0.35);
+    if (!_presenting) _beforePlayback = (_w0, _w1);
+    final len = (_w1 - _w0) > 0.95 ? 0.24 : (_w1 - _w0);
     setState(() {
       _playing = true;
+      _presenting = true;
       _card = null;
-      _w0 = 0;
-      _w1 = len;
+      if (_w1 >= 1 - 1e-6) {
+        _w0 = 0;
+        _playbackLayout++;
+      }
+      _w1 = (_w0 + len).clamp(0.0, 1.0);
     });
     Shell.barHidden.value = true;
     _last = Duration.zero;
@@ -87,39 +120,164 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
 
   void _stop() {
     _ticker.stop();
-    Shell.barHidden.value = false;
     setState(() => _playing = false);
+  }
+
+  void _closePlayback() {
+    _ticker.stop();
+    setState(() {
+      _playing = false;
+      _presenting = false;
+      if (_beforePlayback case final range?) {
+        _w0 = range.$1;
+        _w1 = range.$2;
+      }
+      _beforePlayback = null;
+    });
+    Shell.barHidden.value = false;
   }
 
   void _tick(Duration now) {
     final dt = (now - _last).inMicroseconds / 1e6;
     _last = now;
     if (dt <= 0 || dt > 0.2) return;
-    const seconds = 14.0; // whole range
-    final step = dt / seconds;
+    final len = _w1 - _w0;
+    // A complete journey takes 24 seconds at 1×, independent of window width.
     setState(() {
-      final len = _w1 - _w0;
-      _w0 += step;
+      _w0 = (_w0 + dt * _speed * (1 - len) / 24).clamp(0.0, 1 - len);
       _w1 = _w0 + len;
-      if (_w1 >= 1) {
-        _w1 = 1;
-        _w0 = 1 - len;
-        _stop();
+      if (_w1 >= 1 - 1e-6) {
+        _ticker.stop();
+        _playing = false;
       }
     });
   }
 
+  /// The part of the screen the controls leave free for the map.
+  EdgeInsets _clear() {
+    final pad = MediaQuery.paddingOf(context);
+    return EdgeInsets.fromLTRB(
+      44,
+      pad.top + 84,
+      44,
+      pad.bottom + (_presenting ? 140 : 196),
+    );
+  }
+
+  /// Frame [items] inside the free area. A single place gets a street-level view.
+  void _frame(
+    List<PhotoItem> items, {
+    Duration duration = const Duration(milliseconds: 650),
+  }) {
+    final map = _map;
+    if (map == null || items.isEmpty) return;
+    final pts = items.map((e) => Geographic(lon: e.lng!, lat: e.lat!)).toList();
+    final b = LngLatBounds.fromPoints(pts);
+    final clear = _clear();
+    if ((b.longitudeEast - b.longitudeWest).abs() < 1e-4 &&
+        (b.latitudeNorth - b.latitudeSouth).abs() < 1e-4) {
+      // Center in the free area, not the whole screen: at the target zoom,
+      // shift the camera by half the difference between the margins.
+      const zoom = 15.5;
+      final p = pts.first;
+      final perPoint = 360 / (512 * math.pow(2, zoom));
+      final dx = (clear.left - clear.right) / 2,
+          dy = (clear.top - clear.bottom) / 2;
+      final center = Geographic(
+        lon: p.lon - dx * perPoint,
+        lat: p.lat + dy * perPoint * math.cos(p.lat * math.pi / 180),
+      );
+      map.animateCamera(center: center, zoom: zoom, nativeDuration: duration);
+      return;
+    }
+    map.fitBounds(bounds: b, nativeDuration: duration, padding: clear);
+  }
+
   void _fit(List<PhotoItem> located) {
-    if (_fitted || located.isEmpty) return;
+    // Before the style is in, or while the tab is hidden (the native view has
+    // no size then), the map ignores camera moves.
+    if (located.isEmpty || _map == null || !_styled || !TickerMode.valuesOf(context).enabled) return;
+    // Photos arrive in batches; keep framing all of them until the person
+    // takes the map into their own hands.
+    if (_fitted && (_wandered || located.length == _framedCount)) return;
+    final first = !_fitted;
     _fitted = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final pts = located.map((e) => LatLng(e.lat!, e.lng!)).toList();
-      if (pts.length == 1) {
-        _map.move(pts.first, 14);
-      } else {
-        _map.fitCamera(CameraFit.bounds(bounds: LatLngBounds.fromPoints(pts), padding: const EdgeInsets.fromLTRB(48, 120, 48, 220)));
-      }
+    _framedCount = located.length;
+    // The native view takes a moment to get its size after the tab appears.
+    Future.delayed(Duration(milliseconds: first ? 180 : 0), () {
+      if (mounted) _frame(located, duration: first ? Duration.zero : const Duration(milliseconds: 500));
     });
+  }
+
+  /// Open a card, moving the map just enough that the card and its point are in view.
+  void _open(_Cluster c) {
+    setState(() => _card = c);
+    final map = _map;
+    if (map == null) return;
+    final size = MediaQuery.sizeOf(context);
+    final clear = _clear();
+    final p = map.toScreenLocation(c.center);
+    // The card stands about 240 points above its point and is 180 wide.
+    final room = Rect.fromLTRB(
+      clear.left + 60,
+      clear.top + 240,
+      size.width - clear.right - 60,
+      size.height - clear.bottom,
+    );
+    if (room.contains(p)) return;
+    final want = Offset(
+      p.dx.clamp(room.left, room.right),
+      p.dy.clamp(room.top, room.bottom),
+    );
+    final center = map.toLngLat(size.center(Offset.zero) + (p - want));
+    map.animateCamera(
+      center: center,
+      nativeDuration: const Duration(milliseconds: 420),
+    );
+  }
+
+  DateTime _followedAt = DateTime(0);
+
+  /// While playing, keep the photos of the moment on screen.
+  void _follow(List<PhotoItem> inside) {
+    final map = _map;
+    if (map == null || inside.isEmpty) return;
+    final now = DateTime.now();
+    if (now.difference(_followedAt) < const Duration(milliseconds: 1400)) {
+      return;
+    }
+    final size = MediaQuery.sizeOf(context);
+    final clear = _clear();
+    final room = Rect.fromLTRB(
+      clear.left,
+      clear.top,
+      size.width - clear.right,
+      size.height - clear.bottom,
+    );
+    final pts = map.toScreenLocations([
+      for (final it in inside) Geographic(lon: it.lng!, lat: it.lat!),
+    ]);
+    if (pts.every(room.contains)) return;
+    _followedAt = now;
+    _frame(inside, duration: const Duration(milliseconds: 1100));
+  }
+
+  void _onEvent(MapEvent e) {
+    switch (e) {
+      case MapEventMapCreated(:final mapController):
+        setState(() => _map = mapController);
+      case MapEventStartMoveCamera(reason: CameraChangeReason.apiGesture):
+        _wandered = true;
+      case MapEventStyleLoaded():
+        setState(() => _styled = true);
+      case MapEventMoveCamera(:final camera):
+        if ((camera.zoom - _zoom).abs() > 0.25) {
+          setState(() => _zoom = camera.zoom);
+        }
+      case MapEventClick():
+        if (_card != null) setState(() => _card = null);
+      default:
+    }
   }
 
   /// Screen-grid clustering. Colors are never blended.
@@ -136,185 +294,359 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
   @override
   Widget build(BuildContext context) {
     final pad = MediaQuery.paddingOf(context);
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return ListenableBuilder(
       listenable: s,
       builder: (context, _) {
         final located = _located;
+        if (located.isNotEmpty) {
+          _t0 = located
+              .map((e) => e.taken)
+              .reduce((a, b) => a.isBefore(b) ? a : b);
+          _t1 = located
+              .map((e) => e.taken)
+              .reduce((a, b) => a.isAfter(b) ? a : b)
+              .add(const Duration(hours: 1));
+        }
         _fit(located);
         final inside = located.where(_inWindow).toList();
         final outside = located.where((e) => !_inWindow(e)).toList();
         final clusters = _clusters(inside);
-        return Stack(children: [
-          FlutterMap(
-            mapController: _map,
-            options: MapOptions(
-              initialCenter: const LatLng(35.681, 139.767),
-              initialZoom: 12,
-              minZoom: 3,
-              maxZoom: 16,
-              backgroundColor: Neutral.bg,
-              interactionOptions: const InteractionOptions(flags: InteractiveFlag.all & ~InteractiveFlag.rotate),
-              onTap: (_, _) => setState(() => _card = null),
-              onPositionChanged: (cam, _) {
-                if ((cam.zoom - _zoom).abs() > 0.25) setState(() => _zoom = cam.zoom);
-              },
-            ),
-            children: [
-              TileLayer(
-                // Esri's light grey canvas: no labels to fight the photos, no key needed.
-                urlTemplate:
-                    'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-                maxNativeZoom: 16,
-                userAgentPackageName: 'io.github.pdhaku0.afterhue',
-                tileBuilder: (context, tile, _) => ColorFiltered(colorFilter: _paper, child: tile),
+        if (_playing) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => _follow(inside));
+        }
+        return Stack(
+          children: [
+            MapLibreMap(
+              options: MapOptions(
+                initStyle: 'assets/map/style.json',
+                initCenter: Geographic(lon: 139.767, lat: 35.681),
+                initZoom: 12,
+                minZoom: 3,
+                maxZoom: 18,
+                gestures: const MapGestures(
+                  rotate: false,
+                  pan: true,
+                  zoom: true,
+                  pitch: false,
+                ),
               ),
-              // Place names, set by hand in spaced capitals.
-              MarkerLayer(markers: [
-                for (final p in places)
-                  if (_zoom >= p.minZoom && _zoom < p.maxZoom)
-                    Marker(
-                      key: ValueKey('place-${p.name}-${p.size}'),
-                      point: LatLng(p.lat, p.lng),
-                      width: 220,
-                      height: 24,
-                      child: IgnorePointer(child: Center(child: _PlaceLabel(p))),
-                    ),
-              ]),
-              MarkerLayer(markers: [
-                for (final it in outside)
-                  Marker(
-                    point: LatLng(it.lat!, it.lng!),
-                    width: 6,
-                    height: 6,
-                    child: Container(decoration: const BoxDecoration(color: Color(0x33161616), shape: BoxShape.circle)),
+              onEvent: _onEvent,
+              children: [
+                // Photos outside the time window: faint dots, not tappable.
+                WidgetLayer(
+                  markers: [
+                    for (final it in outside)
+                      Marker(
+                        point: Geographic(lon: it.lng!, lat: it.lat!),
+                        size: const Size(6, 6),
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            color: Color(0x33161616),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                WidgetLayer(
+                  allowInteraction: true,
+                  markers: [
+                    for (final c in clusters)
+                      Marker(
+                        point: c.center,
+                        size: Size.square(c.items.length == 1 ? 22 : 38),
+                        child: GestureDetector(
+                          key: ValueKey(c.key),
+                          onTap: () {
+                            Haptics.tick();
+                            if (c.items.length > 1 && _zoom < 17 && c.spread) {
+                              // Open the group up so every photo in it gets its own place.
+                              setState(() => _card = null);
+                              _frame(
+                                c.items,
+                                duration: const Duration(milliseconds: 520),
+                              );
+                            } else {
+                              _open(c);
+                            }
+                          },
+                          child: _Rise(
+                            child: c.items.length == 1
+                                ? SplitSwatch(c.items.first.hues, size: 20)
+                                : _Stack(c),
+                          ),
+                        ),
+                      ),
+
+                    if (_card != null && !_presenting)
+                      Marker(
+                        point: _card!.center,
+                        size: const Size(200, 220),
+                        alignment: Alignment.bottomCenter,
+                        child: Align(
+                          alignment: Alignment.bottomCenter,
+                          child: Padding(
+                            padding: const EdgeInsets.only(bottom: 22),
+                            child: _Card(
+                              _card!.items.first,
+                              all: located,
+                              count: _card!.items.length,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                if (_presenting)
+                  _PlaybackPhotos(
+                    key: ValueKey(_playbackLayout),
+                    items: inside,
+                    norm: _norm,
+                    w0: _w0,
+                    w1: _w1,
                   ),
-                for (final c in clusters)
-                  Marker(
-                    key: ValueKey(c.key),
-                    point: c.center,
-                    width: c.items.length == 1 ? 22 : 36,
-                    height: c.items.length == 1 ? 22 : 36,
-                    child: GestureDetector(
-                      onTap: () {
-                        Haptics.tick();
-                        if (c.items.length > 1 && _zoom < 15) {
-                          _map.move(c.center, math.min(18, _zoom + 2));
-                        } else {
-                          setState(() => _card = c);
-                        }
-                      },
-                      child: _Rise(child: c.items.length == 1 ? SplitSwatch(c.items.first.hues, size: 20) : _Ring(c)),
-                    ),
-                  ),
-              ]),
-              if (_playing) MarkerLayer(markers: _floating(inside)),
-              if (_card != null && !_playing)
-                MarkerLayer(markers: [
-                  Marker(
-                    point: _card!.center,
-                    width: 200,
-                    height: 220,
-                    alignment: Alignment.topCenter,
-                    child: Align(alignment: Alignment.bottomCenter, child: Padding(padding: const EdgeInsets.only(bottom: 22), child: _card!.items.length == 1 ? _Card(_card!.items.first, all: located) : _Card(_card!.items.first, all: located, count: _card!.items.length))),
-                  ),
-                ]),
-            ],
-          ),
-          // Title, quiet.
-          Positioned(
-            top: pad.top + 10,
-            left: 20,
-            child: AnimatedOpacity(
-              opacity: _playing ? 0 : 1,
-              duration: const Duration(milliseconds: 300),
-              child: Text('Map', style: Txt.display),
+              ],
             ),
-          ),
-          Positioned(
-            top: pad.top + 26,
-            right: 20,
-            child: Text('Map data © Esri', style: Txt.mono.copyWith(fontSize: 9, color: Neutral.tertiary)),
-          ),
-          if (located.isEmpty)
-            Center(
-              child: Glass(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                child: Text(
-                  s.visible.isEmpty ? 'No developed photos yet.' : 'These photos have no location.',
-                  style: Txt.small.copyWith(color: Neutral.primary),
+            // Title, quiet.
+            Positioned(
+              top: pad.top + 10,
+              left: 20,
+              child: AnimatedOpacity(
+                opacity: _presenting ? 0 : 1,
+                duration: const Duration(milliseconds: 300),
+                child: Text('Map', style: Txt.display),
+              ),
+            ),
+            if (_presenting)
+              Positioned(
+                top: pad.top + 8,
+                left: 16,
+                child: Glass(
+                  radius: 24,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: TextAction('Done', onTap: _closePlayback),
+                ),
+              ),
+            // Show everything again after wandering off.
+            Positioned(
+              top: pad.top + 14,
+              right: 16,
+              child: AnimatedOpacity(
+                opacity: _presenting || located.isEmpty ? 0 : 1,
+                duration: const Duration(milliseconds: 300),
+                child: IgnorePointer(
+                  ignoring: _presenting || located.isEmpty,
+                  child: Glass(
+                    radius: 22,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        Haptics.light();
+                        setState(() => _card = null);
+                        _frame(located);
+                      },
+                      child: SizedBox.square(
+                        dimension: 44,
+                        child: Center(
+                          child: CustomPaint(
+                            size: const Size.square(18),
+                            painter: _FramePainter(),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: pad.bottom + (_playing ? 16 : 82),
-            child: AnimatedSlide(
-              duration: const Duration(milliseconds: 300),
-              offset: Offset.zero,
-              child: _Timeline(
-                t0: _t0,
-                t1: _t1,
-                w0: _w0,
-                w1: _w1,
-                playing: _playing,
-                items: located,
-                norm: _norm,
-                onWindow: (a, b) => setState(() {
-                  _w0 = a;
-                  _w1 = b;
-                }),
-                onPlay: _play,
+            if (located.isEmpty)
+              Center(
+                child: Glass(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 14,
+                  ),
+                  child: Text(
+                    s.visible.isEmpty
+                        ? 'No developed photos yet.'
+                        : 'These photos have no location.',
+                    style: Txt.small.copyWith(color: Neutral.primary),
+                  ),
+                ),
+              ),
+            AnimatedPositioned(
+              duration: Duration(milliseconds: reduceMotion ? 0 : 360),
+              curve: Curves.easeOutCubic,
+              left: 16,
+              right: 16,
+              bottom: pad.bottom + (_presenting ? 16 : 82),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Credit for the map data, kept out of the way of names and photos.
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10, bottom: 6),
+                    child: Text(
+                      '© OpenMapTiles  © OpenStreetMap',
+                      style: Txt.mono.copyWith(
+                        fontSize: 8.5,
+                        color: Neutral.tertiary,
+                      ),
+                    ),
+                  ),
+                  _Timeline(
+                    t0: _t0,
+                    t1: _t1,
+                    w0: _w0,
+                    w1: _w1,
+                    playing: _playing,
+                    presenting: _presenting,
+                    speed: _speed,
+                    onSpeed: () => setState(
+                      () =>
+                          _speed = _speed == 0.5 ? 1 : (_speed == 1 ? 2 : 0.5),
+                    ),
+                    onScrubStart: () {
+                      if (_playing) _stop();
+                      if (_presenting) setState(() => _playbackLayout++);
+                    },
+                    items: located,
+                    norm: _norm,
+                    onWindow: (a, b) => setState(() {
+                      _w0 = a;
+                      _w1 = b;
+                    }),
+                    onPlay: _play,
+                  ),
+                ],
               ),
             ),
-          ),
-        ]);
+          ],
+        );
       },
     );
   }
+}
 
-  /// Favorite photos float as glass pins while their time is in the window.
-  /// No queue: a photo shows only while it is in time.
-  List<Marker> _floating(List<PhotoItem> inside) {
-    var picks = inside.where((e) => e.favorite).toList();
-    if (picks.length < 4) {
-      final extra = inside.where((e) => !e.favorite).toList()..sort((a, b) => b.taken.compareTo(a.taken));
-      picks = [...picks, ...extra];
-    }
-    final cell = 120 * 360 / (256 * math.pow(2, _zoom));
-    final used = <String>{};
-    final out = <Marker>[];
-    for (final it in picks) {
-      final k = '${(it.lng! / cell).floor()}:${(it.lat! / cell).floor()}';
-      if (!used.add(k)) continue;
-      out.add(Marker(
-        key: ValueKey('pin-${it.key}'),
-        point: LatLng(it.lat!, it.lng!),
-        width: 132,
-        height: 156,
-        alignment: Alignment.topCenter,
-        child: _Pin(it),
-      ));
-      if (out.length >= 4) break;
-    }
-    return out;
+/// Project into screen space so cards cannot overlap each other or the controls.
+class _PlaybackPhotos extends StatefulWidget {
+  const _PlaybackPhotos({
+    super.key,
+    required this.items,
+    required this.norm,
+    required this.w0,
+    required this.w1,
+  });
+  final List<PhotoItem> items;
+  final double Function(DateTime) norm;
+  final double w0, w1;
+
+  @override
+  State<_PlaybackPhotos> createState() => _PlaybackPhotosState();
+}
+
+class _PlaybackPhotosState extends State<_PlaybackPhotos> {
+  Set<String> _visibleKeys = {};
+
+  @override
+  Widget build(BuildContext context) {
+    MapCamera.of(context); // Reproject when the map is panned or zoomed.
+    final controller = MapController.of(context);
+    final pad = MediaQuery.paddingOf(context);
+    return LayoutBuilder(
+      builder: (context, box) {
+        final picks = [...widget.items]
+          ..sort((a, b) {
+            // Keep cards already on screen until they leave the time window.
+            final aVisible = _visibleKeys.contains(a.key),
+                bVisible = _visibleKeys.contains(b.key);
+            if (aVisible != bVisible) return aVisible ? -1 : 1;
+            if (a.favorite != b.favorite) return a.favorite ? -1 : 1;
+            final time = a.taken.compareTo(b.taken);
+            return time != 0 ? time : a.key.compareTo(b.key);
+          });
+        final offsets = controller.toScreenLocations(
+          picks.map((it) => Geographic(lon: it.lng!, lat: it.lat!)).toList(),
+        );
+        final safe = Rect.fromLTRB(
+          12,
+          pad.top + 58,
+          box.maxWidth - 12,
+          box.maxHeight - pad.bottom - 150,
+        );
+        final used = <Rect>[];
+        final children = <Widget>[];
+        final visibleKeys = <String>{};
+        final w0 = widget.w0, w1 = widget.w1;
+        for (var i = 0; i < picks.length; i++) {
+          final point = offsets[i];
+          if (!safe.contains(point)) continue;
+          final left = (point.dx - 66)
+              .clamp(safe.left, math.max(safe.left, safe.right - 132))
+              .toDouble();
+          final below = point.dy - 172 < safe.top;
+          final rect = Rect.fromLTWH(
+            left,
+            below ? point.dy : point.dy - 172,
+            132,
+            172,
+          );
+          if (rect.bottom > safe.bottom) continue;
+          if (used.any((r) => r.inflate(10).overlaps(rect))) continue;
+          final it = picks[i];
+          final n = widget.norm(it.taken);
+          final fade = math.min(0.025, (w1 - w0) * 0.12);
+          final entering = w0 <= 1e-6 ? 1.0 : ((n - w0) / fade).clamp(0.0, 1.0);
+          final leaving = w1 >= 1 - 1e-6
+              ? 1.0
+              : ((w1 - n) / fade).clamp(0.0, 1.0);
+          used.add(rect);
+          visibleKeys.add(it.key);
+          children.add(
+            Positioned(
+              key: ValueKey(it.key),
+              left: rect.left,
+              top: rect.top,
+              width: rect.width,
+              height: rect.height,
+              child: IgnorePointer(
+                child: _Pin(
+                  it,
+                  visibility: Curves.easeInOut.transform(
+                    math.min(entering, leaving),
+                  ),
+                  below: below,
+                  anchor: ((point.dx - left) / 132 * 2 - 1).clamp(-0.85, 0.85),
+                ),
+              ),
+            ),
+          );
+          if (children.length == 4) break;
+        }
+        _visibleKeys = visibleKeys;
+        return Stack(clipBehavior: Clip.none, children: children);
+      },
+    );
   }
-
-  static const _paper = ColorFilter.matrix(<double>[
-    0.2126 * 0.92, 0.7152 * 0.92, 0.0722 * 0.92, 0, 14,
-    0.2126 * 0.92, 0.7152 * 0.92, 0.0722 * 0.92, 0, 14,
-    0.2126 * 0.92, 0.7152 * 0.92, 0.0722 * 0.92, 0, 14,
-    0, 0, 0, 1, 0,
-  ]);
 }
 
 class _Cluster {
   final List<PhotoItem> items = [];
   String get key => items.map((e) => e.key).join('|').hashCode.toString();
-  LatLng get center {
+
+  /// Whether the photos were taken in more than one spot (about 15 m apart).
+  bool get spread {
+    final lats = items.map((e) => e.lat!), lngs = items.map((e) => e.lng!);
+    return lats.reduce(math.max) - lats.reduce(math.min) > 1.4e-4 ||
+        lngs.reduce(math.max) - lngs.reduce(math.min) > 1.4e-4;
+  }
+
+  Geographic get center {
     final lat = items.map((e) => e.lat!).reduce((a, b) => a + b) / items.length;
     final lng = items.map((e) => e.lng!).reduce((a, b) => a + b) / items.length;
-    return LatLng(lat, lng);
+    return Geographic(lon: lng, lat: lat);
   }
 
   /// Distinct colors, never mixed.
@@ -322,7 +654,11 @@ class _Cluster {
     final out = <KeptColor>[];
     for (final it in items) {
       for (final c in it.hues) {
-        if (out.every((o) => (o.hue - c.hue).abs() > 12 || (o.l - c.l).abs() > 0.15)) out.add(c);
+        if (out.every(
+          (o) => (o.hue - c.hue).abs() > 12 || (o.l - c.l).abs() > 0.15,
+        )) {
+          out.add(c);
+        }
       }
     }
     out.sort((a, b) => a.hue.compareTo(b.hue));
@@ -330,7 +666,7 @@ class _Cluster {
   }
 }
 
-/// Rises from a sunken position on a spring when it appears.
+/// A marker settles into place without an overshoot.
 class _Rise extends StatelessWidget {
   const _Rise({required this.child});
   final Widget child;
@@ -339,60 +675,120 @@ class _Rise extends StatelessWidget {
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 520),
-      curve: Curves.easeOutBack,
-      builder: (_, t, c) => Transform.translate(
-        offset: Offset(0, (1 - t) * 6),
-        child: Transform.scale(scale: 0.4 + 0.6 * t, child: Opacity(opacity: t.clamp(0, 1), child: c)),
+      duration: Duration(
+        milliseconds: MediaQuery.disableAnimationsOf(context) ? 120 : 360,
+      ),
+      curve: Curves.easeOutCubic,
+      builder: (_, t, c) => Opacity(
+        opacity: t,
+        child: Transform.scale(
+          scale: MediaQuery.disableAnimationsOf(context) ? 1 : 0.82 + 0.18 * t,
+          child: c,
+        ),
       ),
       child: child,
     );
   }
 }
 
-class _Ring extends StatelessWidget {
-  const _Ring(this.c);
+/// Several photos in one spot: the same swatch as a single photo, with a
+/// second card peeking out behind it and the count on its corner.
+class _Stack extends StatelessWidget {
+  const _Stack(this.c);
   final _Cluster c;
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _RingPainter(c.colors.map(colorOf).toList()),
-      child: Center(child: Text('${c.items.length}', style: Txt.mono.copyWith(color: Neutral.primary, fontSize: 10, fontWeight: FontWeight.w600))),
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        Transform.translate(
+          offset: const Offset(-3.5, -3),
+          child: Transform.rotate(
+            angle: -0.16,
+            child: Container(
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(
+                color: Neutral.surface,
+                borderRadius: BorderRadius.circular(26 * 0.32),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x1F000000),
+                    blurRadius: 5,
+                    offset: Offset(0, 1),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        SplitSwatch(c.colors.take(5).toList(), size: 26, border: 2.2),
+        Positioned(
+          right: -2,
+          top: -3,
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 17),
+            height: 17,
+            padding: const EdgeInsets.symmetric(horizontal: 4.5),
+            decoration: BoxDecoration(
+              color: Neutral.primary,
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: Neutral.surface, width: 1.4),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '${c.items.length}',
+              style: Txt.mono.copyWith(
+                color: Neutral.surface,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                height: 1,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _RingPainter extends CustomPainter {
-  _RingPainter(this.colors);
-  final List<Color> colors;
-
+/// Four corners of a frame: "show everything".
+class _FramePainter extends CustomPainter {
   @override
-  void paint(Canvas canvas, Size size) {
-    final c = size.center(Offset.zero);
-    final r = size.width / 2 - 1;
-    canvas.drawCircle(c + const Offset(0, 1.5), r, Paint()..color = const Color(0x22000000)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3));
-    canvas.drawCircle(c, r, Paint()..color = Neutral.surface);
-    final rect = Rect.fromCircle(center: c, radius: r - 4);
-    final sweep = 2 * math.pi / math.max(1, colors.length);
-    final gap = colors.length > 1 ? 0.18 : 0.0;
-    for (var i = 0; i < colors.length; i++) {
-      canvas.drawArc(
-        rect,
-        -math.pi / 2 + i * sweep + gap / 2,
-        sweep - gap,
-        false,
-        Paint()
-          ..color = colors[i]
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 4.5
-          ..strokeCap = StrokeCap.round,
+  void paint(Canvas canvas, Size s) {
+    final p = Paint()
+      ..color = Neutral.primary
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    const k = 5.5;
+    final w = s.width, h = s.height;
+    for (final (x, y, dx, dy) in [
+      (0.0, 0.0, 1.0, 1.0),
+      (w, 0.0, -1.0, 1.0),
+      (0.0, h, 1.0, -1.0),
+      (w, h, -1.0, -1.0),
+    ]) {
+      canvas.drawPath(
+        Path()
+          ..moveTo(x, y + dy * k)
+          ..lineTo(x, y)
+          ..lineTo(x + dx * k, y),
+        p,
       );
     }
+    canvas.drawCircle(
+      Offset(w / 2, h / 2),
+      1.6,
+      Paint()..color = Neutral.primary,
+    );
   }
 
   @override
-  bool shouldRepaint(_RingPainter o) => true;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _Card extends StatelessWidget {
@@ -404,25 +800,44 @@ class _Card extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => Navigator.of(context).push(DetailRoute(items: all, index: all.indexOf(item))),
+      onTap: () =>
+          Navigator.of(context)
+              .push(DetailRoute(items: all, index: all.indexOf(item))),
       child: Glass(
         radius: 18,
         padding: const EdgeInsets.all(6),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: SizedBox(width: 168, height: 126, child: DevelopedImage(item, size: 420)),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              if (placeNear(item.lat, item.lng) case final name?)
-                Text(count > 1 ? '$name  +${count - 1}' : name, style: Txt.label.copyWith(fontSize: 13.5)),
-              const SizedBox(height: 2),
-              Text(metaLine(item).split('  ·  ').first, style: Txt.mono.copyWith(fontSize: 10.5)),
-            ]),
-          ),
-        ]),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                width: 168,
+                height: 126,
+                child: DevelopedImage(item, size: 420),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (placeNear(item.lat, item.lng) case final name?)
+                    Text(
+                      count > 1 ? '$name  +${count - 1}' : name,
+                      style: Txt.label.copyWith(fontSize: 13.5),
+                    ),
+                  const SizedBox(height: 2),
+                  Text(
+                    metaLine(item).split('  ·  ').first,
+                    style: Txt.mono.copyWith(fontSize: 10.5),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -430,45 +845,115 @@ class _Card extends StatelessWidget {
 
 /// Glass bubble with a photo, pinned to where it was taken.
 class _Pin extends StatelessWidget {
-  const _Pin(this.item);
+  const _Pin(
+    this.item, {
+    required this.below,
+    required this.anchor,
+    required this.visibility,
+  });
   final PhotoItem item;
+  final bool below;
+  final double anchor, visibility;
 
   @override
   Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    // The geographical point stays fixed while the memory resolves above it.
+    final origin = Alignment(anchor, below ? -1 : 1);
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 600),
-      curve: Curves.easeOutBack,
-      builder: (_, t, c) => Opacity(
-        opacity: t.clamp(0, 1),
-        child: Transform.scale(scale: 0.6 + 0.4 * t, alignment: Alignment.bottomCenter, child: c),
-      ),
-      child: Column(children: [
-        Glass(
-          radius: 16,
-          padding: const EdgeInsets.all(4),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: SizedBox(
-                width: 116,
-                height: 84,
-                child: ColorReturnOnce(duration: const Duration(milliseconds: 900), child: DevelopedImage(item, size: 320)),
+      duration: Duration(milliseconds: reduceMotion ? 160 : 560),
+      curve: Curves.easeOutQuint,
+      builder: (_, entrance, child) {
+        final presence = math.min(entrance, visibility);
+        return Opacity(
+          opacity: presence,
+          child: Transform.scale(
+            scale: reduceMotion ? 1 : 0.84 + 0.16 * presence,
+            alignment: origin,
+            // Keep the loaded photo mounted when the blur finishes.
+            child: ImageFiltered(
+              enabled: !reduceMotion && entrance < 1,
+              imageFilter: ui.ImageFilter.blur(
+                sigmaX: (1 - entrance) * 2,
+                sigmaY: (1 - entrance) * 2,
+              ),
+              child: child,
+            ),
+          ),
+        );
+      },
+      child: Column(
+        verticalDirection: below
+            ? VerticalDirection.up
+            : VerticalDirection.down,
+        children: [
+          SizedBox(
+            height: 156,
+            child: Glass(
+              radius: 16,
+              padding: const EdgeInsets.all(4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: SizedBox(
+                      width: 116,
+                      height: 100,
+                      child: DevelopedImage(item, size: 320),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 5, 4, 2),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (placeNear(item.lat, item.lng) case final name?)
+                          Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Txt.label.copyWith(fontSize: 11.5),
+                          ),
+                        Text(
+                          metaLine(item).split('  ·  ').first,
+                          style: Txt.mono.copyWith(fontSize: 8.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 5, 4, 2),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                if (placeNear(item.lat, item.lng) case final name?)
-                  Text(name, style: Txt.label.copyWith(fontSize: 11.5)),
-                Text(metaLine(item).split('  ·  ').first, style: Txt.mono.copyWith(fontSize: 8.5)),
-              ]),
+          ),
+          Align(
+            alignment: Alignment(anchor, 0),
+            child: Transform.rotate(
+              angle: below ? math.pi : 0,
+              child: CustomPaint(
+                size: const Size(14, 10),
+                painter: _TailPainter(),
+              ),
             ),
-          ]),
-        ),
-        CustomPaint(size: const Size(14, 10), painter: _TailPainter()),
-        Container(width: 6, height: 6, decoration: BoxDecoration(color: item.hues.isEmpty ? Neutral.primary : colorOf(item.hues.first), shape: BoxShape.circle, border: Border.all(color: Neutral.surface, width: 1.2))),
-      ]),
+          ),
+          Align(
+            alignment: Alignment(anchor, 0),
+            child: Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: item.hues.isEmpty
+                    ? Neutral.primary
+                    : colorOf(item.hues.first),
+                shape: BoxShape.circle,
+                border: Border.all(color: Neutral.surface, width: 1.2),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -496,6 +981,10 @@ class _Timeline extends StatefulWidget {
     required this.w0,
     required this.w1,
     required this.playing,
+    required this.presenting,
+    required this.speed,
+    required this.onSpeed,
+    required this.onScrubStart,
     required this.items,
     required this.norm,
     required this.onWindow,
@@ -503,7 +992,9 @@ class _Timeline extends StatefulWidget {
   });
   final DateTime t0, t1;
   final double w0, w1;
-  final bool playing;
+  final bool playing, presenting;
+  final double speed;
+  final VoidCallback onSpeed, onScrubStart;
   final List<PhotoItem> items;
   final double Function(DateTime) norm;
   final void Function(double, double) onWindow;
@@ -517,59 +1008,97 @@ class _TimelineState extends State<_Timeline> {
   String? _grab; // 'start' | 'end' | 'move'
   int? _lastMonth;
 
-  String _fmt(DateTime t) => '${monthsShort[t.month - 1]} ${t.day}';
+  String _fmt(DateTime t) =>
+      '${monthsShort[t.month - 1]} ${t.day}${_at(widget.w0).year != _at(widget.w1).year ? ' ${t.year}' : ''}';
   DateTime _at(double n) => DateTime.fromMillisecondsSinceEpoch(
-      (widget.t0.millisecondsSinceEpoch + n * (widget.t1.millisecondsSinceEpoch - widget.t0.millisecondsSinceEpoch)).round());
+    (widget.t0.millisecondsSinceEpoch +
+            n *
+                (widget.t1.millisecondsSinceEpoch -
+                    widget.t0.millisecondsSinceEpoch))
+        .round(),
+  );
 
   @override
   Widget build(BuildContext context) {
     return Glass(
       radius: 22,
-      padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Row(children: [
-          Text('${_fmt(_at(widget.w0))} – ${_fmt(_at(widget.w1))}  ${_at(widget.w1).year}', style: Txt.mono.copyWith(color: Neutral.primary)),
-          const Spacer(),
-          TextAction(widget.playing ? 'Pause' : 'Play', onTap: widget.items.isEmpty ? null : widget.onPlay),
-        ]),
-        const SizedBox(height: 6),
-        LayoutBuilder(builder: (context, box) {
-          final w = box.maxWidth - 8;
-          void update(double dx, double ddx) {
-            var a = widget.w0, b = widget.w1;
-            final d = ddx / w;
-            switch (_grab) {
-              case 'start':
-                a = (a + d).clamp(0.0, b - 0.03);
-              case 'end':
-                b = (b + d).clamp(a + 0.03, 1.0);
-              default:
-                final len = b - a;
-                a = (a + d).clamp(0.0, 1 - len);
-                b = a + len;
-            }
-            final m = _at((a + b) / 2).month;
-            if (_lastMonth != null && m != _lastMonth) Haptics.tick();
-            _lastMonth = m;
-            widget.onWindow(a, b);
-          }
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${_fmt(_at(widget.w0))} – ${_fmt(_at(widget.w1))}${_at(widget.w0).year == _at(widget.w1).year ? '  ${_at(widget.w1).year}' : ''}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Txt.mono.copyWith(
+                    color: Neutral.primary,
+                    fontFeatures: const [ui.FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+              if (widget.presenting)
+                TextAction(
+                  '${widget.speed == 0.5 ? '0.5' : widget.speed.toInt()}×',
+                  onTap: widget.onSpeed,
+                ),
+              TextAction(
+                widget.playing
+                    ? 'Pause'
+                    : (widget.presenting && widget.w1 >= 1 - 1e-6
+                          ? 'Replay'
+                          : 'Play'),
+                onTap: widget.items.isEmpty ? null : widget.onPlay,
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          LayoutBuilder(
+            builder: (context, box) {
+              final w = box.maxWidth - 8;
+              void update(double ddx) {
+                var a = widget.w0, b = widget.w1;
+                final d = ddx / w;
+                switch (_grab) {
+                  case 'start':
+                    a = (a + d).clamp(0.0, b - 0.03);
+                  case 'end':
+                    b = (b + d).clamp(a + 0.03, 1.0);
+                  default:
+                    final len = b - a;
+                    a = (a + d).clamp(0.0, 1 - len);
+                    b = a + len;
+                }
+                final m = _at((a + b) / 2).month;
+                if (_lastMonth != null && m != _lastMonth) Haptics.tick();
+                _lastMonth = m;
+                widget.onWindow(a, b);
+              }
 
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onHorizontalDragStart: (d) {
-              final x = d.localPosition.dx / w;
-              final hs = 0.04;
-              _grab = (x - widget.w0).abs() < hs ? 'start' : ((x - widget.w1).abs() < hs ? 'end' : 'move');
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragStart: (d) {
+                  widget.onScrubStart();
+                  final x = (d.localPosition.dx - 4) / w;
+                  final ds = (x - widget.w0).abs(), de = (x - widget.w1).abs();
+                  final hs = 22 / w;
+                  _grab = math.min(ds, de) < hs
+                      ? (ds < de ? 'start' : 'end')
+                      : 'move';
+                },
+                onHorizontalDragUpdate: (d) => update(d.delta.dx),
+                onHorizontalDragEnd: (_) => _grab = null,
+                child: CustomPaint(
+                  size: Size(box.maxWidth, 44),
+                  painter: _TimelinePainter(widget, _at),
+                ),
+              );
             },
-            onHorizontalDragUpdate: (d) => update(d.localPosition.dx, d.delta.dx),
-            onHorizontalDragEnd: (_) => _grab = null,
-            child: CustomPaint(
-              size: Size(box.maxWidth, 44),
-              painter: _TimelinePainter(widget, _at),
-            ),
-          );
-        }),
-      ]),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -582,74 +1111,69 @@ class _TimelinePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final width = size.width - 8;
-    const top = 6.0, h = 24.0;
-    // Month ticks.
-    final tick = Paint()..color = Neutral.hairline..strokeWidth = 1;
+    const trackY = 15.0;
+    final start = 4 + w.w0 * width;
+    final end = 4 + w.w1 * width;
+    canvas.drawLine(
+      Offset(4, trackY),
+      Offset(4 + width, trackY),
+      Paint()
+        ..color = Neutral.hairline
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawLine(
+      Offset(start, trackY),
+      Offset(end, trackY),
+      Paint()
+        ..color = const Color(0xFFC3BCCF)
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round,
+    );
+
     var m = DateTime(w.t0.year, w.t0.month + 1);
     var labelEnd = -1e9;
     while (m.isBefore(w.t1)) {
       final x = 4 + w.norm(m) * width;
-      canvas.drawLine(Offset(x, top), Offset(x, top + h), tick);
-      if (m.month == 1 || width / ((w.t1.difference(w.t0).inDays / 30).clamp(1, 400)) > 26) {
+      if (m.month == 1 ||
+          width / ((w.t1.difference(w.t0).inDays / 30).clamp(1, 400)) > 26) {
         final tp = TextPainter(
-          text: TextSpan(text: m.month == 1 ? '${m.year}' : monthsShort[m.month - 1], style: Txt.mono.copyWith(fontSize: 8.5, color: Neutral.tertiary)),
+          text: TextSpan(
+            text: m.month == 1 ? '${m.year}' : monthsShort[m.month - 1],
+            style: Txt.mono.copyWith(fontSize: 9.5, color: Neutral.secondary),
+          ),
           textDirection: TextDirection.ltr,
         )..layout();
-        // Never let labels run into each other.
-        if (x + 2 > labelEnd + 6) {
-          tp.paint(canvas, Offset(x + 2, top + h + 2));
+        // Never let labels run into each other or off the end.
+        if (x + 2 > labelEnd + 6 && x + 2 + tp.width <= size.width) {
+          tp.paint(canvas, Offset(x + 2, 28));
           labelEnd = x + 2 + tp.width;
         }
       }
       m = DateTime(m.year, m.month + 1);
     }
-    // Every photo as a thin colored line.
+    // Photo dates are colored points along the track.
     for (final it in w.items) {
-      final x = 4 + w.norm(it.taken) * width;
-      final inside = w.norm(it.taken) >= w.w0 && w.norm(it.taken) <= w.w1;
+      final n = w.norm(it.taken);
+      final inside = n >= w.w0 && n <= w.w1;
       final col = it.hues.isEmpty ? Neutral.secondary : colorOf(it.hues.first);
-      canvas.drawLine(
-        Offset(x, top + 5),
-        Offset(x, top + h - 5),
-        Paint()
-          ..color = inside ? col : col.withValues(alpha: 0.25)
-          ..strokeWidth = 1.6,
+      canvas.drawCircle(
+        Offset(4 + n * width, trackY),
+        2.3,
+        Paint()..color = inside ? col : col.withValues(alpha: 0.30),
       );
     }
-    // Window: achromatic frame.
-    final r = RRect.fromLTRBR(4 + w.w0 * width, top, 4 + w.w1 * width, top + h, const Radius.circular(7));
-    canvas.drawRRect(r, Paint()..color = const Color(0x14161616));
-    canvas.drawRRect(r, Paint()..color = Neutral.primary..style = PaintingStyle.stroke..strokeWidth = 1.6);
-    final handle = Paint()..color = Neutral.primary..strokeWidth = 2.4..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(r.left, top + 7), Offset(r.left, top + h - 7), handle);
-    canvas.drawLine(Offset(r.right, top + 7), Offset(r.right, top + h - 7), handle);
+    final fill = Paint()..color = Neutral.surface;
+    final outline = Paint()
+      ..color = const Color(0xFFAAA2B8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    for (final x in [start, end]) {
+      canvas.drawCircle(Offset(x, trackY), 5.5, fill);
+      canvas.drawCircle(Offset(x, trackY), 5.5, outline);
+    }
   }
 
   @override
   bool shouldRepaint(_TimelinePainter o) => true;
-}
-
-// Keeps unused import warnings away when building for web.
-// ignore: unused_element
-final _unused = Timer;
-
-class _PlaceLabel extends StatelessWidget {
-  const _PlaceLabel(this.p);
-  final Place p;
-
-  @override
-  Widget build(BuildContext context) {
-    final style = switch (p.size) {
-      2 => Txt.label.copyWith(fontSize: 17, letterSpacing: 7, fontWeight: FontWeight.w400, color: Neutral.secondary),
-      1 => Txt.small.copyWith(fontSize: 10.5, letterSpacing: 3, color: Neutral.secondary),
-      _ => Txt.small.copyWith(fontSize: 9.5, letterSpacing: 2.4, color: const Color(0xFF8A8A8A)),
-    };
-    return Text(
-      p.name.toUpperCase(),
-      maxLines: 1,
-      style: style.copyWith(
-        shadows: const [Shadow(color: Color(0xE6F5F5F4), blurRadius: 6)],
-      ),
-    );
-  }
 }

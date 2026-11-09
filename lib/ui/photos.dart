@@ -1,5 +1,6 @@
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -102,6 +103,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                     ..._byMonth(list)
                   else
                     _grid(list, list),
+                  if (list.isNotEmpty) SliverToBoxAdapter(child: _more()),
                   SliverToBoxAdapter(child: SizedBox(height: pad.bottom + 96)),
                 ],
               ),
@@ -231,6 +233,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                 itemBuilder: (context, i) => Swatch(
                   pal[i].color,
                   size: 30,
+                  from: pal[i].source,
                   selected: s.paletteFilter.contains(i),
                   onTap: () {
                     Haptics.tick();
@@ -344,6 +347,27 @@ class _PhotosScreenState extends State<PhotosScreen> {
     );
   }
 
+  /// After the oldest developed photo: hand the agent the next older ones.
+  Widget _more() {
+    final n = s.unlookedCount;
+    if (n == 0 || s.developing || s.paletteFilter.isNotEmpty) return const SizedBox.shrink();
+    final batch = n < Store.moreBatch ? n : Store.moreBatch;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
+      child: Column(children: [
+        TextAction(
+          batch == 1 ? 'Develop 1 older photo' : 'Develop $batch older photos',
+          onTap: () {
+            Haptics.tick();
+            s.developMore();
+          },
+        ),
+        const SizedBox(height: 6),
+        Text('$n not looked at yet', style: Txt.mono),
+      ]),
+    );
+  }
+
   Widget _empty() {
     final none = s.items.isEmpty;
     return Padding(
@@ -357,6 +381,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                 : (s.developing || (!none && s.doneCount == 0) ? 'Developing your first photo.' : 'No photos yet.'),
             style: Txt.body.copyWith(color: Neutral.secondary),
           ),
+          if (!none && s.paletteFilter.isEmpty) _more(),
           if (none && !s.developing) ...[
             const SizedBox(height: 18),
             TextAction(
@@ -474,6 +499,16 @@ class _Tile extends StatelessWidget {
                 else ...[
                   OriginalImage(item, size: size),
                   if (item.state != Develop.manual) const _Breathing(),
+                  if (item.state == Develop.developing)
+                    const Center(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          boxShadow: [BoxShadow(color: Color(0x40000000), blurRadius: 12)],
+                        ),
+                        child: CupertinoActivityIndicator(radius: 10, color: Neutral.surface),
+                      ),
+                    ),
                 ],
                 if (!item.seen && item.state == Develop.done)
                   Positioned(
@@ -489,6 +524,44 @@ class _Tile extends StatelessWidget {
                       ),
                     ),
                   ),
+                if (!selected && (item.favorite || (item.state == Develop.done && item.hues.isNotEmpty))) ...[
+                  // The bottom darkens a little so the heart and the palette
+                  // read on any photo.
+                  const Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.bottomCenter,
+                            end: Alignment(0, 0.25),
+                            colors: [Color(0x66000000), Color(0x00000000)],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (item.favorite) Positioned(left: 6, bottom: 5, child: const TileHeart(size: 15)),
+                  if (item.state == Develop.done && item.hues.isNotEmpty)
+                    Positioned(
+                      right: 6,
+                      bottom: 7,
+                      child: IgnorePointer(
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          for (final c in item.hues)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 3),
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: const [tileShadow],
+                                ),
+                                child: Swatch(c, size: 12, from: item),
+                              ),
+                            ),
+                        ]),
+                      ),
+                    ),
+                ],
                 if (selected)
                   Positioned(
                     bottom: 7,

@@ -13,8 +13,37 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const _demoTools = bool.fromEnvironment('AFTER_HUE_DEMO_TOOLS');
   final s = Store.instance;
-  bool _auto = true, _wifi = false, _screens = true;
+  bool _resetting = false;
+  late final Future<String> _judge = s.judgeName();
+
+  Future<void> _resetForDemo() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reset After Hue?'),
+        content: const Text(
+          'This clears edits, favorites, and settings and returns to onboarding. '
+          'Your photo library and system permissions stay as they are.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Reset')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _resetting) return;
+    setState(() => _resetting = true);
+    try {
+      await s.resetForDemo();
+      if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _resetting = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not reset After Hue.')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,8 +59,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Text('Settings', style: Txt.display),
           const SizedBox(height: 28),
           _section('Developing'),
-          _switch('Import new photos automatically', _auto, (v) => setState(() => _auto = v)),
-          _row('Photos to develop', s.months >= 1200 ? 'All photos' : 'Last ${s.months} months', () async {
+          _switch('Develop new photos automatically', s.autoDevelop, (v) => setState(() => s.setAutoDevelop(v))),
+          _row('Photos to show', s.months >= 1200 ? 'All photos' : 'Last ${s.months} months', () async {
             final m = await showModalBottomSheet<int>(
               context: context,
               backgroundColor: Neutral.surface,
@@ -40,9 +69,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             );
             if (m != null) setState(() => s.setMonths(m));
           }),
-          _switch('Develop on Wi-Fi only', _wifi, (v) => setState(() => _wifi = v)),
-          _switch('Skip screenshots', _screens, (v) => setState(() => _screens = v)),
+          _switch('Skip screenshots', s.skipScreenshots, (v) => setState(() => s.setSkipScreenshots(v))),
+          _row('Swatches', switch (s.swatches) { SwatchStyle.photo => 'From the photo', SwatchStyle.soft => 'Soft', SwatchStyle.flat => 'Flat' }, () {
+            Haptics.tick();
+            setState(() => s.setSwatches(SwatchStyle.values[(s.swatches.index + 1) % SwatchStyle.values.length]));
+          }),
+          _row('Developed today', '${s.developedToday} of ${Store.dailyLimit}', null),
           _row('Model', s.agent.name, null),
+          FutureBuilder<String>(
+            future: _judge,
+            builder: (_, snap) => _row('Screening', snap.data ?? '…', null),
+          ),
           const SizedBox(height: 36),
           _section('Account'),
           Container(
@@ -70,6 +107,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _section('About'),
           _row('Version', '0.1.0', null),
           _row('Photos developed', '${s.doneCount}', null),
+          _row('Agent log', '${s.agentLog.length}', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const _AgentLog()))),
+          if (_demoTools) ...[
+            const SizedBox(height: 36),
+            _section('Development'),
+            _row('Reset for demo', _resetting ? 'Resetting…' : 'Reset', _resetting ? null : _resetForDemo),
+          ],
         ],
       ),
     );
@@ -101,4 +144,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
         ),
       );
+}
+
+/// What the agent did, newest first: which photos it judged, skipped, or developed.
+class _AgentLog extends StatelessWidget {
+  const _AgentLog();
+
+  @override
+  Widget build(BuildContext context) {
+    final pad = MediaQuery.paddingOf(context);
+    final lines = Store.instance.agentLog.reversed.toList();
+    return Scaffold(
+      body: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(10, pad.top + 4, 20, 8),
+          child: TextAction('Back', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, pad.bottom + 20),
+            itemCount: lines.length,
+            itemBuilder: (_, i) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(lines[i], style: Txt.mono.copyWith(fontSize: 11, color: Neutral.primary)),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
 }

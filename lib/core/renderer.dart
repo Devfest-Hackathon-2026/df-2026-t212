@@ -315,6 +315,58 @@ Float32List keepWeight(Lab lab, List<KeptColor> colors) {
   return w;
 }
 
+/// Darkening toward the edges, modelled on Core Image's CIVignetteEffect
+/// (which Photos' own Vignette is built on), measured on this OS:
+///
+///   m(d) = smoothstep(r - w, r + w, d),  w = r * (0.43 + 0.85 * softness)
+///   gain = (1 - strength * m) ^ 2.2
+///
+/// d is the distance from the center in units of the half-diagonal, so the
+/// shape is a circle and the corners sit at d = 1. The center inside r - w is
+/// untouched, the shoulder is an S-curve, and the darkening is even to the eye
+/// (a gamma-space multiply), which is why it never looks like a dark ring.
+/// Radius moves where it starts; strength only sets how dark it gets.
+const vignetteSoftness = 0.5;
+
+double vignetteGain(double d, double strength, double radius) {
+  final w = radius * (0.43 + 0.85 * vignetteSoftness);
+  final t = ((d - (radius - w)) / (2 * w)).clamp(0.0, 1.0);
+  final m = t * t * (3 - 2 * t);
+  final v = 1 - strength * m;
+  return v <= 0 ? 0 : math.pow(v, 2.2).toDouble();
+}
+
+/// Share of a place's own chroma the mono part keeps at full ambience.
+const _trace = 0.35;
+
+/// The color of the light: the average tint of the near-neutral surfaces
+/// (walls, sky, pavement), which take on the light's color. Capped so it
+/// reads as a tone, never as a color.
+(double, double) _lightCast(Lab lab) {
+  var sa = 0.0, sb = 0.0, wsum = 0.0;
+  final n = lab.l.length;
+  final step = math.max(1, n ~/ 40000);
+  for (var i = 0; i < n; i += step) {
+    final a = lab.a[i], b = lab.b[i], l = lab.l[i];
+    final c = math.sqrt(a * a + b * b);
+    if (c > 0.09 || l < 0.08) continue;
+    final w = 1 - c / 0.09;
+    sa += a * w;
+    sb += b * w;
+    wsum += w;
+  }
+  if (wsum == 0) return (0, 0);
+  var a = sa / wsum, b = sb / wsum;
+  final c = math.sqrt(a * a + b * b);
+  const cap = 0.035;
+  if (c > cap) {
+    a *= cap / c;
+    b *= cap / c;
+  }
+  // A faint cast is still the light: lift it so it shows.
+  return (a * 1.6, b * 1.6);
+}
+
 double _tone(double L, double contrast) {
   if (contrast == 0) return L;
   final x = L.clamp(0.0, 1.0);
@@ -334,12 +386,34 @@ RenderResult render(Rgba src, Recipe recipe, {Lab? lab}) {
   final r = math.max(2, (math.min(w, h) * 0.006).round());
   final weight = recipe.colors.isEmpty ? raw : guidedFilter(lab.l, raw, w, h, r, 2e-3);
 
+  final amb = recipe.ambience.clamp(0.0, 1.0);
+  final vig = recipe.vignette.clamp(0.0, 1.0);
+  final vigR = recipe.vignetteRadius.clamp(0.2, 1.6);
+  final cx = w / 2, cy = h / 2, halfDiag = math.sqrt(cx * cx + cy * cy);
+  final (castA, castB) = amb > 0 ? _lightCast(lab) : (0.0, 0.0);
   final out = Uint8List(n * 4);
   var sum = 0.0;
   for (var i = 0; i < n; i++) {
     final k = weight[i];
     sum += k;
-    final rgb = oklabToLinear(_tone(lab.l[i], recipe.contrast), lab.a[i] * k, lab.b[i] * k);
+    final tl = _tone(lab.l[i], recipe.contrast);
+    var a = lab.a[i] * k, b = lab.b[i] * k;
+    if (amb > 0) {
+      // The mono part, toned: the light's cast strongest in the midtones (as
+      // in a toned print), plus a trace of each place's own color.
+      final mid = 4 * tl * (1 - tl);
+      final m = (1 - k) * amb;
+      a += m * (castA * mid + lab.a[i] * _trace);
+      b += m * (castB * mid + lab.b[i] * _trace);
+    }
+    final rgb = oklabToLinear(tl, a, b);
+    if (vig > 0) {
+      final dx = i % w + 0.5 - cx, dy = i ~/ w + 0.5 - cy;
+      final g = vignetteGain(math.sqrt(dx * dx + dy * dy) / halfDiag, vig, vigR);
+      rgb[0] *= g;
+      rgb[1] *= g;
+      rgb[2] *= g;
+    }
     final o = i * 4;
     out[o] = _toSrgb8(rgb[0]);
     out[o + 1] = _toSrgb8(rgb[1]);
@@ -360,4 +434,116 @@ Rgba weightImage(Float32List weight, int w, int h) {
     out[i * 4 + 3] = 255;
   }
   return Rgba(w, h, out);
+}
+
+/// The square of the photo that looks most like [c]: a piece of the photo
+/// itself, so a swatch carries the photo's own texture instead of a flat
+/// fill. Pixels are scored by OKLab distance to [c] (not by the renderer's
+/// hue reach, which also catches large dull areas of a similar hue), and the
+/// square narrows from [side] (share of the short side) until it is mostly
+/// that color. Cut from the original, so a mask never turns it grey.
+/// Null when nothing in the photo is close.
+Rgba? colorPatch(Rgba src, KeptColor c, {double side = 0.09, double fill = 0.7}) {
+  final w = src.width, h = src.height;
+  final lab = toLab(src);
+  final W = w + 1;
+  final ii = Float64List(W * (h + 1));
+  for (var y = 0; y < h; y++) {
+    var row = 0.0;
+    for (var x = 0; x < w; x++) {
+      final i = y * w + x;
+      final dl = (lab.l[i] - c.l) * 0.7, da = lab.a[i] - c.a, db = lab.b[i] - c.b;
+      final d2 = (dl * dl + da * da + db * db) / (0.05 * 0.05);
+      row += d2 > 9 ? 0 : math.exp(-d2);
+      ii[(y + 1) * W + x + 1] = ii[y * W + x + 1] + row;
+    }
+  }
+  (double, int, int) densest(int k) {
+    var best = -1.0, bx = 0, by = 0;
+    final step = math.max(1, k ~/ 6);
+    for (var y = 0; y + k <= h; y += step) {
+      for (var x = 0; x + k <= w; x += step) {
+        final s = ii[(y + k) * W + x + k] - ii[y * W + x + k] - ii[(y + k) * W + x] + ii[y * W + x];
+        if (s > best) {
+          best = s;
+          bx = x;
+          by = y;
+        }
+      }
+    }
+    return (best / (k * k), bx, by);
+  }
+
+  final short = math.min(w, h);
+  (double, int, int, int)? pick;
+  for (var f = side; f >= 0.012; f *= 0.8) {
+    final k = math.max(8, (short * f).round());
+    if (k > short) continue;
+    final (mean, x, y) = densest(k);
+    // Prefer the larger square unless a smaller one is clearly purer.
+    if (pick == null || mean > pick.$1 + 0.08) pick = (mean, x, y, k);
+    if (mean >= fill) break;
+  }
+  if (pick == null || pick.$1 < 0.08) return null;
+  final (_, bx, by, k) = pick;
+  final px = Uint8List(k * k * 4);
+  for (var y = 0; y < k; y++) {
+    final from = ((by + y) * w + bx) * 4;
+    px.setRange(y * k * 4, (y + 1) * k * 4, src.pixels, from);
+  }
+  return Rgba(k, k, px);
+}
+
+/// Box blur of radius [r], repeated [passes] times (three passes is close to
+/// a Gaussian). Edges clamp, so a patch blurs without a dark rim.
+Rgba boxBlur(Rgba src, int r, {int passes = 3}) {
+  final w = src.width, h = src.height;
+  var a = Uint8List.fromList(src.pixels), b = Uint8List(a.length);
+  void pass(Uint8List from, Uint8List to, bool horizontal) {
+    final len = horizontal ? w : h, lines = horizontal ? h : w;
+    for (var line = 0; line < lines; line++) {
+      int at(int i) => horizontal ? (line * w + i) * 4 : (i * w + line) * 4;
+      for (var ch = 0; ch < 4; ch++) {
+        var sum = 0;
+        for (var i = -r; i <= r; i++) {
+          sum += from[at(i.clamp(0, len - 1)) + ch];
+        }
+        for (var i = 0; i < len; i++) {
+          to[at(i) + ch] = sum ~/ (2 * r + 1);
+          sum += from[at((i + r + 1).clamp(0, len - 1)) + ch] - from[at((i - r).clamp(0, len - 1)) + ch];
+        }
+      }
+    }
+  }
+
+  for (var p = 0; p < passes; p++) {
+    pass(a, b, true);
+    pass(b, a, false);
+  }
+  return Rgba(w, h, a);
+}
+
+/// [src] moved to a mean OKLab lightness of at least [minL], its light and
+/// dark detail kept (compressed into the room left above), hue and chroma
+/// untouched: a dark navy patch becomes a light navy one with the same grain.
+Rgba liftPatch(Rgba src, double minL) {
+  final lab = toLab(src);
+  final n = lab.l.length;
+  var mean = 0.0;
+  for (var i = 0; i < n; i++) {
+    mean += lab.l[i];
+  }
+  mean /= n;
+  if (mean >= minL) return src;
+  final squeeze = (0.97 - minL) / math.max(0.97 - mean, 0.05);
+  final out = Uint8List(n * 4);
+  for (var i = 0; i < n; i++) {
+    final l = (minL + (lab.l[i] - mean) * squeeze.clamp(0.0, 1.0)).clamp(0.0, 0.99);
+    final rgb = oklabToRgb8(l, lab.a[i], lab.b[i]);
+    out[i * 4] = rgb[0];
+    out[i * 4 + 1] = rgb[1];
+    out[i * 4 + 2] = rgb[2];
+    out[i * 4 + 3] = 255;
+  }
+  return Rgba(src.width, src.height, out);
 }
