@@ -40,7 +40,7 @@ class _PrintScreenState extends State<PrintScreen> {
   bool _loading = true;
   PrintStyle _style = PrintStyle.instant;
   PrintPaper _paper = PrintPaper.l;
-  bool _landscape = false, _fill = false, _colors = false, _date = false;
+  bool _landscape = false, _fill = false, _colors = true, _date = true;
   bool _orientationChosen = false;
   final _title = TextEditingController();
   final _place = TextEditingController();
@@ -58,7 +58,8 @@ class _PrintScreenState extends State<PrintScreen> {
     colors: _palette, showColors: _colors,
   );
 
-  PrintLayout get _previewLayout => !_editingDetails ? _layout : PrintLayout(
+  // Input hints belong only to the preview; _output always uses _layout.
+  PrintLayout get _previewLayout => !_layout.supportsDetails ? _layout : PrintLayout(
     style: _style, paper: _paper, landscape: _landscape, fill: _fill,
     title: _title.text.trim().isEmpty ? context.tr('Add a title', 'タイトルを入力') : _title.text,
     place: _place.text.trim().isEmpty ? context.tr('Add a place', '場所を入力') : _place.text,
@@ -170,6 +171,7 @@ class _PrintScreenState extends State<PrintScreen> {
   }
 
   void _selectDetail(bool place) {
+    if (!_editingDetails) _details();
     setState(() => _editingPlace = place);
     _detailFocus.requestFocus();
   }
@@ -245,7 +247,7 @@ class _PrintScreenState extends State<PrintScreen> {
               final info = layout.informationRect(Size(_photo!.width.toDouble(), _photo!.height.toDouble()));
               return Stack(fit: StackFit.expand, children: [
               CustomPaint(painter: PrintPainter(photo: _photo!, layout: layout, fontFamily: uiFamily, textures: _textures)),
-              if (_editingDetails) Positioned(
+              if (layout.supportsDetails) Positioned(
                 left: info.left / layout.size.width * box.maxWidth,
                 right: (layout.size.width - info.right) / layout.size.width * box.maxWidth,
                 top: info.top / layout.size.height * box.maxHeight,

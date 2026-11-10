@@ -267,7 +267,7 @@ void main() {
       await tester.pumpAndSettle();
       final paper = find.byWidgetPredicate((w) => w is CustomPaint && w.painter is PrintPainter);
       final previewSize = tester.getSize(paper);
-      await tester.tap(find.text('Add details'));
+      await tester.tap(find.text('Edit details'));
       await tester.pumpAndSettle();
       expect(tester.getSize(paper).width, lessThanOrEqualTo(previewSize.width));
       expect(tester.getSize(paper).height, lessThanOrEqualTo(previewSize.height));
@@ -275,11 +275,8 @@ void main() {
       await tester.tap(find.text('Place'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Asakusa');
-      await tester.ensureVisible(find.text('Colors'));
-      await tester.tap(find.text('Colors'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Date'));
-      await tester.pumpAndSettle();
+      expect((tester.widget<CustomPaint>(paper).painter! as PrintPainter).layout.hasColors, isTrue);
+      expect((tester.widget<CustomPaint>(paper).painter! as PrintPainter).layout.date, '2026.11.10');
       if (entry.key == 'phone') {
         tester.view.viewInsets = const FakeViewPadding(bottom: 300);
         await tester.pumpAndSettle();
@@ -337,6 +334,83 @@ void main() {
     });
   }
 
+  testWidgets('empty details are discoverable in preview but never saved as hints', (tester) async {
+    tester.view.physicalSize = const Size(393, 852);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late PrintContent content;
+    await tester.runAsync(() async { content = await sampleContent(); });
+    final boundary = GlobalKey();
+    await tester.pumpWidget(MaterialApp(debugShowCheckedModeBanner: false, theme: buildTheme(),
+      home: RepaintBoundary(key: boundary, child: PrintScreen(
+        loadContent: () async => content, taken: DateTime(2026, 11, 10)))));
+    for (var i = 0; i < 20 && find.byType(CircularProgressIndicator).evaluate().isNotEmpty; i++) {
+      await tester.runAsync(() async { await Future<void>.delayed(const Duration(milliseconds: 50)); });
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    final paper = find.byWidgetPredicate((w) => w is CustomPaint && w.painter is PrintPainter);
+    for (final style in PrintStyle.values) {
+      await tester.tap(find.text(style.label));
+      await tester.pumpAndSettle();
+      final preview = (tester.widget<CustomPaint>(paper).painter! as PrintPainter).layout;
+      if (style == PrintStyle.photo) {
+        expect(preview.hasDetails, isFalse);
+        expect(preview.title, isEmpty);
+        expect(preview.place, isEmpty);
+      } else {
+        expect(preview.title, 'Add a title');
+        expect(preview.place, 'Add a place');
+        expect(preview.hasColors, isTrue);
+        expect(preview.date, '2026.11.10');
+      }
+      expect(tester.takeException(), isNull);
+      if (Platform.environment['AFTER_HUE_REVIEW_FONT'] != null) {
+        await tester.runAsync(() async {
+          final image = await (boundary.currentContext!.findRenderObject() as RenderRepaintBoundary).toImage(pixelRatio: 2);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          final folder = Directory('/tmp/afterhue-print-review')..createSync(recursive: true);
+          File('${folder.path}/empty-${style.name}.png').writeAsBytesSync(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+      }
+    }
+    await tester.tap(find.text('Instant'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byWidgetPredicate((w) => w is Semantics && w.properties.label == 'Edit place on paper'));
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.focusNode!.hasFocus, isTrue);
+    expect(field.decoration!.hintText, 'Add a place');
+    expect(field.controller!.text, isEmpty, reason: 'Preview hints never become user input');
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+
+    // Capture the real Save action before the native photo-library write.
+    late Completer<Uint8List> saved;
+    const channel = MethodChannel('com.fluttercandies/photo_manager');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'saveImage') saved.complete(call.arguments['image'] as Uint8List);
+      throw PlatformException(code: 'test_capture', message: 'No photo-library write in tests');
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+    await tester.runAsync(() async {
+      saved = Completer<Uint8List>();
+      tester.widget<TextButton>(find.widgetWithText(TextButton, 'Save image')).onPressed!();
+      final actual = await saved.future.timeout(const Duration(seconds: 15));
+      final photo = await decode(content.photo);
+      final textures = <ui.Image?>[];
+      for (final bytes in content.textures) { textures.add(bytes == null ? null : await decode(bytes)); }
+      final expected = await exportPrintImage(photo, PrintLayout(style: PrintStyle.instant,
+        date: '2026.11.10', colors: content.colors, showColors: true), fontFamily: uiFamily, textures: textures);
+      expect(actual, orderedEquals(expected), reason: 'Saved image contains date and badges, without title/place placeholders');
+      photo.dispose();
+      for (final texture in textures) { texture?.dispose(); }
+    });
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('Japanese print controls remain usable on a small phone', (tester) async {
     tester.view.physicalSize = const Size(320, 568);
     tester.view.devicePixelRatio = 1;
@@ -355,7 +429,7 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(find.text('用紙'), findsOneWidget);
-    await tester.tap(find.text('文字・バッジを追加'));
+    await tester.tap(find.text('文字・バッジを編集'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '浅草の午後');
     await tester.tap(find.text('場所'));
