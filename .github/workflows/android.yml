@@ -31,7 +31,7 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos
-      - run: flutter test --reporter expanded
+      - run: flutter test --concurrency=1 --reporter expanded
       - name: Build without AI credentials
         if: ${{ !inputs.with_ai }}
         run: flutter build apk --debug --dart-define=AFTER_HUE_DEMO_TOOLS=true

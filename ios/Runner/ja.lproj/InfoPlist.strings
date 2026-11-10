@@ -1,4 +1,0 @@
-"NSCameraUsageDescription" = "撮影中に現像後の見た目を表示するため、カメラを使用します。";
-"NSLocationWhenInUseUsageDescription" = "After Hueで撮影した写真を地図に表示するため、位置情報を使用します。";
-"NSPhotoLibraryAddUsageDescription" = "After Hueのカメラで撮影した写真をライブラリに保存します。";
-"NSPhotoLibraryUsageDescription" = "写真を現像し、ギャラリーと地図に表示するため、写真ライブラリを使用します。";

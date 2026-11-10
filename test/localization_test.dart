@@ -1,3 +1,4 @@
+import 'package:afterhue/main.dart';
 import 'package:afterhue/l10n/cloud_ai_errors.dart';
 import 'package:afterhue/ui/import_sheet.dart';
 import 'package:afterhue/ui/onboarding.dart';
@@ -17,6 +18,17 @@ Widget localized(Widget child, Locale locale) => MaterialApp(
 );
 
 void main() {
+  testWidgets('the app stays English on a Japanese device', (tester) async {
+    tester.binding.platformDispatcher.localeTestValue = const Locale('ja');
+    addTearDown(tester.binding.platformDispatcher.clearLocaleTestValue);
+    await tester.pumpWidget(const AfterHue());
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(tester.widget<MaterialApp>(find.byType(MaterialApp)).locale, const Locale('en'));
+    expect(tester.widget<MaterialApp>(find.byType(MaterialApp)).supportedLocales, [const Locale('en')]);
+    expect(Localizations.localeOf(tester.element(find.byType(Onboarding))), const Locale('en'));
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('onboarding uses Japanese and falls back to English', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;

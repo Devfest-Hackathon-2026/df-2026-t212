@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleLocalizations</key>
-	<array><string>en</string><string>ja</string></array>
+	<array><string>en</string></array>
 	<key>CFBundleDisplayName</key>
 	<string>After Hue</string>
 	<key>CFBundleExecutable</key>

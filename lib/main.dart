@@ -22,7 +22,9 @@ class AfterHue extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'After Hue',
-      supportedLocales: const [Locale('en'), Locale('ja')],
+      // After Hue's product language is English, regardless of device language.
+      locale: const Locale('en'),
+      supportedLocales: const [Locale('en')],
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
