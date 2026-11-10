@@ -1,0 +1,10 @@
+import {loadConfig,createVertex} from './vertex.js';
+import {createApp} from './app.js';
+import {createFirebaseVerifier} from './auth.js';
+import {createDailyQuota} from './quota.js';
+const config=loadConfig();
+const app=createApp({config,generate:createVertex(config),verifyAuth:createFirebaseVerifier(config),quota:createDailyQuota(config)});
+const server=app.listen(Number(process.env.PORT||8080),'0.0.0.0');
+server.requestTimeout=130000;
+server.headersTimeout=10000;
+process.on('SIGTERM',()=>server.close());
