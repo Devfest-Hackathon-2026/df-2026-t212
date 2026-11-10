@@ -50,10 +50,8 @@
 
 ## Remaining work and limits
 
-- **Before submission: fix Ask UX as a complete interaction flow.** The user says
-  the current UX is still poor. Review opening, recognizable input, keyboard and
-  photo layout, sending, progress, cancellation/Done and result inspection. This
-  is the next priority, ahead of printing/Explore.
+- Ask input and request flow were revised on 2026-11-10; see `ask-editing.md`.
+  Printing/Explore remain behind the editor and source-version work.
 - Automatic geometric correspondence is conservative: framing changes wait for
   manual review; arbitrary crop/rotation registration is not implemented yet.
 - Source checks require the app to run; no background-execution guarantee or OS

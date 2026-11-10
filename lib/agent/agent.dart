@@ -123,6 +123,7 @@ class AgentRun {
   Recipe? result;
   String? note;
   String? requestText;
+  Revision? revision;
   String? error;
 
   /// [f], unless the run is cancelled first.

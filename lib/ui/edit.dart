@@ -40,6 +40,7 @@ class EditRoute extends PageRouteBuilder<void> {
 }
 
 enum _Tool { accent, area, mono }
+enum _AskOutcome { done, failed, stopped }
 
 /// One job: override the agent's work. The tools are the agent's tools.
 ///
@@ -134,7 +135,13 @@ class _EditScreenState extends State<EditScreen> {
   int _pingId = 0;
 
   // Asking the agent: words, marks on the photo, or a pick it should fit.
-  bool _asking = false;
+  bool _asking = false, _marking = false, _compareRequest = false;
+  bool _leaveRunActive = false, _requestUndoRecorded = false;
+  final _askComposerKey = GlobalKey();
+  MarkIntent _markIntent = MarkIntent.keep;
+  Revision? _lastRequest;
+  Recipe? _askBefore;
+  _AskOutcome? _askOutcome;
   final List<Mark> _marks = [];
   final _askText = TextEditingController();
   final _askFocus = FocusNode();
@@ -154,6 +161,7 @@ class _EditScreenState extends State<EditScreen> {
 
   @override
   void dispose() {
+    if (_lastRequest != null && _run != null && !_leaveRunActive) Store.instance.takeOver(_it);
     _images?.cancel();
     _runSub?.cancel();
     _worker?.dispose();
@@ -211,7 +219,7 @@ class _EditScreenState extends State<EditScreen> {
   }
 
   void _request() {
-    _worker?.request(_r, view: _mask || _sliding ? PreviewView.mask : PreviewView.result);
+    _worker?.request(_compareRequest ? (_askBefore ?? _r) : _r, view: _mask || _sliding ? PreviewView.mask : PreviewView.result);
     _refreshVeil();
   }
 
@@ -395,6 +403,14 @@ class _EditScreenState extends State<EditScreen> {
 
   void _attach(AgentRun run) {
     _run = run;
+    if (run.revision != null) {
+      _lastRequest = run.revision;
+      _askBefore = _r.copy();
+      _askText.text = run.revision!.text ?? '';
+      _marks.addAll(run.revision!.marks);
+      // This work was already left running before this editor was opened.
+      _leaveRunActive = true;
+    }
     if (run.recipe.colors.isNotEmpty) _r = run.recipe.copy();
     _runSub = run.changes.listen(
       (r) {
@@ -410,7 +426,18 @@ class _EditScreenState extends State<EditScreen> {
         // Finished on its own: show what it settled on.
         setState(() {
           _run = null;
-          if (_it.edit != null) _r = _it.edit!.copy();
+          if (_lastRequest != null) {
+            final ok = run.result != null;
+            _askOutcome = ok ? _AskOutcome.done : _AskOutcome.failed;
+            _r = (run.result ?? _askBefore ?? _r).copy();
+            if (ok) {
+              if (_askBefore != null) _push(_askBefore!.copy());
+              _note = run.note;
+              _askText.clear(); _marks.clear();
+            }
+          } else if (_it.edit != null) {
+            _r = _it.edit!.copy();
+          }
           _active = 0;
         });
         Haptics.firm();
@@ -453,6 +480,9 @@ class _EditScreenState extends State<EditScreen> {
     setState(() {
       _offer = null;
       _note = null;
+      _lastRequest = null;
+      _askOutcome = null;
+      _compareRequest = false;
       f();
     });
     _request();
@@ -507,15 +537,15 @@ class _EditScreenState extends State<EditScreen> {
 
   // ------------------------------------------------------------ asking the agent
 
-  /// A tap while asking marks the object there: keep, then no color, then gone.
+  /// A mark applies the chosen intent. Tapping the same intent again clears it.
   void _mark(Offset n, Size box) {
     Haptics.light();
     final near = _marks.indexWhere((m) => Offset((m.x - n.dx) * box.width, (m.y - n.dy) * box.height).distance < 22);
     setState(() {
       if (near < 0) {
-        _marks.add(Mark(n.dx, n.dy, MarkIntent.keep));
-      } else if (_marks[near].intent == MarkIntent.keep) {
-        _marks[near] = Mark(_marks[near].x, _marks[near].y, MarkIntent.remove);
+        _marks.add(Mark(n.dx, n.dy, _markIntent));
+      } else if (_marks[near].intent != _markIntent) {
+        _marks[near] = Mark(_marks[near].x, _marks[near].y, _markIntent);
       } else {
         _marks.removeAt(near);
       }
@@ -524,12 +554,12 @@ class _EditScreenState extends State<EditScreen> {
 
   void _send(String? text) {
     final t = text?.trim();
-    if ((t == null || t.isEmpty) && _marks.isEmpty) return;
+    if (_run != null || ((t == null || t.isEmpty) && _marks.isEmpty)) return;
     FocusScope.of(context).unfocus();
     _ask(Revision(text: t, marks: List.of(_marks)));
     setState(() {
       _asking = false;
-      _askText.clear();
+      _marking = false;
     });
   }
 
@@ -552,10 +582,18 @@ class _EditScreenState extends State<EditScreen> {
     _takeOver();
     final before = _r.copy();
     _push(before.copy());
+    _requestUndoRecorded = true;
+    _askBefore = before;
     final run = Store.instance.reviseNow(_it, _r, req);
     Haptics.light();
     setState(() {
       _run = run;
+      _lastRequest = req;
+      _leaveRunActive = false;
+      _askOutcome = null;
+      _asking = false;
+      _marking = false;
+      _compareRequest = false;
       _offer = null;
       _note = null;
     });
@@ -576,8 +614,10 @@ class _EditScreenState extends State<EditScreen> {
           _run = null;
           _r = ok ? run.result!.copy() : before;
           if (!ok && _undo.isNotEmpty) _undo.removeLast();
-          _note = ok ? (run.note ?? 'Done') : 'The agent could not do that. Nothing changed';
-          _marks.clear();
+          _askOutcome = ok ? _AskOutcome.done : _AskOutcome.failed;
+          _note = ok ? run.note : null;
+          if (ok) { _marks.clear(); _askText.clear(); }
+          else { _requestUndoRecorded = false; }
           _active = _active.clamp(0, _addSlot);
         });
         ok ? Haptics.success() : Haptics.warning();
@@ -620,6 +660,7 @@ class _EditScreenState extends State<EditScreen> {
   void _done() {
     final run = _run;
     if (run != null && !run.cancelled) {
+      _leaveRunActive = true;
       Store.instance.continueEditing(_it, run);
       widget.onSaved?.call();
       Navigator.pop(context);
@@ -642,36 +683,35 @@ class _EditScreenState extends State<EditScreen> {
       backgroundColor: Neutral.bg,
       // Keep the whole photo above the composer and keyboard.
       resizeToAvoidBottomInset: true,
-      body: Column(
-        children: [
-          SizedBox(height: pad.top),
-          Row(
-            children: [
-              TextAction('Cancel', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
-              _HistoryButton(redo: false, onTap: _undo.isEmpty ? null : _stepBack),
-              _HistoryButton(redo: true, onTap: _redo.isEmpty ? null : _stepForward),
-              const Spacer(),
-              if (running) ...[
-                const CupertinoActivityIndicator(radius: 8, color: Neutral.primary),
-                TextAction('Stop', onTap: () => setState(_takeOver)),
-              ] else
-                TextAction('Auto', onTap: _auto),
-              TextAction('Done', onTap: _done),
-              const SizedBox(width: 6),
-            ],
-          ),
-          Expanded(child: _photo()),
-          if (_asking) ...[
-            if (keyboard == 0 && !_askFocus.hasFocus) _askPhotoTools(),
-            Padding(
-              padding: EdgeInsets.fromLTRB(12, 4, 12, keyboard > 0 ? 8 : pad.bottom + 12),
-              child: _askPanel(),
+      body: Padding(
+        padding: EdgeInsets.only(left: pad.left, right: pad.right),
+        child: Column(
+          children: [
+            SizedBox(height: pad.top),
+            Row(
+              children: [
+                TextAction('Cancel', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
+                _HistoryButton(redo: false, onTap: _undo.isEmpty ? null : _stepBack),
+                _HistoryButton(redo: true, onTap: _redo.isEmpty ? null : _stepForward),
+                const Spacer(),
+                if (running && _lastRequest == null) ...[
+                  const CupertinoActivityIndicator(radius: 8, color: Neutral.primary),
+                  TextAction('Stop', onTap: () => setState(_takeOver)),
+                ] else if (!running)
+                  TextAction('Auto', onTap: _auto),
+                TextAction('Done', onTap: _done),
+                const SizedBox(width: 6),
+              ],
             ),
-          ] else ...[
-            _viewBar(),
-            _panel(pad),
+            if (_asking || _lastRequest != null)
+              Expanded(child: _askLayout(pad, keyboard))
+            else ...[
+              Expanded(child: _photo()),
+              _viewBar(),
+              _panel(pad),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -713,9 +753,9 @@ class _EditScreenState extends State<EditScreen> {
     final it = _it;
     final px = _px;
     final sourceSize = Size((px?.width ?? it.width).toDouble(), (px?.height ?? it.height).toDouble());
-    final crop = _r.crop ?? const PhotoCrop();
+    final crop = (_compareRequest ? _askBefore : _r)?.crop ?? const PhotoCrop();
     final ratio = crop.ratio(sourceSize.width, sourceSize.height);
-    final areaMode = _tool == _Tool.area && !_asking;
+    final areaMode = _tool == _Tool.area && !_asking && _lastRequest == null;
     final asking = _asking;
     return LayoutBuilder(
       builder: (context, outer) {
@@ -735,23 +775,26 @@ class _EditScreenState extends State<EditScreen> {
           width: w,
           height: h,
           child: GestureDetector(
+            key: const ValueKey('edit-photo-gesture'),
             onTapUp: areaMode
                 ? (d) { if (!_multiTouch) _areaTap(norm(d.localPosition), size); }
                 : (d) {
+                    if (_multiTouch || _lastRequest != null && !asking) return;
                     if (!asking) return _pickAt(norm(d.localPosition), size);
+                    if (!_marking) { _askFocus.unfocus(); return; }
                     // With the keyboard up, the first tap only puts it away so the whole photo shows.
                     if (MediaQuery.viewInsetsOf(context).bottom > 0) return FocusScope.of(context).unfocus();
                     _mark(norm(d.localPosition), size);
                   },
-            onLongPressStart: areaMode || asking ? null : (d) => setState(() => _loupe = norm(d.localPosition)),
-            onLongPressMoveUpdate: areaMode || asking
+            onLongPressStart: areaMode || asking || _lastRequest != null ? null : (d) => setState(() => _loupe = norm(d.localPosition)),
+            onLongPressMoveUpdate: areaMode || asking || _lastRequest != null
                 ? null
                 : (d) {
                     final n = norm(d.localPosition);
                     if (_loupe != null && (n - _loupe!).distance > 0.02) Haptics.tick();
                     setState(() => _loupe = n);
                   },
-            onLongPressEnd: areaMode || asking
+            onLongPressEnd: areaMode || asking || _lastRequest != null
                 ? null
                 : (d) {
                     final n = _loupe;
@@ -839,7 +882,7 @@ class _EditScreenState extends State<EditScreen> {
                   ),
                 ),
                 for (final p in _pings) _PingRing(key: ValueKey(p.id), ping: p),
-                for (var k = 0; k < _marks.length; k++)
+                for (var k = 0; k < ((_asking || _run != null) ? _marks.length : 0); k++)
                   Positioned(
                     left: _marks[k].x * w - 11,
                     top: _marks[k].y * h - 11,
@@ -946,15 +989,7 @@ class _EditScreenState extends State<EditScreen> {
               _ViewButton(
                 label: 'Ask',
                 on: _asking,
-                onTap: running
-                    ? null
-                    : () {
-                        Haptics.tick();
-                        setState(() {
-                          _asking = !_asking;
-                          if (!_asking) _marks.clear();
-                        });
-                      },
+                onTap: running ? null : _openAsk,
               ),
               _ViewButton(
                 label: 'Mask',
@@ -999,139 +1034,196 @@ class _EditScreenState extends State<EditScreen> {
 
   static const _suggestions = ['Only the subject', 'Less color', 'More mood'];
 
-  Widget _askPhotoTools() {
-    final keeps = _marks.where((m) => m.intent == MarkIntent.keep).length;
-    final removes = _marks.length - keeps;
-    return Padding(
-      padding: const EdgeInsets.only(left: 20, right: 10, bottom: 4),
-      child: Row(children: [
-        Expanded(child: Text(
-          _marks.isEmpty
-              ? 'Tap the photo to mark things'
-              : '${[if (keeps > 0) '$keeps keep color', if (removes > 0) '$removes no color'].join(' · ')} · tap to switch',
-          style: Txt.small.copyWith(fontSize: 12, color: const Color(0xA6000000)),
-        )),
-        _ViewButton(label: 'Mask', on: _mask, onTap: () {
-          Haptics.tick();
-          setState(() => _mask = !_mask);
-          _request();
-        }),
-        _ViewButton(label: 'Before', on: _before, onHold: (on) => setState(() => _before = on)),
+  void _openAsk() {
+    if (_run != null) return;
+    Haptics.tick();
+    setState(() { _asking = true; _marking = false; _compareRequest = false; });
+    _request();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _asking && !_marking) _askFocus.requestFocus();
+    });
+  }
+
+  void _closeAsk() {
+    _askFocus.unfocus();
+    setState(() { _asking = false; _marking = false; });
+    // Closing the composer preserves its draft and marks in this editor.
+  }
+
+  void _toggleMarking() {
+    Haptics.tick();
+    setState(() => _marking = !_marking);
+    if (_marking) { _askFocus.unfocus(); }
+    else { _askFocus.requestFocus(); }
+  }
+
+  void _stopAsk() {
+    _takeOver();
+    setState(() {
+      if (_askBefore != null) _r = _askBefore!.copy();
+      if (_requestUndoRecorded && _undo.isNotEmpty) _undo.removeLast();
+      _requestUndoRecorded = false;
+      _askOutcome = _AskOutcome.stopped;
+      _note = null;
+      _compareRequest = false;
+    });
+    _request();
+  }
+
+  Widget _askLayout(EdgeInsets pad, double keyboard) => LayoutBuilder(
+    builder: (context, box) {
+      final wide = MediaQuery.orientationOf(context) == Orientation.landscape && box.maxWidth >= 600;
+      final panel = KeyedSubtree(
+        key: _askComposerKey,
+        child: SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
+          padding: EdgeInsets.fromLTRB(12, 6, 12, keyboard > 0 ? 8 : pad.bottom + 12),
+          child: _asking ? _askPanel() : _askProgress(),
+        ),
+      );
+      if (wide) {
+        return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(child: _photo()),
+          SizedBox(width: math.min(360, box.maxWidth * .46), child: panel),
+        ]);
+      }
+      return Column(children: [
+        Expanded(child: _photo()),
+        ConstrainedBox(constraints: BoxConstraints(maxHeight: box.maxHeight * .58), child: panel),
+      ]);
+    },
+  );
+
+  /// The field stays mounted as focus, keyboard and mark controls change.
+  Widget _askPanel() {
+    final canSend = _askText.text.trim().isNotEmpty || _marks.isNotEmpty;
+    return Glass(
+      dock: true, radius: 22,
+      padding: const EdgeInsets.fromLTRB(16, 0, 12, 10),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text('Describe your edit', style: Txt.label)),
+          IconButton(
+            tooltip: 'Close Ask', onPressed: _closeAsk,
+            constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+            padding: EdgeInsets.zero, icon: const Glyph(G.close, size: 16, color: Neutral.secondary),
+          ),
+        ]),
+        TextField(
+          key: const ValueKey('ask-input'),
+          controller: _askText, focusNode: _askFocus,
+          minLines: _marking ? 1 : 2, maxLines: 4,
+          onChanged: (_) => setState(() {}),
+          onTap: () {
+            if (_marking) setState(() => _marking = false);
+            _askFocus.requestFocus();
+          },
+          textInputAction: TextInputAction.newline,
+          textCapitalization: TextCapitalization.sentences,
+          style: Txt.body.copyWith(height: 1.35), cursorColor: Neutral.primary,
+          decoration: InputDecoration(
+            hintText: 'Keep the flowers, remove the orange…',
+            hintStyle: Txt.body.copyWith(height: 1.35, color: Neutral.secondary),
+            filled: true, fillColor: const Color(0x80FFFFFF),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x26000000), width: .8)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x26000000), width: .8)),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x70000000), width: 1)),
+          ),
+        ),
+        if (_marking) ...[
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            for (final intent in [MarkIntent.keep, MarkIntent.remove])
+              ChoiceChip(
+                label: Text(intent == MarkIntent.keep ? 'Keep color' : 'Remove color'),
+                selected: _markIntent == intent, showCheckmark: true,
+                selectedColor: const Color(0x14000000), backgroundColor: Colors.transparent,
+                labelStyle: Txt.small.copyWith(color: Neutral.primary),
+                side: const BorderSide(color: Color(0x24000000), width: .8),
+                onSelected: (_) => setState(() => _markIntent = intent),
+              ),
+            if (_marks.isNotEmpty) TextButton(onPressed: () => setState(_marks.clear), child: const Text('Clear marks')),
+          ]),
+          Text('Tap an object. Tap its mark again to clear it.', style: Txt.small.copyWith(height: 1.35)),
+        ],
+        if (_askText.text.trim().isEmpty && !_marking) ...[
+          const SizedBox(height: 8),
+          SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
+            for (final text in _suggestions) Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ActionChip(
+                label: Text(text), labelStyle: Txt.small.copyWith(color: Neutral.primary),
+                backgroundColor: Colors.transparent,
+                side: const BorderSide(color: Color(0x24000000), width: .8),
+                onPressed: () {
+                  Haptics.tick();
+                  setState(() { _askText.text = text; _askText.selection = TextSelection.collapsed(offset: text.length); });
+                  _askFocus.requestFocus();
+                },
+              ),
+            ),
+          ])),
+        ],
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(child: Align(alignment: Alignment.centerLeft, child: TextButton(onPressed: _toggleMarking,
+            child: Text(_marking ? 'Write instead' : _marks.isEmpty ? 'Mark photo' : '${_marks.length} marks', maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small.copyWith(color: Neutral.primary))))),
+          SizedBox(height: 44, child: _ViewButton(label: 'Before', on: _before, onHold: (on) => setState(() => _before = on))),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: canSend && _run == null ? () => _send(_askText.text) : null,
+            style: FilledButton.styleFrom(minimumSize: const Size(64, 44), padding: const EdgeInsets.symmetric(horizontal: 16),
+              backgroundColor: Neutral.primary, foregroundColor: Neutral.surface, textStyle: Txt.label),
+            child: const Text('Send'),
+          ),
+        ]),
       ]),
     );
   }
 
-  /// A quiet composer; typing gets the space, with suggestions only at rest.
-  Widget _askPanel() {
-    final canSend = _askText.text.trim().isNotEmpty || _marks.isNotEmpty;
-    final typing = _askFocus.hasFocus || MediaQuery.viewInsetsOf(context).bottom > 0;
-    return Glass(
-      dock: true,
-      radius: 22,
-      padding: const EdgeInsets.fromLTRB(16, 0, 6, 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Expanded(child: Text('Ask the agent', style: Txt.small.copyWith(
-              color: const Color(0xA6000000), fontWeight: FontWeight.w500,
-            ))),
-            IconButton(
-              tooltip: 'Close',
-              onPressed: () {
-                Haptics.tick();
-                _askFocus.unfocus();
-                setState(() {
-                  _asking = false;
-                  _marks.clear();
-                });
-              },
-              constraints: const BoxConstraints.tightFor(width: 44, height: 44),
-              padding: EdgeInsets.zero,
-              icon: const Glyph(G.close, size: 16, color: Color(0xA6000000)),
-            ),
+  Widget _askProgress() {
+    final running = _run != null;
+    final done = _askOutcome == _AskOutcome.done;
+    final title = running ? 'Editing your photo' : done ? 'Edit ready' :
+      _askOutcome == _AskOutcome.stopped ? 'Editing stopped' : 'Couldn’t finish this edit';
+    final request = _lastRequest;
+    final description = request?.text?.trim();
+    return Glass(dock: true, radius: 22, padding: const EdgeInsets.fromLTRB(16, 8, 12, 12),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Semantics(liveRegion: true, child: Text(title, style: Txt.label))),
+          if (running) TextButton(onPressed: _stopAsk, child: const Text('Stop'))
+          else IconButton(tooltip: 'Back to tools', onPressed: () => setState(() { _lastRequest = null; _askOutcome = null; }),
+            icon: const Glyph(G.close, size: 16), constraints: const BoxConstraints.tightFor(width: 44, height: 44)),
+        ]),
+        if (description != null && description.isNotEmpty)
+          Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(description, style: Txt.body, maxLines: 3, overflow: TextOverflow.ellipsis)),
+        if (request != null && request.marks.isNotEmpty)
+          Padding(padding: const EdgeInsets.only(bottom: 8), child: Text('${request.marks.length} marked ${request.marks.length == 1 ? 'object' : 'objects'}', style: Txt.small)),
+        if (running) ...[
+          AgentWorkStatus(run: _run!),
+          const SizedBox(height: 10),
+          Text('You can tap Done. Find the result in Activity.', style: Txt.small.copyWith(height: 1.4)),
+        ] else if (done) ...[
+          if (_note != null && _note!.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(_note!, style: Txt.small.copyWith(height: 1.4))),
+          Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            SizedBox(height: 44, child: _ViewButton(label: 'Hold to compare', on: _compareRequest, onHold: (on) {
+              setState(() => _compareRequest = on); _request();
+            })),
+            TextButton(onPressed: _undo.isEmpty ? null : _stepBack, child: const Text('Undo edit')),
+            TextButton(onPressed: _openAsk, child: const Text('Ask again')),
           ]),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 140),
-            margin: const EdgeInsets.only(right: 6),
-            padding: const EdgeInsets.only(left: 12, right: 2),
-            decoration: BoxDecoration(
-              color: const Color(0x80FFFFFF),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _askFocus.hasFocus ? const Color(0x66000000) : const Color(0x24000000), width: .8),
-            ),
-            child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _askText,
-                  focusNode: _askFocus,
-                  minLines: 1,
-                  maxLines: 3,
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: _send,
-                  textInputAction: TextInputAction.send,
-                  style: Txt.body.copyWith(height: 1.35),
-                  cursorColor: Neutral.primary,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: InputBorder.none,
-                    hintText: 'What should change?',
-                    hintStyle: Txt.body.copyWith(height: 1.35, color: const Color(0xA6000000)),
-                    contentPadding: const EdgeInsets.only(top: 8, bottom: 12, right: 8),
-                  ),
-                ),
-              ),
-              Semantics(
-                label: 'Send request', button: true, enabled: canSend,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: canSend ? () => _send(_askText.text) : null,
-                  child: SizedBox(
-                    width: 44, height: 44,
-                    child: Center(child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 140),
-                      curve: Motion.settle,
-                      width: 34, height: 34,
-                      decoration: BoxDecoration(
-                        color: canSend ? Neutral.primary : const Color(0x14000000),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Center(child: Glyph(G.up, size: 18,
-                        color: canSend ? Neutral.surface : const Color(0x66000000), weight: 1.8)),
-                    )),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          ),
-          if (!typing && _askText.text.trim().isEmpty) ...[
-            const SizedBox(height: 4),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                for (final text in _suggestions)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 16),
-                    child: Semantics(
-                      button: true,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () { Haptics.tick(); _send(text); },
-                        child: SizedBox(height: 44, child: Center(
-                          child: Text(text, style: Txt.small.copyWith(color: const Color(0xB3000000))),
-                        )),
-                      ),
-                    ),
-                  ),
-              ]),
-            ),
-          ],
+        ] else ...[
+          Text('Your photo is unchanged. Your request is still here.', style: Txt.small.copyWith(height: 1.4)),
+          const SizedBox(height: 6),
+          Row(children: [
+            TextButton(onPressed: _openAsk, child: const Text('Edit request')),
+            const Spacer(),
+            FilledButton(onPressed: request == null ? null : () => _ask(request), child: const Text('Retry')),
+          ]),
         ],
-      ),
+      ]),
     );
   }
 

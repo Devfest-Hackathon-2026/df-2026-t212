@@ -84,26 +84,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(areaOf(tester)!.toJson(), before);
   });
-  testWidgets('Ask keeps photo above keyboard and hides auxiliary controls while typing', (tester) async {
+  testWidgets('Ask keeps photo above keyboard and keeps marking reachable while typing', (tester) async {
     await openEditor(tester);
     await tester.tap(find.text('Ask'));
     await tester.pumpAndSettle();
     expect(find.text('Only the subject'), findsOneWidget);
-    expect(find.text('Mask'), findsOneWidget);
+    expect(find.text('Mark photo'), findsOneWidget);
     await tester.tap(find.byType(TextField));
     tester.view.viewInsets = const FakeViewPadding(bottom: 346);
     addTearDown(tester.view.resetViewInsets);
     await tester.enterText(find.byType(TextField), 'オレンジを除外して、ピンクを残してほしい');
     await tester.pumpAndSettle();
     expect(find.text('Only the subject'), findsNothing);
-    expect(find.text('Mask'), findsNothing);
+    expect(find.text('Mark photo'), findsOneWidget);
     final photo = tester.getRect(find.byType(Hero));
     final field = tester.getRect(find.byType(TextField));
     expect(photo.bottom, lessThan(field.top));
     expect(photo.height, greaterThan(150));
     expect(field.bottom, lessThan(844 - 346));
     expect(tester.takeException(), isNull);
-    await tester.tap(find.byTooltip('Close'));
+    await tester.tap(find.byTooltip('Close Ask'));
     await tester.pumpAndSettle();
     expect(find.byType(TextField), findsNothing);
     expect(find.text('Area'), findsOneWidget);

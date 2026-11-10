@@ -862,7 +862,7 @@ class Store extends ChangeNotifier {
   /// settled one, nothing is saved until the person keeps it.
   AgentRun reviseNow(PhotoItem it, Recipe current, Revision request) {
     _runs.remove(it.key)?.cancel();
-    final run = AgentRun()..recipe = current.copy()..requestText = request.text;
+    final run = AgentRun()..recipe = current.copy()..requestText = request.text..revision = request;
     _runs[it.key] = run;
     notifyListeners();
     unawaited(_revise(it, current, request, run));
