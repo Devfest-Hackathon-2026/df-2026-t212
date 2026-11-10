@@ -47,11 +47,15 @@ jobs:
           export config_path
           trap 'rm -f "$config_path"' EXIT
           python3 - <<'PY'
-          import json, os
+          import base64, json, os
           data = json.loads(os.environ['TEST_DEFINES'])
           if not data.get('OPENAI_API_KEY'):
               raise SystemExit('AFTER_HUE_TEST_DEFINES needs OPENAI_API_KEY')
           data['AFTER_HUE_DEMO_TOOLS'] = 'true'
+          # Gradle failures may echo encoded Dart defines. Mask both forms.
+          key = data['OPENAI_API_KEY']
+          print('::add-mask::' + key)
+          print('::add-mask::' + base64.b64encode(('OPENAI_API_KEY=' + key).encode()).decode())
           with open(os.open(os.environ['config_path'], os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600), 'w') as f:
               json.dump(data, f)
           PY
