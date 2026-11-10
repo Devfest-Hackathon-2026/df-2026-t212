@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -151,6 +152,7 @@ void main() {
     'phone': const Size(393, 852),
     'landscape': const Size(852, 393),
     'small-phone': const Size(320, 568),
+    'large-text': const Size(393, 852),
   }.entries) {
     testWidgets('print controls and details fit ${entry.key}', (tester) async {
       final capture = Platform.environment['AFTER_HUE_REVIEW_FONT'] != null;
@@ -163,7 +165,11 @@ void main() {
       late PrintContent content;
       await tester.runAsync(() async { content = await sampleContent(); });
       final boundary = GlobalKey();
-      await tester.pumpWidget(MaterialApp(debugShowCheckedModeBanner: false, theme: buildTheme(), home: RepaintBoundary(
+      await tester.pumpWidget(MaterialApp(debugShowCheckedModeBanner: false, theme: buildTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(textScaler: entry.key == 'large-text'
+            ? TextScaler.linear(1.5) : TextScaler.noScaling), child: child!),
+        home: RepaintBoundary(
         key: boundary,
         child: PrintScreen(loadContent: () async => content, taken: DateTime(2026, 11, 10)),
       )));
@@ -233,6 +239,26 @@ void main() {
       debugDisableShadows = true;
     });
   }
+
+  testWidgets('loading preserves a paper orientation chosen by the user', (tester) async {
+    late PrintContent content;
+    await tester.runAsync(() async { content = await sampleContent(); });
+    final ready = Completer<PrintContent>();
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(), home: PrintScreen(
+      loadContent: () => ready.future, taken: DateTime(2026),
+    )));
+    await tester.tap(find.byTooltip('Use landscape paper'));
+    await tester.pump();
+    expect(find.byTooltip('Use portrait paper'), findsOneWidget);
+    ready.complete(content);
+    for (var i = 0; i < 20 && find.byType(CircularProgressIndicator).evaluate().isNotEmpty; i++) {
+      await tester.runAsync(() async { await Future<void>.delayed(const Duration(milliseconds: 50)); });
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Use portrait paper'), findsOneWidget,
+      reason: 'The source aspect ratio is only a default, not an override of a user choice');
+  });
 
   testWidgets('unavailable original offers retry and never enables output', (tester) async {
     var attempts = 0;

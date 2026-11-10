@@ -40,6 +40,7 @@ class _PrintScreenState extends State<PrintScreen> {
   PrintStyle _style = PrintStyle.instant;
   PrintPaper _paper = PrintPaper.l;
   bool _landscape = false, _fill = false, _colors = false, _date = false;
+  bool _orientationChosen = false;
   final _title = TextEditingController();
   final _place = TextEditingController();
   final _shareKey = GlobalKey();
@@ -93,7 +94,7 @@ class _PrintScreenState extends State<PrintScreen> {
         _photo = photo;
         _textures = textures;
         _palette = content.colors.take(6).toList();
-        _landscape = photo.width > photo.height;
+        if (!_orientationChosen) _landscape = photo.width > photo.height;
       });
     } catch (_) {
       if (mounted) setState(() => _loadError = 'Could not load this photo. Check that the original is available and try again.');
@@ -174,9 +175,10 @@ class _PrintScreenState extends State<PrintScreen> {
     padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
     child: Column(mainAxisSize: MainAxisSize.min, children: [
       Row(children: [
-        ModeChoice('Title', selected: !_editingPlace, onTap: () => _selectDetail(false)),
-        ModeChoice('Place', selected: _editingPlace, onTap: () => _selectDetail(true)),
-        const Spacer(),
+        Expanded(child: Wrap(children: [
+          ModeChoice('Title', selected: !_editingPlace, onTap: () => _selectDetail(false)),
+          ModeChoice('Place', selected: _editingPlace, onTap: () => _selectDetail(true)),
+        ])),
         TextAction('Done', onTap: () {
           _detailFocus.unfocus();
           setState(() => _editingDetails = false);
@@ -278,7 +280,10 @@ class _PrintScreenState extends State<PrintScreen> {
           onChanged: (p) { if (p != null) setState(() => _paper = p); },
         )),
         IconButton(tooltip: _landscape ? 'Use portrait paper' : 'Use landscape paper',
-          onPressed: () => setState(() => _landscape = !_landscape),
+          onPressed: () => setState(() {
+            _orientationChosen = true;
+            _landscape = !_landscape;
+          }),
           icon: const Icon(Icons.crop_rotate, size: 22)),
       ]),
       Row(children: [
