@@ -32,6 +32,7 @@ OpenStreetMapのデータはODbL、OpenMapTilesのスキーマはCC BY 4.0で公
 |---|---|---|---|
 | Flutter / Dart SDK | Flutter 3.47.9 / Dart 3.13.7（開発環境） | 共通UIとアプリ処理 | FlutterのBSD-3-Clause。SDKに含まれる第三者の表示はSDK側の通知を参照 |
 | [crypto](https://pub.dev/packages/crypto) | 3.0.8 | 同一ファイルのハッシュ確認 | BSD-3-Clause |
+| [flutter_secure_storage](https://pub.dev/packages/flutter_secure_storage) | 11.2.0 | 匿名認証の再認証トークンを安全に保存 | BSD-3-Clause |
 | [http](https://pub.dev/packages/http) | 1.6.0 | API通信 | BSD-3-Clause |
 | [image](https://pub.dev/packages/image) | 4.12.0 | 画像の読み書きと変換 | MIT |
 | [maplibre](https://pub.dev/packages/maplibre) | 0.3.7+1 | 地図表示 | BSD-3-Clause |
@@ -43,17 +44,17 @@ OpenStreetMapのデータはODbL、OpenMapTilesのスキーマはCC BY 4.0で公
 
 解決済みDartパッケージから収集したライセンス本文は[第三者ライセンス通知](third-party-notices.txt)に保存しています。対象と収集できなかった項目は[依存ライセンス一覧](dependency-licenses.md)に記載しています。開発用・他プラットフォーム用のパッケージも含むため、これは最終バイナリの全依存を解析したSBOMではありません。
 
-iOSのMapLibre Nativeは、Swift Packageの固定ファイルで6.29.0を参照しています。ネイティブのバイナリに含まれる全ライセンスの収集と最終配布物での表示は、この一覧とは別に確認が必要です。Appleのカメラ・写真・物体抽出等はOS APIを利用しています。
+iOSのMapLibre Nativeは、Swift Packageの固定ファイルで6.29.0を参照しています。この固定版のバイナリに同梱されたLICENSE原文は、アプリの「Settings → Licenses」から読めるよう収録しました。ネイティブの推移的依存すべてのライセンス収集を完了したという意味ではありません。Appleのカメラ・写真・物体抽出等はOS APIを利用しています。
 
 ## フォントとアイコン
 
-iOSの本文は端末のHelvetica Neue、等幅表示はMenloを指定しています。これらのフォントファイルを独自にアプリへ同梱する実装ではありません。他プラットフォームでは標準フォントへ切り替えます。画面にはFlutterに含まれるMaterial Iconsと、アプリ独自の描画アイコンがあります。
+iOSの本文は端末のHelvetica Neue、等幅表示はMenloを指定しています。これらのフォントファイルを独自にアプリへ同梱する実装ではありません。他プラットフォームでは標準フォントへ切り替えます。画面にはFlutterに含まれるMaterial Iconsと、アプリ独自の描画アイコンがあります。Material Iconsは使用SDKに添付されたライセンス原文を[追加ライセンス](../../lib/data/bundled_licenses.dart)に収録し、Flutterが集めたパッケージライセンスとともに設定画面から表示します。
 
 地図用フォントはOpenFreeMapの配信元を利用します。最終配布物に別途フォントファイルを追加した場合は、そのファイルの出典とライセンスも一覧へ追加します。
 
 ## 外部AIサービスと開発支援
 
-プロダクト内のクラウドAIには、現時点ではOpenAI APIを使用しています。サービスから返された編集設定を使い、画像自体の描画は端末で行います。APIの利用を、第三者画像の出典や公開許可の代わりにはしません。
+プロダクト内のクラウドAIには、Cloud Runを経由したVertex AIのGeminiを使用します。Firebase Authenticationで匿名認証を行い、Firestoreに利用回数を記録します。サービスから返された編集設定を使い、画像自体の描画は端末で行います。APIの利用を、第三者画像の出典や公開許可の代わりにはしません。
 
 開発では、AIによる実装支援と画像生成を使っています。最終の著作物利用シートには、利用した各サービス、生成した素材、採用範囲を制作記録に合わせて記入します。現在のリポジトリから確認できないモデル名や利用条件は、この作業版では確定していません。
 
@@ -63,8 +64,10 @@ iOSの本文は端末のHelvetica Neue、等幅表示はMenloを指定してい�
 
 別シートにはチーム名とメンバーの確認欄、記載の正確さ・第三者の権利・トラブル時の責任に関する確認があります。これは各メンバーが実際の利用内容を確認して記入する欄です。この資料の作成をもって、確認や同意が完了したことにはしません。
 
-## Exploreを提出に含める場合
+## クラウドAIサーバーの依存
 
-Exploreブランチでは、Node.jsのバックエンドに `express`、`firebase-admin`、`@google-cloud/vision`、`sharp` を追加しています。また、Cloud Run、Firestore、Cloud Storage、Firebase Authentication、Cloud Vision SafeSearchを使用する構成です。現時点では未デプロイであり、既存アプリのライセンス収集には、これらの追加依存を含めていません。
+今回のAIサーバーはNode.js上で動き、Express 5.3.0、google-auth-library 11.3.4、firebase-admin 14.5.0を直接利用します。HTTP API、Google Cloudの実行用認証、Firebase認証とFirestoreの操作を担います。
 
-Exploreを採用する場合は、そのブランチのロックファイルと実際のLICENSEから、追加依存とネイティブ画像ライブラリの通知を収集します。Googleの各サービスも「API」として利用条件を確認し、指定シートへ記載します。単にGCPプロジェクトを作成したことを、これらのサービスの利用・審査適合の証拠にはしません。
+`server/ai/package-lock.json` とインストールされた各パッケージから、212パッケージの宣言とLICENSE/NOTICE類を確認しました。[サーバー依存一覧](backend-dependency-licenses.md)と[収集した原文](backend-third-party-notices.txt)にまとめています。15パッケージはトップレベルの通知ファイルを収集できていません。コンテナのOSとNode.jsランタイム全体を含むSBOMではなく、未収集の扱いは一覧に残しています。
+
+Google Cloud Run、Vertex AI、Firestore、Firebase Authenticationは外部サービスとして利用します。サービス利用条件は、ソースコードのライセンスと分けて指定シートに記載します。Exploreの追加依存やCloud Vision SafeSearchは今回の提出対象に含めません。

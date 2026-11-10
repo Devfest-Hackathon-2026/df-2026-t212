@@ -1,8 +1,10 @@
 # 依存ライセンスの収集記録
 
-2026年11月10日、`.dart_tool/package_config.json`が参照する実際のパッケージから、トップレベルのLICENSE本文を収集しました。開発用と他プラットフォーム用の依存も含みます。ネイティブSDK内部の全依存はこの方法だけでは網羅できません。
+2026年11月10日、`.dart_tool/package_config.json` が参照する実際のパッケージから、トップレベルのNOTICESまたはLICENSE本文を収集しました。開発用と他プラットフォーム用の依存も含みます。ネイティブSDK内部の全依存はこの方法だけでは網羅できません。
 
-収集数: 105。未収集: flutter_test, flutter_web_plugins。
+収集数: 112。未収集: flutter_localizations, flutter_test, flutter_web_plugins。
+
+本文: [第三者ライセンス通知](third-party-notices.txt)。
 
 | パッケージ | 解決された版 | 収集結果 |
 |---|---|---|
@@ -27,8 +29,15 @@
 | fixnum | 1.1.1 | LICENSEを収集 |
 | flutter | SDK | LICENSEを収集 |
 | flutter_lints | 6.0.0 | LICENSEを収集 |
-| flutter_test | — | トップレベルLICENSEが見つからず、未収集 |
-| flutter_web_plugins | — | トップレベルLICENSEが見つからず、未収集 |
+| flutter_localizations | SDK | トップレベルの通知ファイル未収集 |
+| flutter_secure_storage | 11.2.0 | LICENSEを収集 |
+| flutter_secure_storage_darwin | 0.4.3 | LICENSEを収集 |
+| flutter_secure_storage_linux | 3.0.3 | LICENSEを収集 |
+| flutter_secure_storage_platform_interface | 2.1.1 | LICENSEを収集 |
+| flutter_secure_storage_web | 2.1.1 | LICENSEを収集 |
+| flutter_secure_storage_windows | 4.2.2 | LICENSEを収集 |
+| flutter_test | SDK | トップレベルの通知ファイル未収集 |
+| flutter_web_plugins | SDK | トップレベルの通知ファイル未収集 |
 | geobase | 1.5.0 | LICENSEを収集 |
 | glob | 2.2.0 | LICENSEを収集 |
 | hooks | 2.2.0 | LICENSEを収集 |
@@ -36,6 +45,7 @@
 | http | 1.6.0 | LICENSEを収集 |
 | http_parser | 4.1.2 | LICENSEを収集 |
 | image | 4.12.0 | LICENSEを収集 |
+| intl | 0.20.3 # This should follow semver to not break Flutter, where it is unpinned, see https://github.com/flutter/flutter/blob/main/pubspec.yaml | LICENSEを収集 |
 | jni | 1.1.2 | LICENSEを収集 |
 | jni_flutter | 1.0.4+1 | LICENSEを収集 |
 | jni_util | 1.0.0 | LICENSEを収集 |
@@ -113,5 +123,3 @@
 | xdg_directories | 1.1.0 | LICENSEを収集 |
 | xml | 7.1.0 | LICENSEを収集 |
 | yaml | 3.1.4 | LICENSEを収集 |
-
-本文は[third-party-notices.txt](third-party-notices.txt)を参照してください。
