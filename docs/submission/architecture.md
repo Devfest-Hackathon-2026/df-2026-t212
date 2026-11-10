@@ -2,7 +2,7 @@
 
 After Hueは、写真の解釈と編集の判断にGoogle CloudのGeminiを使い、実際の画素処理は端末で行います。AIと人が同じ編集設定を操作するため、自動処理の結果を後から手動で調整できます。
 
-Google Cloudプロジェクトは `after-hue-pdhaku0`、Cloud Runの配置先は `asia-northeast1` です。[AIサービス](https://after-hue-ai-675070172838.asia-northeast1.run.app/health)は配置済みで、ヘルスチェックの200応答、Firebase匿名認証の通過、未認証リクエストの401拒否、Vertex AIによる写真の選別を実接続で確認しました。続いて、途中画像を二度確認する現像、追加の編集依頼、端末側の描画まで完走しました。これは一枚の写真でのクラウド経路の確認であり、実機UIでの保存操作や全端末の品質を保証するものではありません。[確認記録](verification.md)に操作の流れを残しています。
+Google Cloudプロジェクトは `after-hue-pdhaku0`、Cloud Runの配置先は `asia-northeast1` です。[AIサービス](https://after-hue-ai-675070172838.asia-northeast1.run.app/health)は配置済みで、ヘルスチェックの200応答、Firebase匿名認証の通過、未認証リクエストの401拒否、Vertex AIによる写真の選別を実接続で確認しました。続いて、途中画像を二度確認する現像、追加の編集依頼、端末側の描画まで完走しました。[確認記録](verification.md)に、使用した一枚の写真での操作の流れを残しています。
 
 ```mermaid
 flowchart LR
