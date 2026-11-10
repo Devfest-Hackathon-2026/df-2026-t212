@@ -43,7 +43,7 @@ void main() {
     messenger.setMockMethodCallHandler(paths, (_) async => folder.path);
     final bytes = (await rootBundle.load('assets/samples/lantern.jpg')).buffer.asUint8List();
     messenger.setMockMethodCallHandler(channel, (call) async => switch(call.method) {
-      'fetchEntityProperties' => {'id': 'background-photo', 'type': 1, 'width': 600, 'height': 900},
+      'fetchEntityProperties' => {'id': '42', 'type': 1, 'width': 600, 'height': 900},
       'getThumb' => call.arguments['option']['width'] == 768 ? bytes : null,
       _ => null,
     });
@@ -51,7 +51,7 @@ void main() {
     final agent = PendingAgent();
     store.agentForTesting = agent;
     await tester.runAsync(store.init);
-    final imported = await store.importRefs([PhotoRef(id: 'background-photo', taken: DateTime(2026), width: 600, height: 900)]);
+    final imported = await store.importRefs([PhotoRef(id: '42', taken: DateTime(2026), width: 600, height: 900)]);
     final item = imported.single;
     final before = Recipe(colors: [keptColorFromHex('#CC3355')!]);
     store.setEdit(item, before);

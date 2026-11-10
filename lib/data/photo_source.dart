@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:photo_manager/photo_manager.dart';
 
 import '../core/renderer.dart';
+import 'android_source_snapshot.dart';
 
 enum Access { unknown, denied, limited, full }
 
@@ -25,7 +26,10 @@ class PhotoSource {
   static const _snapshotChannel = MethodChannel('afterhue/source_snapshot');
 
   static Future<int?> currentVersion(String id) async {
-    try { return await _snapshotChannel.invokeMethod<int>('version', id); }
+    try {
+      if (Platform.isAndroid) return await AndroidSourceSnapshot.version(id);
+      return await _snapshotChannel.invokeMethod<int>('version', id);
+    }
     catch (_) { return null; }
   }
 
@@ -33,7 +37,9 @@ class PhotoSource {
     final folder = snapshots;
     if (folder == null) return null;
     try {
-      final data = await _snapshotChannel.invokeMapMethod<String, dynamic>('capture', id);
+      final data = Platform.isAndroid
+          ? await AndroidSourceSnapshot.capture(id)
+          : await _snapshotChannel.invokeMapMethod<String, dynamic>('capture', id);
       final bytes = data?['bytes'] as Uint8List?;
       if (bytes == null || bytes.isEmpty) return null;
       final revision = await _hashSnapshot(bytes);
@@ -55,10 +61,14 @@ class PhotoSource {
     try { return await File('${snapshots!.path}/$revision').readAsBytes(); }
     catch (_) { return null; }
   }
+  static const permissionOption = PermissionRequestOption(
+    androidPermission: AndroidPermission(type: RequestType.image, mediaLocation: true),
+  );
+
   static Future<Access> access({bool request = false}) async {
     final state = request
-        ? await PhotoManager.requestPermissionExtend()
-        : await PhotoManager.getPermissionState(requestOption: const PermissionRequestOption());
+        ? await PhotoManager.requestPermissionExtend(requestOption: permissionOption)
+        : await PhotoManager.getPermissionState(requestOption: permissionOption);
     switch (state) {
       case PermissionState.authorized:
         return Access.full;
@@ -72,7 +82,7 @@ class PhotoSource {
     }
   }
 
-  static Future<void> presentLimitedPicker() => PhotoManager.presentLimited();
+  static Future<void> presentLimitedPicker() => PhotoManager.presentLimited(type: RequestType.image);
 
   /// Deletes photos from the library. iOS asks the person first, and the
   /// photos go to Recently Deleted. Returns the ids that were deleted.

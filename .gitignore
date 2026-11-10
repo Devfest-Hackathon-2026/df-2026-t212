@@ -58,3 +58,6 @@ tools/develop/out/
 tools/develop/gen/*.png
 tools/develop/gen/codex.log
 .env.op
+
+# Local dart-define configuration (API keys)
+/config/*.local.json

@@ -871,7 +871,7 @@ class Store extends ChangeNotifier {
 
   Future<void> _revise(PhotoItem it, Recipe current, Revision request, AgentRun run) async {
     final generation = _generation;
-    final tag = it.id.substring(0, 6);
+    final tag = it.id.substring(0, math.min(6, it.id.length));
     _log('$tag revise: ${request.text ?? ''} ${request.marks.map((m) => '${m.intent.name}@${m.x.toStringAsFixed(2)},${m.y.toStringAsFixed(2)}').join(' ')}');
     try {
       final px = await run.guard(sourcePixels(it, 768));
@@ -968,13 +968,13 @@ class Store extends ChangeNotifier {
         if (!v.develop) {
           it.state = Develop.manual;
           it.note = v.reason ?? 'No clear subject';
-          _log('${it.id.substring(0, 6)} skipped: ${it.note}');
+          _log('${it.id.substring(0, math.min(6, it.id.length))} skipped: ${it.note}');
           throw _Skipped();
         }
       }
       Recipe recipe;
       try {
-        recipe = await agent.develop(px, originalSize: (width: it.width, height: it.height), log: (s) => _log('${it.id.substring(0, 6)} $s'), run: run);
+        recipe = await agent.develop(px, originalSize: (width: it.width, height: it.height), log: (s) => _log('${it.id.substring(0, math.min(6, it.id.length))} $s'), run: run);
       } on AgentCancelled {
         rethrow;
       } catch (e) {
@@ -997,7 +997,7 @@ class Store extends ChangeNotifier {
         _today++;
       }
     } on AgentCancelled {
-      if (_byKey[it.key] == it) _log('${it.id.substring(0, 6)} taken over');
+      if (_byKey[it.key] == it) _log('${it.id.substring(0, math.min(6, it.id.length))} taken over');
       return;
     } on _Skipped {
       // Left for a person; saved below.
@@ -1034,6 +1034,7 @@ class Store extends ChangeNotifier {
   Future<String> judgeName() async {
     final st = await AppleJudge.status();
     if (st == 'ok') return 'Apple, on this iPhone';
+    if (st == 'os') return agent is LocalAgent ? 'Color only · on device' : _judgeModel;
     final why = switch (st) {
       'appleIntelligenceNotEnabled' => 'Apple Intelligence off',
       'modelNotReady' => 'Apple model downloading',
@@ -1050,7 +1051,7 @@ class Store extends ChangeNotifier {
     final local = await run.guard(screenOnDevice(px));
     if (!local.develop) return local;
     void say(String who, Verdict v) =>
-        _log('${it.id.substring(0, 6)} $who: ${v.develop ? 'yes' : 'no'} · ${v.subject} · ${v.reason}');
+        _log('${it.id.substring(0, math.min(6, it.id.length))} $who: ${v.develop ? 'yes' : 'no'} · ${v.subject} · ${v.reason}');
     // Apple's on-device model first: free and private.
     try {
       final v = await run.guard(AppleJudge.judge(px));

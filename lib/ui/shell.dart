@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
@@ -36,6 +37,14 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   void _camera() {
     Haptics.light();
+    if (Platform.isAndroid) {
+      showDialog<void>(context: context, builder: (context) => AlertDialog(
+        title: const Text('Camera is not ready on Android'),
+        content: const Text('Take a photo with your phone’s camera, then use + to import it into After Hue.'),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+      ));
+      return;
+    }
     Navigator.push(context, CameraRoute());
   }
 
