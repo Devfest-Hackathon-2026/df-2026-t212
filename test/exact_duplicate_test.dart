@@ -46,11 +46,15 @@ void main() {
     expect(copy.shown, isFalse);
     expect(store.byKey('exact-similar')!.originalSha256, isNot(first.originalSha256));
     expect(store.byKey('exact-cloud')!.shown, isTrue);
-    expect(reads, ['exact-original', 'exact-copy', 'exact-similar']);
+    final expectedReads = ['exact-original', 'exact-copy', 'exact-similar',
+      // On Android (and Linux CI), photo_manager reports local availability
+      // unconditionally; a missing source is then discovered by the file read.
+      if (!Platform.isIOS && !Platform.isMacOS) 'exact-cloud'];
+    expect(reads, expectedReads);
     expect(store.activity.first.count(ActivityOutcome.skipped), 1);
     expect(store.activity.first.count(ActivityOutcome.added), 3);
     expect(await PhotoSource.originalHash(first.id), first.originalSha256);
-    expect(reads.length, 3, reason: 'Hashes are reused, not recomputed for every import.');
+    expect(reads, expectedReads, reason: 'Hashes are reused, not recomputed for every import.');
     expect(await store.importRefs([ref('exact-copy')], autoDevelop: true), isEmpty);
     expect(store.runFor(copy), isNull, reason: 'An exact duplicate must not consume AI processing.');
     expect(store.pendingCount, 0);
