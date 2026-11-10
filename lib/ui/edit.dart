@@ -688,7 +688,7 @@ class _EditScreenState extends State<EditScreen> {
         child: Column(
           children: [
             SizedBox(height: pad.top),
-            Row(
+            if (!(_asking && keyboard > 0)) Row(
               children: [
                 TextAction('Cancel', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
                 _HistoryButton(redo: false, onTap: _undo.isEmpty ? null : _stepBack),
@@ -1032,8 +1032,6 @@ class _EditScreenState extends State<EditScreen> {
     );
   }
 
-  static const _suggestions = ['Only the subject', 'Less color', 'More mood'];
-
   void _openAsk() {
     if (_run != null) return;
     Haptics.tick();
@@ -1089,51 +1087,35 @@ class _EditScreenState extends State<EditScreen> {
       }
       return Column(children: [
         Expanded(child: _photo()),
-        ConstrainedBox(constraints: BoxConstraints(maxHeight: box.maxHeight * .58), child: panel),
+        ConstrainedBox(constraints: BoxConstraints(maxHeight: math.min(box.maxHeight, _asking && keyboard > 0 ? 220 : box.maxHeight * .58)), child: panel),
       ]);
     },
   );
 
-  /// The field stays mounted as focus, keyboard and mark controls change.
+  /// One input row stays mounted through typing, keyboard dismissal and marking.
+  /// The photo, not a form, takes the space above the software keyboard.
   Widget _askPanel() {
     final canSend = _askText.text.trim().isNotEmpty || _marks.isNotEmpty;
+    final typing = !_marking && (_askFocus.hasFocus || MediaQuery.viewInsetsOf(context).bottom > 0);
+    final shortViewport = MediaQuery.sizeOf(context).height - MediaQuery.viewInsetsOf(context).bottom < 300;
     return Glass(
+      key: const ValueKey('ask-composer'),
       dock: true, radius: 22,
-      padding: const EdgeInsets.fromLTRB(16, 0, 12, 10),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(child: Text('Describe your edit', style: Txt.label)),
-          IconButton(
-            tooltip: 'Close Ask', onPressed: _closeAsk,
+      padding: const EdgeInsets.all(8),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (!typing) Row(children: [
+          Expanded(child: Align(alignment: Alignment.centerLeft, child: TextButton(
+            onPressed: _toggleMarking,
+            child: Text(_marking ? 'Write instead' : _marks.isEmpty ? 'Mark photo' : '${_marks.length} marks', style: Txt.small.copyWith(color: Neutral.primary)),
+          ))),
+          SizedBox(height: 44, child: _ViewButton(label: 'Before', on: _before, onHold: (on) => setState(() => _before = on))),
+          IconButton(tooltip: 'Close Ask', onPressed: _closeAsk,
             constraints: const BoxConstraints.tightFor(width: 44, height: 44),
-            padding: EdgeInsets.zero, icon: const Glyph(G.close, size: 16, color: Neutral.secondary),
-          ),
+            padding: EdgeInsets.zero, icon: const Glyph(G.close, size: 16, color: Neutral.secondary)),
         ]),
-        TextField(
-          key: const ValueKey('ask-input'),
-          controller: _askText, focusNode: _askFocus,
-          minLines: _marking ? 1 : 2, maxLines: 4,
-          onChanged: (_) => setState(() {}),
-          onTap: () {
-            if (_marking) setState(() => _marking = false);
-            _askFocus.requestFocus();
-          },
-          textInputAction: TextInputAction.newline,
-          textCapitalization: TextCapitalization.sentences,
-          style: Txt.body.copyWith(height: 1.35), cursorColor: Neutral.primary,
-          decoration: InputDecoration(
-            hintText: 'Keep the flowers, remove the orange…',
-            hintStyle: Txt.body.copyWith(height: 1.35, color: Neutral.secondary),
-            filled: true, fillColor: const Color(0x80FFFFFF),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x26000000), width: .8)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x26000000), width: .8)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x70000000), width: 1)),
-          ),
-        ),
-        if (_marking) ...[
-          const SizedBox(height: 8),
-          Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        if (_marking) Padding(
+          padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+          child: Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
             for (final intent in [MarkIntent.keep, MarkIntent.remove])
               ChoiceChip(
                 label: Text(intent == MarkIntent.keep ? 'Keep color' : 'Remove color'),
@@ -1145,35 +1127,42 @@ class _EditScreenState extends State<EditScreen> {
               ),
             if (_marks.isNotEmpty) TextButton(onPressed: () => setState(_marks.clear), child: const Text('Clear marks')),
           ]),
-          Text('Tap an object. Tap its mark again to clear it.', style: Txt.small.copyWith(height: 1.35)),
-        ],
-        if (_askText.text.trim().isEmpty && !_marking) ...[
-          const SizedBox(height: 8),
-          SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
-            for (final text in _suggestions) Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: ActionChip(
-                label: Text(text), labelStyle: Txt.small.copyWith(color: Neutral.primary),
-                backgroundColor: Colors.transparent,
-                side: const BorderSide(color: Color(0x24000000), width: .8),
-                onPressed: () {
-                  Haptics.tick();
-                  setState(() { _askText.text = text; _askText.selection = TextSelection.collapsed(offset: text.length); });
-                  _askFocus.requestFocus();
-                },
-              ),
+        ),
+        Row(key: const ValueKey('ask-input-row'), crossAxisAlignment: CrossAxisAlignment.end, children: [
+          if (typing) IconButton(
+            tooltip: 'View photo', onPressed: _askFocus.unfocus,
+            constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+            padding: EdgeInsets.zero,
+            icon: const Icon(Icons.keyboard_hide_outlined, size: 22, color: Neutral.primary),
+          ),
+          Expanded(key: const ValueKey('ask-field-slot'), child: TextField(
+            key: const ValueKey('ask-input'),
+            controller: _askText, focusNode: _askFocus,
+            minLines: 1, maxLines: shortViewport ? 1 : 3,
+            onChanged: (_) => setState(() {}),
+            onTap: () {
+              if (_marking) setState(() => _marking = false);
+              _askFocus.requestFocus();
+            },
+            textInputAction: TextInputAction.newline,
+            textCapitalization: TextCapitalization.sentences,
+            style: Txt.body.copyWith(height: 1.35), cursorColor: Neutral.primary,
+            decoration: InputDecoration(
+              hintText: _marks.isEmpty ? 'Describe an edit…' : 'Add a note…',
+              hintMaxLines: 1,
+              hintStyle: Txt.body.copyWith(height: 1.35, color: Neutral.secondary),
+              filled: true, fillColor: const Color(0x80FFFFFF),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x26000000), width: .8)),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x26000000), width: .8)),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Color(0x70000000), width: 1)),
             ),
-          ])),
-        ],
-        const SizedBox(height: 6),
-        Row(children: [
-          Expanded(child: Align(alignment: Alignment.centerLeft, child: TextButton(onPressed: _toggleMarking,
-            child: Text(_marking ? 'Write instead' : _marks.isEmpty ? 'Mark photo' : '${_marks.length} marks', maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small.copyWith(color: Neutral.primary))))),
-          SizedBox(height: 44, child: _ViewButton(label: 'Before', on: _before, onHold: (on) => setState(() => _before = on))),
+          )),
           const SizedBox(width: 8),
           FilledButton(
+            key: const ValueKey('ask-send'),
             onPressed: canSend && _run == null ? () => _send(_askText.text) : null,
-            style: FilledButton.styleFrom(minimumSize: const Size(64, 44), padding: const EdgeInsets.symmetric(horizontal: 16),
+            style: FilledButton.styleFrom(minimumSize: const Size(56, 44), padding: const EdgeInsets.symmetric(horizontal: 12),
               backgroundColor: Neutral.primary, foregroundColor: Neutral.surface, textStyle: Txt.label),
             child: const Text('Send'),
           ),

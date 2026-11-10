@@ -84,25 +84,41 @@ void main() {
     await tester.pumpAndSettle();
     expect(areaOf(tester)!.toJson(), before);
   });
-  testWidgets('Ask keeps photo above keyboard and keeps marking reachable while typing', (tester) async {
+  testWidgets('empty Ask keeps the photo large and the complete Send button above a tall keyboard', (tester) async {
     await openEditor(tester);
+    tester.view.physicalSize = const Size(393, 852);
+    tester.view.padding = const FakeViewPadding(top: 62, bottom: 34);
+    addTearDown(tester.view.resetPadding);
+    addTearDown(tester.view.resetViewInsets);
     await tester.tap(find.text('Ask'));
     await tester.pumpAndSettle();
-    expect(find.text('Only the subject'), findsOneWidget);
-    expect(find.text('Mark photo'), findsOneWidget);
-    await tester.tap(find.byType(TextField));
-    tester.view.viewInsets = const FakeViewPadding(bottom: 346);
-    addTearDown(tester.view.resetViewInsets);
+    final input = tester.state<EditableTextState>(find.byType(EditableText));
+    for (final height in [300.0, 367.0, 430.0]) {
+      tester.view.viewInsets = FakeViewPadding(bottom: height);
+      await tester.pumpAndSettle();
+      // The user's reported state was an empty draft with a third-party keyboard.
+      expect(find.text('Only the subject'), findsNothing);
+      expect(find.text('Describe your edit'), findsNothing);
+      final photo = tester.getRect(find.byType(Hero));
+      final send = tester.getRect(find.byKey(const ValueKey('ask-send')));
+      final composer = tester.getRect(find.byKey(const ValueKey('ask-composer')));
+      expect(photo.height, greaterThan(height > 400 ? 240 : 300));
+      expect(photo.width, greaterThan(160));
+      expect(composer.height, lessThan(90));
+      expect(send.height, greaterThanOrEqualTo(44));
+      expect(send.bottom, lessThanOrEqualTo(852 - height - 8));
+      expect(identical(tester.state<EditableTextState>(find.byType(EditableText)), input), isTrue);
+      expect(tester.takeException(), isNull);
+    }
     await tester.enterText(find.byType(TextField), 'オレンジを除外して、ピンクを残してほしい');
     await tester.pumpAndSettle();
-    expect(find.text('Only the subject'), findsNothing);
+    expect(tester.widget<FilledButton>(find.byKey(const ValueKey('ask-send'))).onPressed, isNotNull);
+    expect(tester.getRect(find.byKey(const ValueKey('ask-send'))).bottom, lessThanOrEqualTo(852 - 430 - 8));
+    expect(tester.getRect(find.byType(Hero)).height, greaterThan(220));
+    await tester.tap(find.byTooltip('View photo'));
+    tester.view.resetViewInsets();
+    await tester.pumpAndSettle();
     expect(find.text('Mark photo'), findsOneWidget);
-    final photo = tester.getRect(find.byType(Hero));
-    final field = tester.getRect(find.byType(TextField));
-    expect(photo.bottom, lessThan(field.top));
-    expect(photo.height, greaterThan(150));
-    expect(field.bottom, lessThan(844 - 346));
-    expect(tester.takeException(), isNull);
     await tester.tap(find.byTooltip('Close Ask'));
     await tester.pumpAndSettle();
     expect(find.byType(TextField), findsNothing);

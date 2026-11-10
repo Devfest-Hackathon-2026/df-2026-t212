@@ -77,16 +77,16 @@ void main() {
   testWidgets('Ask keeps its native input, draft and explicit mark intent across keyboard/layout changes', (tester) async {
     final agent = RequestAgent();
     final (_, cleanup) = await setup(tester, agent);
-    await tester.tap(find.text('Ask')); await tester.pump();
+    await tester.tap(find.text('Ask')); await tester.pump(); await tester.pump();
     final input = tester.state<EditableTextState>(find.byType(EditableText));
     await tester.tap(find.byType(TextField)); await tester.pump(); await tester.pump();
     expect(identical(tester.state<EditableTextState>(find.byType(EditableText)), input), isTrue,
       reason: 'Focusing must not replace the native text input client');
     expect(tester.testTextInput.isVisible, isTrue);
     expect(tester.widget<TextField>(find.byType(TextField)).focusNode!.hasFocus, isTrue);
-    await tester.tap(find.text('Less color')); await tester.pump();
-    expect(agent.requests, isEmpty, reason: 'Suggestions are editable drafts, not paid submissions');
-    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, 'Less color');
+    expect(find.text('Describe your edit'), findsNothing);
+    expect(find.text('Only the subject'), findsNothing);
+    expect(tester.widget<FilledButton>(find.byKey(const ValueKey('ask-send'))).onPressed, isNull);
     await tester.enterText(find.byType(TextField), 'オレンジだけを除きたい'); await tester.pump();
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
     await tester.pump();
@@ -97,9 +97,11 @@ void main() {
     expect(identical(tester.state<EditableTextState>(find.byType(EditableText)), input), isTrue);
     expect(tester.takeException(), isNull);
     tester.view.physicalSize = const Size(390, 844); tester.view.resetViewInsets(); await tester.pump();
+    await tester.tap(find.byTooltip('View photo')); await tester.pump();
     await tester.tap(find.byTooltip('Close Ask')); await tester.pump();
-    await tester.tap(find.text('Ask')); await tester.pump();
+    await tester.tap(find.text('Ask')); await tester.pump(); await tester.pump();
     expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, 'オレンジだけを除きたい');
+    await tester.tap(find.byTooltip('View photo')); await tester.pump();
     await tester.tap(find.text('Mark photo')); await tester.pump();
     await tester.tap(find.text('Remove color')); await tester.pump();
     await tester.tap(find.byKey(const ValueKey('edit-photo-gesture'))); await tester.pump();
@@ -117,7 +119,7 @@ void main() {
   testWidgets('failed requests can retry; success can undo; stopping discards partial work', (tester) async {
     final agent = RequestAgent();
     final (item, cleanup) = await setup(tester, agent);
-    await tester.tap(find.text('Ask')); await tester.pump();
+    await tester.tap(find.text('Ask')); await tester.pump(); await tester.pump();
     await tester.enterText(find.byType(TextField), 'Keep only the flowers'); await tester.pump();
     await tester.tap(find.text('Send')); await tester.pump();
     await until(tester, () => agent.requests.length == 1);
@@ -127,8 +129,9 @@ void main() {
     expect(find.text('Agent is adjusting saturation…'), findsOneWidget);
     agent.results.first.completeError(AgentError('offline'));
     await until(tester, () => find.text('Couldn’t finish this edit').evaluate().isNotEmpty);
-    await tester.tap(find.text('Edit request')); await tester.pump();
+    await tester.tap(find.text('Edit request')); await tester.pump(); await tester.pump();
     expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, 'Keep only the flowers');
+    await tester.tap(find.byTooltip('View photo')); await tester.pump();
     await tester.tap(find.byTooltip('Close Ask')); await tester.pump();
     await tester.tap(find.text('Retry')); await tester.pump();
     await until(tester, () => agent.requests.length == 2);
@@ -136,7 +139,7 @@ void main() {
     await until(tester, () => find.text('Edit ready').evaluate().isNotEmpty);
     expect(find.text('Hold to compare'), findsOneWidget);
     await tester.tap(find.text('Undo edit')); await tester.pump();
-    await tester.tap(find.text('Ask')); await tester.pump();
+    await tester.tap(find.text('Ask')); await tester.pump(); await tester.pump();
     await tester.enterText(find.byType(TextField), 'More mood'); await tester.pump();
     await tester.tap(find.text('Send')); await tester.pump();
     await until(tester, () => agent.requests.length == 3);
