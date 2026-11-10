@@ -10,7 +10,7 @@
 |---|---|---|
 | 指定クラウド実行基盤 | Cloud Runに配置済み。health 200、匿名認証、Vertex選別まで確認 | 実際のデプロイ、アプリからの呼び出し、稼働URL |
 | Google技術の中核利用 | Flutter/Dart、Cloud Run、Firebase認証、Firestore利用量管理、Vertex AIを使用。現像・追加編集・端末側描画まで実接続を確認 | 最終構成と選定理由、デモ中の実動作 |
-| 運営Org内の提出リポジトリ | [df-2026-t212](https://github.com/Devfest-Hackathon-2026/df-2026-t212)を確認済み。公開mainに初期ファイルのみ。アプリは未提出 | 指定先への最終Pushと審査者のアクセス |
+| 運営Org内の提出リポジトリ | [df-2026-t212](https://github.com/Devfest-Hackathon-2026/df-2026-t212)にソースとREADMEを提出済み（2026-11-10 18:4x JST）。AndroidのAPKはReleasesに添付 | 指定先への最終Pushと審査者のアクセス |
 | チーム・会場・カテゴリ | 原稿で Hakumei Iro no Wasureji／東京／上野直哉／エンターテインメントを確認 | 最終送信前に登録情報との一致を照合 |
 | 指定説明テンプレート | [様式と項目を確認済み](https://docs.google.com/document/d/1IyBQ-jN5msTSeRQDQU4Bm3mb_ZJOH8spJXrsp0MwDJ8/edit)。ユーザーが別のGoogleドキュメントで執筆中。最終様式との照合は未完了 | テンプレートの全項目が埋まった最終資料 |
 | Google Cloud構成図 | 稼働中の編集エージェントと端末処理を図示。Exploreは対象外 | 最終デプロイと一致するGCP構成図 |
@@ -42,7 +42,7 @@
 
 GCPプロジェクトは `after-hue-pdhaku0`、番号は `675070172838` です。AIサービスをCloud Runへ配置し、Firebase匿名認証、Firestoreの利用回数管理、Vertex AIの写真選別を確認しています。現像の複数回のツール呼び出し、追加編集、端末側の描画まで完走しました。実機UIでの一連の操作は別に確認します。Exploreは `feature/explore-gcp` に保全し、今回の提出対象から外しています。
 
-運営リポジトリは公開で、現在のmainには `.gitignore`、`LICENSE`、`README.md` のみがあります。ActionsとPagesは利用できません。コードの提出先と、ビルド・ホスティングの実行場所を分けます。提出先へのPushは、ユーザーから明示的な指示を受けるまで行いません。
+運営リポジトリは公開で、mainに提出版のソース一式とREADMEを置いています。ActionsとPagesは利用できません。コードの提出先と、ビルド・ホスティングの実行場所を分けます。2026年11月10日18:40（JST）に、ユーザーの指示で提出先へPushしました。
 
 ## 配布と締切後の扱い
 
