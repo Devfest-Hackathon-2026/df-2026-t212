@@ -4,11 +4,11 @@
 
 ## インストールする
 
-APKが配布されている場合は、[提出リポジトリのReleases](https://github.com/Devfest-Hackathon-2026/df-2026-t212/releases)から取得します。Android端末にコピーして開くとインストールできます。端末からインストール元の許可を求められた場合は、今回使用したブラウザやファイルアプリについて確認してください。
+GitHubの招待を受け入れたら、[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml)の成功した手動実行を開きます。`after-hue-android-ai-debug` artifactをダウンロードしてZIPを展開し、APKをAndroid端末へコピーして開くとインストールできます。端末からインストール元の許可を求められた場合は、今回使用したブラウザやファイルアプリについて確認してください。
 
-APKが未掲載の場合は、[READMEのAndroid手順](../../README.md#android端末で試す場合)に沿ってソースから実行できます。同梱の `config/cloud.public.json` を使うので、自分のAI APIキーや課金アカウントは不要です。
+ダウンロード期限が切れている場合も、[READMEのAndroid手順](../../README.md#android端末で試す場合)に沿って `pdHaku0/afterhue` の `first-build` ブランチから実行できます。同梱の `config/cloud.public.json` を使うので、自分のAI APIキーや課金アカウントは不要です。
 
-既存テスターでPrivateリポジトリへ招待されている方は、[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml)の成功した手動実行にある `after-hue-android-ai-debug` artifactも使えます。ZIPを展開してAPKを取得してください。Actions artifactのダウンロード期限は3日ですが、取得済みのAPKが3日で動かなくなるわけではありません。名前に `local` が入ったものはクラウドAI未設定版です。
+Actions artifactのダウンロード期限は3日ですが、取得済みのAPKが3日で動かなくなるわけではありません。名前に `local` が入ったものはクラウドAI未設定版です。運営リポジトリへの提出はまだ行っておらず、今回のテストでは上記のPrivateリポジトリを使います。
 
 今回は招待した方と審査員向けのアルファテストです。APKにはCloud RunとFirebaseへの公開接続設定が入り、AIモデルの秘密キーは入りません。配布時に案内されたビルドを使ってください。
 

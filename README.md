@@ -4,7 +4,7 @@ After Hueは、写真の中で残したい色を選び、それ以外をモノ�
 
 今回はハッカソンに向けたユーザーテストをお願いしています。コードを書いたり、機能を開発したりしていただく必要はありません。アプリを使ってみて、分かりにくかったところ、期待と違った動き、気に入ったところを教えていただけると助かります。
 
-審査用のソースは、運営リポジトリの提出版を使います。既存テスター向けの開発リポジトリを使う場合は、配布時に案内されたブランチを選んでください。
+現在のテスト対象は `pdHaku0/afterhue` の `first-build` ブランチです。このREADMEも、このブランチから取得したソースを使う手順を説明しています。運営リポジトリへの提出はまだ行っていません。
 
 ## どうやって試すか
 
@@ -18,12 +18,12 @@ iPhoneでは、ご本人のMacから手元のiPhoneにインストールして�
 
 ## セットアップをLLMに任せる
 
-このリポジトリを読み、手元のターミナルを操作できるLLMに、次の文章を渡してください。運営の提出リポジトリは公開です。既存テスター向けのPrivateリポジトリから取得する場合だけ、先にGitHubの招待を受け入れてください。
+このリポジトリを読み、手元のターミナルを操作できるLLMに、次の文章を渡してください。テスター向けリポジトリはPrivateなので、先にGitHubの招待を受け入れ、手元のGitHubアカウントでアクセスできる状態にしておきます。
 
 ```text
 After Hueのユーザーテストをしたいので、セットアップと起動をお願いします。
-リポジトリ: https://github.com/Devfest-Hackathon-2026/df-2026-t212
-ブランチ: main
+リポジトリ: https://github.com/pdHaku0/afterhue
+ブランチ: first-build
 
 READMEの「セットアップを担当するLLMへ」を読み、私のPCと端末を確認してから、
 アプリを使えるところまで進めてください。iPhoneではカメラも試すので、
@@ -41,13 +41,15 @@ AIの接続設定はリポジトリに同梱しています。ご自身でGoogle
 既存の作業フォルダがある場合は、最初にGitの状態を確認します。本人の変更を消したり、作業中のブランチを強制的に切り替えたりしないでください。新しく取得する場合のコマンドは次のとおりです。
 
 ```sh
-git clone https://github.com/Devfest-Hackathon-2026/df-2026-t212.git
-cd df-2026-t212
+git clone --branch first-build https://github.com/pdHaku0/afterhue.git
+cd afterhue
 ```
 
 ### Android端末で試す場合
 
-APKが配布されている場合は、[提出リポジトリのReleases](https://github.com/Devfest-Hackathon-2026/df-2026-t212/releases)に添付されたAPKを使います。端末へコピーして開くとインストールできます。この方法ならFlutterやAndroid SDKのセットアップは不要です。APKが未掲載の場合も、以下の手順でソースから実行できます。
+まず、[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml)の成功した手動実行を開き、`after-hue-android-ai-debug` artifactを取得してください。ZIPを展開し、APKを端末へコピーして開くとインストールできます。この方法ならFlutterやAndroid SDKのセットアップは不要です。
+
+Actions artifactのダウンロード期限は3日です。期限が切れている場合は、以下の手順でソースからも実行できます。名前に `local` が入ったartifactはクラウドAI未設定版なので、Askを試す場合は `ai` のビルドを使います。
 
 ソースから起動する必要がある場合に限り、Flutter 3.47.9、Dart 3.13.7、JDK 17とAndroid SDKを使います。プロジェクトの設定はSDK Platform 36、NDK 28.2.13676358、最低OSはAndroid 7.0（API 24）です。[Flutter公式の手順](https://docs.flutter.dev/platform-integration/android/setup)に沿って環境を確認し、SDKライセンスや端末の接続許可は本人に確認・操作してもらってください。
 
