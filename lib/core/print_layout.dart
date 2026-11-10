@@ -43,9 +43,10 @@ class PrintLayout {
   Size get size => landscape
       ? Size(paper.height, paper.width)
       : Size(paper.width, paper.height);
-  bool get hasColors => showColors && colors.isNotEmpty;
-  bool get hasTitle => title.trim().isNotEmpty;
-  String get caption => [place.trim(), date].where((s) => s.isNotEmpty).join(' / ');
+  bool get supportsDetails => style != PrintStyle.photo;
+  bool get hasColors => supportsDetails && showColors && colors.isNotEmpty;
+  bool get hasTitle => supportsDetails && title.trim().isNotEmpty;
+  String get caption => supportsDetails ? [place.trim(), date].where((s) => s.isNotEmpty).join(' / ') : '';
   bool get hasDetails => hasTitle || caption.isNotEmpty || hasColors;
   bool get overlaysPhoto => style == PrintStyle.fullPhoto;
   bool get cropsPhoto => overlaysPhoto || fill;
@@ -81,6 +82,7 @@ class PrintLayout {
           size.width - margin * 2, detailsHeight);
     }
     final photo = visiblePhotoRect(source);
+    if (!supportsDetails) return Rect.fromLTWH(photo.left, photo.bottom, photo.width, 0);
     return Rect.fromLTWH(photo.left, photoRect.bottom + 5.5 * scale, photo.width, detailsHeight);
   }
 

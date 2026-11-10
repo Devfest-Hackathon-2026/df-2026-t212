@@ -275,8 +275,13 @@ class _PrintScreenState extends State<PrintScreen> {
         const SizedBox(width: 20),
         Expanded(child: DropdownButton<PrintPaper>(
           isExpanded: true, value: _paper, underline: const SizedBox.shrink(),
-          items: PrintPaper.values.map((p) => DropdownMenuItem(value: p,
-            child: Text('${p.label}  /  ${p.width.toStringAsFixed(p == PrintPaper.postcard ? 1 : 0)} x ${p.height.toStringAsFixed(p == PrintPaper.postcard ? 1 : 0)} mm', style: Txt.small))).toList(),
+          items: PrintPaper.values.map((p) {
+            final width = _landscape ? p.height : p.width;
+            final height = _landscape ? p.width : p.height;
+            final precision = p == PrintPaper.postcard ? 1 : 0;
+            return DropdownMenuItem(value: p,
+              child: Text('${p.label}  /  ${width.toStringAsFixed(precision)} x ${height.toStringAsFixed(precision)} mm', style: Txt.small));
+          }).toList(),
           onChanged: (p) { if (p != null) setState(() => _paper = p); },
         )),
         IconButton(tooltip: _landscape ? 'Use portrait paper' : 'Use landscape paper',
@@ -289,12 +294,14 @@ class _PrintScreenState extends State<PrintScreen> {
       Row(children: [
         if (!_layout.overlaysPhoto) ModeChoice('Fit', selected: !_fill, onTap: () => setState(() => _fill = false)),
         if (!_layout.overlaysPhoto) ModeChoice('Fill', selected: _fill, onTap: () => setState(() => _fill = true)),
-        Expanded(child: Align(alignment: Alignment.centerRight,
+        if (_layout.supportsDetails) Expanded(child: Align(alignment: Alignment.centerRight,
           child: TextButton(onPressed: _details,
             child: Text(_layout.hasDetails ? 'Edit details' : 'Add details', textAlign: TextAlign.end)))),
       ]),
       if (_layout.cropsPhoto) Padding(padding: const EdgeInsets.only(top: 8),
-        child: Text('The photo is cropped to the area shown.', style: Txt.small)),
+        child: Text('The photo is cropped to the area shown.', style: Txt.small))
+      else if (!_layout.supportsDetails) Padding(padding: const EdgeInsets.only(top: 8),
+        child: Text('Keeps your full photo. White space may remain to fit the paper.', style: Txt.small)),
       if (_actionError != null) Padding(padding: const EdgeInsets.only(top: 12),
         child: Semantics(liveRegion: true, child: Text(_actionError!, style: Txt.body))),
       const SizedBox(height: 16),

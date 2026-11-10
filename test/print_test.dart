@@ -10,6 +10,7 @@ import 'package:image/image.dart' as img;
 import 'package:pdf/pdf.dart';
 
 import 'package:afterhue/core/print_layout.dart';
+import 'package:afterhue/core/crop.dart';
 import 'package:afterhue/core/renderer.dart' as renderer;
 import 'package:afterhue/data/print_export.dart';
 import 'package:afterhue/ui/print.dart';
@@ -61,7 +62,10 @@ void main() {
           final info = layout.informationRect(const Size(800, 1200));
           expect(info.bottom, lessThanOrEqualTo(layout.size.height));
           expect(info.left, greaterThanOrEqualTo(0));
-          if (layout.overlaysPhoto) {
+          if (!layout.supportsDetails) {
+            expect(layout.hasDetails, isFalse);
+            expect(layout.photoRect, Offset.zero & layout.size);
+          } else if (layout.overlaysPhoto) {
             expect(layout.photoRect, Offset.zero & layout.size);
             expect(info.top, lessThan(layout.photoRect.bottom));
           } else {
@@ -232,11 +236,88 @@ void main() {
         File('/tmp/afterhue-print-review/${entry.key}-full-photo.png').writeAsBytesSync(bytes!.buffer.asUint8List());
         image.dispose();
       }); }
+      await tester.tap(find.text('Photo'));
+      await tester.pumpAndSettle();
+      final plain = tester.widget<CustomPaint>(paper).painter! as PrintPainter;
+      expect(plain.layout.hasDetails, isFalse);
+      expect(plain.layout.photoRect, Offset.zero & plain.layout.size);
+      expect(find.text('Edit details'), findsNothing);
+      expect(find.text('Add details'), findsNothing);
+      if (capture) { await tester.runAsync(() async {
+        final image = await (boundary.currentContext!.findRenderObject() as RenderRepaintBoundary).toImage(pixelRatio: 2);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        File('/tmp/afterhue-print-review/${entry.key}-photo-only.png').writeAsBytesSync(bytes!.buffer.asUint8List());
+        image.dispose();
+      }); }
       await tester.tap(find.text('Instant'));
       await tester.pumpAndSettle();
       expect((tester.widget<CustomPaint>(paper).painter! as PrintPainter).layout.title, 'Everything in Tokyo');
       expect(find.text('Fit'), findsOneWidget);
       debugDisableShadows = true;
+    });
+  }
+
+  testWidgets('Photo exports contain only the photo even after adding details in another style', (tester) async {
+    await tester.runAsync(() async {
+      final content = await sampleContent();
+      final photo = await decode(content.photo);
+      final clean = await exportPrintImage(photo, const PrintLayout(style: PrintStyle.photo), dpi: 72);
+      final retained = await exportPrintImage(photo, PrintLayout(style: PrintStyle.photo,
+        title: 'Must not appear', place: 'Tokyo', date: '2026.11.10', colors: content.colors,
+        showColors: true), dpi: 72);
+      expect(retained, orderedEquals(clean), reason: 'Photo means no caption, swatches, shading or decorative footer');
+      photo.dispose();
+    });
+  });
+
+  for (final entry in {
+    'landscape crop': const PhotoCrop(bottom: .5),
+    'portrait crop': const PhotoCrop(left: .25, right: .75, turns: 1),
+    'square crop': const PhotoCrop(left: .25, right: .75),
+  }.entries) {
+    testWidgets('print uses the rendered ${entry.key} but keeps explicit paper dimensions', (tester) async {
+      late Uint8List croppedBytes;
+      late Size croppedSize;
+      await tester.runAsync(() async {
+        final source = img.Image(width: 400, height: 200);
+        img.fill(source, color: img.ColorRgb8(0, 160, 100));
+        final cropped = renderer.cropImage(renderer.Rgba(source.width, source.height,
+          source.convert(numChannels: 4).getBytes()), entry.value);
+        croppedSize = Size(cropped.width.toDouble(), cropped.height.toDouble());
+        croppedBytes = Uint8List.fromList(img.encodePng(img.Image.fromBytes(
+          width: cropped.width, height: cropped.height, bytes: cropped.pixels.buffer, numChannels: 4)));
+        final photo = await decode(croppedBytes);
+        for (final paper in PrintPaper.values) {
+          final landscape = cropped.width > cropped.height;
+          final layout = PrintLayout(style: PrintStyle.photo, paper: paper, landscape: landscape);
+          final expected = landscape ? Size(paper.height, paper.width) : Size(paper.width, paper.height);
+          expect(layout.size, expected);
+          expect(layout.visiblePhotoRect(croppedSize).size.aspectRatio, closeTo(croppedSize.aspectRatio, .0001));
+          final jpeg = await exportPrintImage(photo, layout, dpi: 72);
+          final exported = img.decodeJpg(jpeg)!;
+          expect(exported.width, (expected.width / 25.4 * 72).round());
+          expect(exported.height, (expected.height / 25.4 * 72).round());
+          final pdf = await printPdf(jpeg, PdfPageFormat(expected.width * PdfPageFormat.mm, expected.height * PdfPageFormat.mm));
+          final box = RegExp(r'/MediaBox\s*\[([^\]]+)\]').firstMatch(String.fromCharCodes(pdf));
+          expect(box, isNotNull);
+          final values = box!.group(1)!.trim().split(RegExp(r'\s+')).map(double.parse).toList();
+          expect(values[2], closeTo(expected.width * PdfPageFormat.mm, .01));
+          expect(values[3], closeTo(expected.height * PdfPageFormat.mm, .01));
+        }
+        photo.dispose();
+      });
+      await tester.pumpWidget(MaterialApp(theme: buildTheme(), home: PrintScreen(
+        loadContent: () async => PrintContent(photo: croppedBytes), taken: DateTime(2026),
+      )));
+      for (var i = 0; i < 20 && find.byType(CircularProgressIndicator).evaluate().isNotEmpty; i++) {
+        await tester.runAsync(() async { await Future<void>.delayed(const Duration(milliseconds: 50)); });
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+      final landscape = croppedSize.width > croppedSize.height;
+      expect(find.byTooltip(landscape ? 'Use portrait paper' : 'Use landscape paper'), findsOneWidget);
+      expect(find.text(landscape ? 'L  /  127 x 89 mm' : 'L  /  89 x 127 mm'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   }
 
