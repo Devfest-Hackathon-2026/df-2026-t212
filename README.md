@@ -12,7 +12,7 @@ After Hueは、写真の中で残したい色だけを選び、それ以外を�
 
 | 方法 | 必要なもの | 手順 |
 | --- | --- | --- |
-| Android 実機 | Android 7.0 以上 | [Releases](https://github.com/Devfest-Hackathon-2026/df-2026-t212/releases) の `after-hue.apk` をインストール |
+| Android 実機 | Flutter・Android SDK | 下の「Android端末で試す場合」（ソースからビルド） |
 | iPhone 実機 | Mac・Xcode・無料のAppleアカウント | 下の「MacからiPhone実機にインストールする場合」 |
 
 iOSアプリは署名なしのIPAを配布できないため、提出ルール3.1③に従い、ビルドと実行の手順をこのREADMEに記載しています。AIの秘密キーは不要です。同梱の `config/cloud.public.json`（Cloud RunのURLとFirebaseの公開設定）だけでクラウドAIに接続します。
@@ -26,9 +26,7 @@ cd df-2026-t212
 
 ### Android端末で試す場合
 
-このリポジトリの [GitHub Releases](https://github.com/Devfest-Hackathon-2026/df-2026-t212/releases) にある `after-hue.apk` を端末へコピーして開くと、インストールできます。クラウドAIの公開接続設定を含めてビルドしてあり、FlutterやAndroid SDKは不要です。
-
-ソースから起動する場合は、Flutter 3.47.9、Dart 3.13.7、JDK 17とAndroid SDKを使います。プロジェクトの設定はSDK Platform 36、NDK 28.2.13676358、最低OSはAndroid 7.0（API 24）です。[Flutter公式の手順](https://docs.flutter.dev/platform-integration/android/setup)に沿って環境を確認し、SDKライセンスや端末の接続許可は操作する方に確認・操作してもらってください。
+ソースから起動します。Flutter 3.47.9、Dart 3.13.7、JDK 17とAndroid SDKを使います。プロジェクトの設定はSDK Platform 36、NDK 28.2.13676358、最低OSはAndroid 7.0（API 24）です。[Flutter公式の手順](https://docs.flutter.dev/platform-integration/android/setup)に沿って環境を確認し、SDKライセンスや端末の接続許可は操作する方に確認・操作してもらってください。
 
 ```sh
 flutter pub get
