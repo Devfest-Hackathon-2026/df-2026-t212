@@ -1,26 +1,46 @@
-# Androidテスト引き継ぎ
+# AndroidでAfter Hueを試す
 
-対象ブランチ: `first-build`。まず写真の取り込みから編集・共有までを実機で試すための準備です。Android全機能の移植完了を意味しません。
+After Hueは、写真の一部の色を残して現像するアプリです。今回見てほしいのは、写真を取り込んで編集し、保存した結果を見返すまでの操作です。Androidは初期対応なので、まずこの流れが実際の端末で使えるかを確認したいと考えています。
 
-## 招待されたテスターがまず使うもの
+ソースをビルドしなくても、GitHubからテスト用APKを取得できます。AI入りのAPKには所有者のAPI設定が入っているため、自分のAPIキーやOpenAIアカウントを用意する必要はありません。
 
-このPrivateリポジトリの招待を受け入れたら、[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml) の成功した手動実行から **`after-hue-android-ai-debug`** artifactをダウンロードし、ZIP内のAPKを端末にインストールしてください。所有者と同じAI設定を組み込んであるため、APIキーの用意は不要です。
+## APKを入手して起動する
 
-最新版を作る場合は **Run workflow → Branch: first-build → with_aiを有効 → Run workflow**。通常のPush/PRではキーなしAPKを作ります。artifactは3日で失効しますが、ダウンロードしたAPK自体は期限切れになりません。
+リポジトリへの招待を受け入れたら、[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml)を開いてください。成功した手動実行を選び、Artifactsにある `after-hue-android-ai-debug` をダウンロードします。ZIPを展開するとAPKが入っているので、Android端末にコピーして開き、インストールします。
 
-GitHub Secret `AFTER_HUE_TEST_DEFINES` はビルド時だけ読み出し、ソースには入れません。**APKからキーを取り出すことは可能**なので、AI入りAPKは招待したテスターだけで使用し、公開・再配布しないでください。AIビルドはPrivateリポジトリでのみ動くようにしています。
+新しいAPKが必要なときは、同じ画面のRun workflowからブランチに `first-build` を選び、`with_ai` を有効にして実行します。完了するまではAPKを取得できません。artifactの保存期間は3日です。期間を過ぎたら作り直せますが、すでにインストールしたアプリはそのまま使えます。
 
-ソースから `flutter run` して開発する場合は以下の手順です。ローカルのキーなし実行と、AI入りAPKのテストを併用できます。
+`after-hue-android-local-debug` という名前のAPKはキーなし版です。手動編集と簡易Autoには使えますが、自然言語のAskは使えません。AIを試すときは名前に `ai` が入った方を選んでください。
 
-## 1. 環境
+AI入りAPKは招待したテスターだけで使用してください。キーはソースには含めていませんが、ビルド済みアプリから取り出すことは可能です。APKを公開したり、他の人に再配布したりしないでください。AIを使うと、写真の縮小版と編集依頼がOpenAIに送られ、所有者のAPI利用料が発生します。
 
-- Flutter **3.47.9** / Dart **3.13.7**（このリポジトリの開発・CIと同じバージョン）
-- Android Studio / Android SDK。`flutter doctor -v` のAndroid toolchainを通す
-- JDK **17**、SDK Platform **36**。NDKはFlutter指定の **28.2.13676358**
-- Android **7.0 / API 24以上**。最初はAndroid 13または14以降の実機を推奨
-- USBデバッグを有効にし、PCの接続を端末で許可
+## 最初に試してほしい操作
 
-環境構築は[Flutter公式のAndroidセットアップ](https://docs.flutter.dev/platform-integration/android/setup)を参照。SDKライセンスが未確認の場合は `flutter doctor --android-licenses` を実行して内容を確認してください。
+起動すると写真へのアクセスを求められます。まずテスト用の写真を許可し、画面下の `+` から3枚ほど手動で取り込んでください。未現像の写真がすべて表示されるか、複数選択やスワイプ選択ができるかを確認します。Android 14以降なら、写真をすべて許可する場合と、選んだ写真だけを許可する場合の両方を試せると助かります。
+
+次に1枚を開き、編集画面でKeepとExcludeの色、手描きのArea、彩度、Cropや回転を変えてください。Doneで保存したあと、写真を開き直して変更が残るかを見ます。アプリを終了して再起動したときも、同じ状態に戻れるかを確認してください。共有した画像に加工が反映され、端末の写真ライブラリにある原本が変わっていなければ、この流れは正常です。
+
+Autoは複数枚で試してください。待機中のQueued、処理中の進捗、完了が分かるかを見ます。処理中の1枚をAfter HueからRemoveしたとき、その写真の処理が止まり、残りの写真が進むかも確認したい点です。
+
+AI入りAPKでは、Askに日本語で編集を頼んでください。ソフトウェアキーボードを出した状態で写真とSendが見えるか、変換や複数行の入力ができるかを見ます。送信後にDoneで編集画面を離れても、処理は続きます。ギャラリーで処理中だと分かり、Activityから結果へ戻れることを確認してください。
+
+そのほか、Androidのシステム戻る、画面回転、画面下のナビゲーションバーとの重なりも確認対象です。GPS付きの写真はMapにも表示されます。位置情報のない写真がMapに出ないのは想定どおりです。
+
+外部の写真編集アプリで原本を上書きした場合、After Hueの保存済みの見た目は勝手に変わらず、更新を確認して適用する流れになります。別の写真として保存した場合は、新しい写真として扱います。外部アプリによって保存方法や更新日時の扱いが異なるため、ここも実機で確認したい箇所です。
+
+## まだAndroidではできないこと
+
+アプリ内カメラとライブ現像はiOS専用です。Androidではカメラボタンに案内が出ます。端末のカメラで撮影してから、After Hueの `+` で取り込んでください。
+
+Areaでタップした物体を自動で切り抜く機能も、現在はiOS専用です。Androidでは手描きで範囲を指定できます。AIが物体抽出を使えない場合は、多角形で範囲を指定します。
+
+Appleの端末内モデルもAndroidでは使いません。キーなし版のAutoは端末内で色の強さをもとに選び、AI入り版は設定したクラウドモデルを使います。この違いは不具合ではありません。
+
+このテストAPKはデバッグ用です。Android実機での描画や速度はまだ検証途中なので、iOS版との性能比較には使わず、まず操作が成立するかを見てください。
+
+## ソースから起動する場合
+
+開発ブランチは `first-build` です。Flutter 3.47.9、Dart 3.13.7、JDK 17を用意し、[Flutter公式のAndroidセットアップ](https://docs.flutter.dev/platform-integration/android/setup)に沿ってAndroid SDKを設定してください。このプロジェクトではSDK Platform 36とNDK 28.2.13676358を使います。端末の最低OSはAndroid 7.0（API 24）です。
 
 ```sh
 git clone --branch first-build https://github.com/pdHaku0/afterhue.git
@@ -31,79 +51,32 @@ flutter devices
 flutter run -d <Androidのdevice-id>
 ```
 
-初回のGradle/SDKダウンロードには時間がかかります。`android/local.properties` は各PC用に生成されるため共有しません。
+`flutter doctor -v` でAndroid toolchainの問題を解消してから起動します。SDKライセンスの確認が必要な場合は `flutter doctor --android-licenses` を実行してください。実機ではUSBデバッグを有効にし、PCの接続を端末で許可します。初回はGradleやSDKのダウンロードに時間がかかります。
 
-## 2. APIキーなしで試せる範囲
-
-- オンボーディング、写真のアクセス許可、複数インポート
-- ギャラリー、選択・グループ、詳細表示、Remove、Activity
-- Keep / Excludeの色選択、Areaの手描き、Boundary / Feather
-- Tone、彩度、Crop、回転、Undo/Redo、保存、共有
-- Auto（端末内の色の強さを使う簡易現像。AIの被写体判断とは異なる）
-- GPS付き写真のMap表示（位置情報がない写真は地図に出ません）
-
-自然言語の **AskはAPIキーなしでは使えません**。この状態でのAskエラーはAndroid固有の不具合ではありません。SettingsのModelが `on-device` ならキーなしの状態です。
-
-## 3. AIも試す場合
-
-`config/development.example.json` を `config/development.local.json` にコピーし、`OPENAI_API_KEY` に自分のテスト用キーを入れてください。`.local.json` はGit管理対象外です。
-
-`OPENAI_MODEL` / `OPENAI_JUDGE_MODEL` はこのプロジェクトで使用している設定です。キーの所属プロジェクトで利用できるモデルに応じて変更できます。キー変更後はホットリロードではなく、停止して再ビルドしてください。
+このコマンドではキーなしで起動します。手元のビルドでもAIを使う場合は、`config/development.example.json` を `config/development.local.json` にコピーし、別途受け取ったキーを `OPENAI_API_KEY` に設定してください。`.local.json` はGit管理対象外です。
 
 ```sh
 flutter run -d <Androidのdevice-id> --dart-define-from-file=config/development.local.json
 ```
 
-この開発構成では写真の縮小版と編集依頼がOpenAIに送られ、API料金が発生します。キーはアプリに組み込まれます。自分のキーでビルドしたAPKも公開しないでください。所有者のキーを使う場合は、上記の手動AIビルドを利用してください。
+キーやモデルの設定を変えたら、ホットリロードではなくアプリを停止して再ビルドします。モデルへのアクセス権が違うキーを使う場合は、`OPENAI_MODEL` と `OPENAI_JUDGE_MODEL` も利用できるモデルに合わせます。
 
-`AFTER_HUE_DEMO_TOOLS=true` にするとSettingsに確認付きの初期化が出ます。After Hueの編集・設定・履歴を消してオンボーディングに戻します。端末の写真は削除しません。
+`AFTER_HUE_DEMO_TOOLS=true` のビルドでは、SettingsからAfter Hueの編集・設定・履歴を初期化して、オンボーディングに戻せます。確認ダイアログを経て実行され、端末の写真は削除しません。
 
-## 4. Androidで未対応・要確認の点
+写真権限は画像だけを要求しています。GPSを読むには写真自体の位置情報とメディア位置情報の権限が必要です。設定の根拠は[photo_managerの公式手順](https://pub.dev/packages/photo_manager)にあります。現在地を追跡する権限は要求しません。
 
-| 項目 | 状態 |
-| --- | --- |
-| アプリ内カメラ・ライブ現像 | iOS専用。Androidでは案内を表示。端末のカメラで撮影してから `+` で取り込む |
-| タップした物体の自動抽出 | iOS Vision専用。AndroidではAreaを手描きする。AIも抽出できない場合は多角形を使う |
-| Appleの端末内採用判定 | Androidでは利用しない。端末内の色判定＋設定したクラウドモデルを使用 |
-| 原本の保持・更新 | Android用に写真ライブラリから内容をコピーして保持。更新検出はMediaStoreの更新日時による。外部編集アプリが別の写真として保存した場合は別写真となる |
-| 写真の位置 | 写真アクセスに加え、メディア位置情報の権限と写真自体のGPSが必要。ライブの端末位置は取得しない |
-| Android実機の描画・戻る・キーボード | 今回の重点確認対象。実機での動作保証はまだしない |
+## 不具合を見つけたら
 
-写真権限は画像のみを要求します。Android 13以降の画像権限と14以降の限定アクセスは[photo_managerの公式手順](https://pub.dev/packages/photo_manager)に沿って設定しています。
-
-## 5. 最初の10分の確認
-
-1. 写真アクセスを拒否しても固まらず、再許可できるか。Android 14以降では「選択した写真のみ」も試す。
-2. `+` から3枚を手動インポートし、未現像のまま全部表示されるか。複数選択とスワイプ選択も試す。
-3. 1枚を開き、色のKeep/Exclude、手描きArea、彩度、Cropと回転を変更。Done→再度開く→アプリを終了して再起動しても保持されるか。
-4. 3枚をAutoに入れ、Queued/進捗/完了を確認。処理中の1枚をRemoveし、残りが進むか。
-5. 共有先アプリに加工済み画像が渡るか。端末の原本が変わっていないか。
-6. AI設定ありならAskで日本語入力。ソフトウェアキーボードを出したまま写真とSendが見えるか。処理中にDone→Activity→結果へ戻れるか。
-7. Map、画面回転、Androidのシステム戻る、ナビゲーションバーとの重なりを確認。
-8. 外部アプリで原本を上書き編集し、After Hueに戻る。元の見た目が勝手に変わらず、更新の確認ができるか。
-
-## 6. APKと不具合報告
-
-GitHub Actionsの **Android test build** が成功すると `after-hue-android-local-debug`（通常実行）または `after-hue-android-ai-debug`（手動AI実行）artifactからAPKを取得できます。どちらも初期化オプションありのテスト用です。リリース署名・ストア配布向けではありません。
-
-手元でAPKを作る場合:
-
-```sh
-flutter build apk --debug --dart-define=AFTER_HUE_DEMO_TOOLS=true
-# build/app/outputs/flutter-apk/app-debug.apk
-```
-
-報告には次を添えてください。
+リポジトリのIssueに、どの端末で何をしたときに起きたかを書いてください。次の形なら調査を始めやすくなります。画面録画や `flutter run` のエラー部分もあると助かります。
 
 ```text
-コミット:
-端末 / Androidバージョン:
-APIキー設定: なし / あり（値は書かない）
-写真権限: 全件 / 限定 / 拒否
-再現手順:
+コミット、またはAPKのActions実行URL:
+端末とOSバージョン:
+使用したビルド: AI入り / キーなし / 自分でビルド
+写真の許可: 全件 / 選択した写真のみ / 拒否
+再現する操作:
 期待した動き:
 実際の動き:
-スクリーンショット・録画・該当エラーログ:
 ```
 
-`flutter run` のエラー部分があると調査しやすいです。ログに含まれる編集依頼文や写真情報は、共有してよい範囲だけ添付してください。
+APIキーそのものは書かないでください。ログには編集依頼文や写真情報が含まれることがあるので、共有してよい部分だけ添付してください。
