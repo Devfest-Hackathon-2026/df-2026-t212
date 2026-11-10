@@ -10,26 +10,20 @@ import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../core/print_layout.dart';
-import '../core/renderer.dart';
 import '../data/print_export.dart';
 import '../data/store.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 
 class PrintScreen extends StatefulWidget {
-  const PrintScreen({super.key, required this.loadPhoto, required this.colors, required this.taken});
+  const PrintScreen({super.key, required this.loadContent, required this.taken});
 
   factory PrintScreen.forPhoto(PhotoItem photo) => PrintScreen(
-    loadPhoto: () => loadPrintPhoto(photo),
-    colors: photo.hues.map((c) {
-      final rgb = oklabToRgb8(c.l, c.a, c.b);
-      return Color.fromARGB(255, rgb[0], rgb[1], rgb[2]);
-    }).toList(),
+    loadContent: () => loadPrintContent(photo),
     taken: photo.taken,
   );
 
-  final Future<Uint8List> Function() loadPhoto;
-  final List<Color> colors;
+  final Future<PrintContent> Function() loadContent;
   final DateTime taken;
 
   @override
@@ -38,10 +32,12 @@ class PrintScreen extends StatefulWidget {
 
 class _PrintScreenState extends State<PrintScreen> {
   ui.Image? _photo;
+  List<ui.Image?> _textures = [];
+  List<Color> _palette = [];
   String? _loadError, _actionError;
   String? _busy;
   bool _loading = true;
-  PrintStyle _style = PrintStyle.photo;
+  PrintStyle _style = PrintStyle.instant;
   PrintPaper _paper = PrintPaper.l;
   bool _landscape = false, _fill = false, _colors = false, _date = false;
   final _title = TextEditingController();
@@ -57,7 +53,7 @@ class _PrintScreenState extends State<PrintScreen> {
     style: _style, paper: _paper, landscape: _landscape, fill: _fill,
     title: _title.text, place: _place.text,
     date: _date ? '${widget.taken.year}.${widget.taken.month.toString().padLeft(2, '0')}.${widget.taken.day.toString().padLeft(2, '0')}' : '',
-    colors: widget.colors.take(6).toList(), showColors: _colors,
+    colors: _palette, showColors: _colors,
   );
 
   PrintLayout get _previewLayout => !_editingDetails ? _layout : PrintLayout(
@@ -76,13 +72,28 @@ class _PrintScreenState extends State<PrintScreen> {
   Future<void> _load() async {
     setState(() { _loading = true; _loadError = null; });
     try {
-      final codec = await ui.instantiateImageCodec(await widget.loadPhoto());
-      final frame = await codec.getNextFrame();
-      codec.dispose();
-      if (!mounted) { frame.image.dispose(); return; }
+      final content = await widget.loadContent();
+      Future<ui.Image> decode(List<int> bytes) async {
+        final codec = await ui.instantiateImageCodec(Uint8List.fromList(bytes));
+        try { return (await codec.getNextFrame()).image; }
+        finally { codec.dispose(); }
+      }
+      final photo = await decode(content.photo);
+      final textures = <ui.Image?>[];
+      for (final bytes in content.textures.take(6)) {
+        try { textures.add(bytes == null ? null : await decode(bytes)); }
+        catch (_) { textures.add(null); }
+      }
+      if (!mounted) {
+        photo.dispose();
+        for (final texture in textures) { texture?.dispose(); }
+        return;
+      }
       setState(() {
-        _photo = frame.image;
-        _landscape = frame.image.width > frame.image.height;
+        _photo = photo;
+        _textures = textures;
+        _palette = content.colors.take(6).toList();
+        _landscape = photo.width > photo.height;
       });
     } catch (_) {
       if (mounted) setState(() => _loadError = 'Could not load this photo. Check that the original is available and try again.');
@@ -94,6 +105,7 @@ class _PrintScreenState extends State<PrintScreen> {
   @override
   void dispose() {
     _photo?.dispose();
+    for (final texture in _textures) { texture?.dispose(); }
     _title.dispose();
     _place.dispose();
     _detailFocus.dispose();
@@ -106,7 +118,7 @@ class _PrintScreenState extends State<PrintScreen> {
     setState(() { _busy = action; _actionError = null; });
     final layout = _layout;
     try {
-      final bytes = await exportPrintImage(_photo!, layout, fontFamily: uiFamily);
+      final bytes = await exportPrintImage(_photo!, layout, fontFamily: uiFamily, textures: _textures);
       if (!mounted) return;
       final filename = 'After-Hue-${DateTime.now().millisecondsSinceEpoch}.jpg';
       if (action == 'Print') {
@@ -158,7 +170,7 @@ class _PrintScreenState extends State<PrintScreen> {
     _detailFocus.requestFocus();
   }
 
-  Widget _detailControls() => Padding(
+  Widget _detailControls() => SingleChildScrollView(
     padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
     child: Column(mainAxisSize: MainAxisSize.min, children: [
       Row(children: [
@@ -186,7 +198,7 @@ class _PrintScreenState extends State<PrintScreen> {
       const SizedBox(height: 4),
       Wrap(spacing: 4, alignment: WrapAlignment.center, children: [
         _detailOption('Date', _date, () => setState(() => _date = !_date)),
-        if (widget.colors.isNotEmpty)
+        if (_palette.isNotEmpty)
           _detailOption('Colors', _colors, () => setState(() => _colors = !_colors)),
       ]),
     ]),
@@ -221,24 +233,27 @@ class _PrintScreenState extends State<PrintScreen> {
         child: DecoratedBox(
           key: _paperKey,
           decoration: const BoxDecoration(color: Colors.white, boxShadow: [
-            BoxShadow(color: Color(0x18000000), offset: Offset(0, 8), blurRadius: 20),
+            BoxShadow(color: Color(0x0C000000), offset: Offset(0, 3), blurRadius: 10),
           ]),
           child: Semantics(label: 'Print preview', image: true,
-            child: LayoutBuilder(builder: (context, box) => Stack(fit: StackFit.expand, children: [
-              CustomPaint(painter: PrintPainter(photo: _photo!, layout: layout, fontFamily: uiFamily)),
+            child: LayoutBuilder(builder: (context, box) {
+              final info = layout.informationRect(Size(_photo!.width.toDouble(), _photo!.height.toDouble()));
+              return Stack(fit: StackFit.expand, children: [
+              CustomPaint(painter: PrintPainter(photo: _photo!, layout: layout, fontFamily: uiFamily, textures: _textures)),
               if (_editingDetails) Positioned(
-                left: layout.inset / layout.size.width * box.maxWidth,
-                right: layout.inset / layout.size.width * box.maxWidth,
-                top: (layout.photoRect.bottom + 1) / layout.size.height * box.maxHeight,
-                height: 44,
-                child: Row(children: [
-                  Expanded(flex: 65, child: Semantics(button: true, label: 'Edit title on paper',
+                left: info.left / layout.size.width * box.maxWidth,
+                right: (layout.size.width - info.right) / layout.size.width * box.maxWidth,
+                top: info.top / layout.size.height * box.maxHeight,
+                height: info.height / layout.size.height * box.maxHeight,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Expanded(flex: 8, child: Semantics(button: true, label: 'Edit title on paper',
                     child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => _selectDetail(false)))),
-                  Expanded(flex: 35, child: Semantics(button: true, label: 'Edit place on paper',
-                    child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => _selectDetail(true)))),
+                  Expanded(flex: 5, child: FractionallySizedBox(alignment: Alignment.centerLeft, widthFactor: .6,
+                    child: Semantics(button: true, label: 'Edit place on paper',
+                      child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => _selectDetail(true))))),
                 ]),
               ),
-            ]))),
+            ]); })),
         ),
       ))),
     );
@@ -247,9 +262,9 @@ class _PrintScreenState extends State<PrintScreen> {
   Widget _controls() => SingleChildScrollView(
     padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
     child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Wrap(alignment: WrapAlignment.center, children: [
         for (final style in PrintStyle.values)
-          ModeChoice(style == PrintStyle.photo ? 'Photo' : 'Instant', selected: _style == style,
+          ModeChoice(style.label, selected: _style == style,
             onTap: () => setState(() => _style = style)),
       ]),
       const Hairline(),
@@ -267,18 +282,20 @@ class _PrintScreenState extends State<PrintScreen> {
           icon: const Icon(Icons.crop_rotate, size: 22)),
       ]),
       Row(children: [
-        ModeChoice('Fit', selected: !_fill, onTap: () => setState(() => _fill = false)),
-        ModeChoice('Fill', selected: _fill, onTap: () => setState(() => _fill = true)),
+        if (!_layout.overlaysPhoto) ModeChoice('Fit', selected: !_fill, onTap: () => setState(() => _fill = false)),
+        if (!_layout.overlaysPhoto) ModeChoice('Fill', selected: _fill, onTap: () => setState(() => _fill = true)),
         Expanded(child: Align(alignment: Alignment.centerRight,
           child: TextButton(onPressed: _details,
             child: Text(_layout.hasDetails ? 'Edit details' : 'Add details', textAlign: TextAlign.end)))),
       ]),
-      const SizedBox(height: 12),
-      Text(_fill ? 'Fill crops the photo to the area shown.' : 'The whole photo stays in view.', style: Txt.small),
+      if (_layout.cropsPhoto) Padding(padding: const EdgeInsets.only(top: 8),
+        child: Text('The photo is cropped to the area shown.', style: Txt.small)),
       if (_actionError != null) Padding(padding: const EdgeInsets.only(top: 12),
         child: Semantics(liveRegion: true, child: Text(_actionError!, style: Txt.body))),
       const SizedBox(height: 16),
       FilledButton(
+        style: FilledButton.styleFrom(backgroundColor: Neutral.primary, foregroundColor: Colors.white,
+          minimumSize: const Size(44, 48), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
         onPressed: _photo == null || _busy != null ? null : () => _output('Print'),
         child: Text(_busy == 'Print' ? 'Preparing print...' : 'Print'),
       ),
@@ -295,7 +312,9 @@ class _PrintScreenState extends State<PrintScreen> {
   Widget build(BuildContext context) => PopScope(
     canPop: _busy == null,
     child: Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(title: Text('Print', style: Txt.title), centerTitle: true,
+        backgroundColor: Colors.white, surfaceTintColor: Colors.transparent,
         leadingWidth: 72,
         leading: TextAction('Back', color: Neutral.secondary,
           onTap: _busy == null ? () => Navigator.pop(context) : null)),

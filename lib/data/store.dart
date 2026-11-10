@@ -1598,6 +1598,11 @@ class Store extends ChangeNotifier {
     return _patchCache.get(it.sourceCacheId, c, sourceId: it.sourceId, soft: swatches == SwatchStyle.soft, light: light);
   }
 
+  /// Prints retain the source texture even when gallery swatches are flat.
+  /// The returned handle belongs to the cache; callers must not dispose it.
+  Future<ui.Image?> printPatch(PhotoItem it, KeptColor c) =>
+      _patchCache.get(it.sourceCacheId, c, sourceId: it.sourceId);
+
   ({ui.Image? image})? patchReady(PhotoItem it, KeptColor c) {
     if (swatches == SwatchStyle.flat) return (image: null);
     return _patchCache.ready(it.sourceCacheId, c, soft: swatches == SwatchStyle.soft);
