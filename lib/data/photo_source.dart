@@ -302,8 +302,10 @@ class PhotoSource {
       }
       final entity = await _entity(id);
       if (entity == null || !await entity.isLocallyAvailable(isOrigin: true)) return null;
-      final file = await entity.originFile;
-      if (file == null || !await file.exists()) return null;
+      final path = await PhotoManager.plugin.getFullFile(id, isOrigin: true);
+      if (path == null || path.isEmpty) return null;
+      final file = File(path);
+      if (!await file.exists()) return null;
       final hash = (await sha256.bind(file.openRead()).first).toString();
       _originalHashes[id] = hash;
       return hash;

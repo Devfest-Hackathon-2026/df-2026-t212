@@ -20,7 +20,7 @@ flutter run -d <Androidのdevice-id>
 Flutter **3.47.9** / Dart **3.13.7** を使用しています。Android SDKのセットアップは別途必要です。
 APIキーなしでも手動編集と端末内の色選択によるAutoを試せます。自然言語のAskにはAI設定が必要です。
 
-[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml) はテストとAPKビルドを実行し、成功時にAPIキーを含まないデバッグAPKを保存します。
+[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml) はテストとAPKビルドを実行し、成功時にデバッグAPKを保存します。通常のPush/PRではキーなし、手動実行で `with_ai` を有効にすると招待したテスター用のAI入りAPKを作れます。
 
 ## 開発用チェック
 

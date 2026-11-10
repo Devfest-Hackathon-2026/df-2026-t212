@@ -26,9 +26,9 @@ void main() {
         expect(call.arguments['id'], '42');
         return {'id': '42', 'type': 1, 'width': 600, 'height': 900, 'modifiedDt': modified};
       }
-      if (call.method == 'getFullFile') {
+      if (call.method == 'getOriginBytes') {
         if (changeDuringRead) modified++;
-        return file.path;
+        return file.readAsBytes();
       }
       return null;
     });

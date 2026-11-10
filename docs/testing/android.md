@@ -2,6 +2,16 @@
 
 対象ブランチ: `first-build`。まず写真の取り込みから編集・共有までを実機で試すための準備です。Android全機能の移植完了を意味しません。
 
+## 招待されたテスターがまず使うもの
+
+このPrivateリポジトリの招待を受け入れたら、[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml) の成功した手動実行から **`after-hue-android-ai-debug`** artifactをダウンロードし、ZIP内のAPKを端末にインストールしてください。所有者と同じAI設定を組み込んであるため、APIキーの用意は不要です。
+
+最新版を作る場合は **Run workflow → Branch: first-build → with_aiを有効 → Run workflow**。通常のPush/PRではキーなしAPKを作ります。artifactは3日で失効しますが、ダウンロードしたAPK自体は期限切れになりません。
+
+GitHub Secret `AFTER_HUE_TEST_DEFINES` はビルド時だけ読み出し、ソースには入れません。**APKからキーを取り出すことは可能**なので、AI入りAPKは招待したテスターだけで使用し、公開・再配布しないでください。AIビルドはPrivateリポジトリでのみ動くようにしています。
+
+ソースから `flutter run` して開発する場合は以下の手順です。ローカルのキーなし実行と、AI入りAPKのテストを併用できます。
+
 ## 1. 環境
 
 - Flutter **3.47.9** / Dart **3.13.7**（このリポジトリの開発・CIと同じバージョン）
@@ -44,7 +54,7 @@ flutter run -d <Androidのdevice-id>
 flutter run -d <Androidのdevice-id> --dart-define-from-file=config/development.local.json
 ```
 
-この開発構成では写真の縮小版と編集依頼がOpenAIに送られ、API料金が発生します。キーはアプリに組み込まれるため、キー入りAPKを配布する構成にはしていません。CIのAPKにはキーを入れません。
+この開発構成では写真の縮小版と編集依頼がOpenAIに送られ、API料金が発生します。キーはアプリに組み込まれます。自分のキーでビルドしたAPKも公開しないでください。所有者のキーを使う場合は、上記の手動AIビルドを利用してください。
 
 `AFTER_HUE_DEMO_TOOLS=true` にするとSettingsに確認付きの初期化が出ます。After Hueの編集・設定・履歴を消してオンボーディングに戻します。端末の写真は削除しません。
 
@@ -74,7 +84,7 @@ flutter run -d <Androidのdevice-id> --dart-define-from-file=config/development.
 
 ## 6. APKと不具合報告
 
-GitHub Actionsの **Android test build** が成功すると `after-hue-android-debug` artifactからAPKを取得できます。APIキーなし、初期化オプションありのテスト用です。リリース署名・ストア配布向けではありません。
+GitHub Actionsの **Android test build** が成功すると `after-hue-android-local-debug`（通常実行）または `after-hue-android-ai-debug`（手動AI実行）artifactからAPKを取得できます。どちらも初期化オプションありのテスト用です。リリース署名・ストア配布向けではありません。
 
 手元でAPKを作る場合:
 

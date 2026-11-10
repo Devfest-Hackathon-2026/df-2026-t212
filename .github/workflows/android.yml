@@ -4,6 +4,11 @@ on:
     branches: [first-build, main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      with_ai:
+        description: 'Build a private tester APK with the owner’s AI configuration'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -27,11 +32,34 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos
       - run: flutter test --reporter expanded
-      # No API keys in CI or the downloadable APK. Auto uses LocalAgent.
-      - run: flutter build apk --debug --dart-define=AFTER_HUE_DEMO_TOOLS=true
+      - name: Build without AI credentials
+        if: ${{ !inputs.with_ai }}
+        run: flutter build apk --debug --dart-define=AFTER_HUE_DEMO_TOOLS=true
+      - name: Build private AI tester APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.with_ai }}
+        env:
+          TEST_DEFINES: ${{ secrets.AFTER_HUE_TEST_DEFINES }}
+          PRIVATE_REPOSITORY: ${{ github.event.repository.private }}
+        shell: bash
+        run: |
+          test "$PRIVATE_REPOSITORY" = true || { echo "AI APKs require a private repository"; exit 1; }
+          config_path="$RUNNER_TEMP/afterhue-defines.json"
+          export config_path
+          trap 'rm -f "$config_path"' EXIT
+          python3 - <<'PY'
+          import json, os
+          data = json.loads(os.environ['TEST_DEFINES'])
+          if not data.get('OPENAI_API_KEY'):
+              raise SystemExit('AFTER_HUE_TEST_DEFINES needs OPENAI_API_KEY')
+          data['AFTER_HUE_DEMO_TOOLS'] = 'true'
+          with open(os.open(os.environ['config_path'], os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600), 'w') as f:
+              json.dump(data, f)
+          PY
+          unset TEST_DEFINES
+          flutter build apk --debug --dart-define-from-file="$config_path"
       - uses: actions/upload-artifact@v4
         with:
-          name: after-hue-android-debug
+          name: after-hue-android-${{ inputs.with_ai && 'ai' || 'local' }}-debug
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
