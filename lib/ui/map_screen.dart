@@ -22,6 +22,7 @@ import 'package:maplibre/maplibre.dart'
         Marker,
         WidgetLayer;
 
+import '../l10n/strings.dart';
 import '../core/recipe.dart';
 import '../data/places.dart';
 import '../data/store.dart';
@@ -743,7 +744,7 @@ class _MapScreenState extends State<MapScreen>
                 opacity: _presenting ? 0 : 1,
                 duration: const Duration(milliseconds: 300),
                 curve: Motion.settle,
-                child: Text('Map', style: Txt.display),
+                child: Text(context.tr('Map', '地図'), style: Txt.display),
               ),
             ),
             if (_presenting)
@@ -753,7 +754,7 @@ class _MapScreenState extends State<MapScreen>
                 child: Glass(
                   radius: 24,
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: TextAction('Done', onTap: _closePlayback),
+                  child: TextAction(context.tr('Done', '完了'), onTap: _closePlayback),
                 ),
               ),
             // Show everything again after wandering off.
@@ -798,8 +799,8 @@ class _MapScreenState extends State<MapScreen>
                   ),
                   child: Text(
                     s.visible.isEmpty
-                        ? 'No developed photos yet.'
-                        : 'These photos have no location.',
+                        ? context.tr('No developed photos yet.', '現像済みの写真はまだありません。')
+                        : context.tr('These photos have no location.', 'これらの写真には位置情報がありません。'),
                     style: Txt.small.copyWith(color: Neutral.primary),
                   ),
                 ),
@@ -1782,8 +1783,9 @@ class _TimelineState extends State<_Timeline> {
   String? _grab; // 'start' | 'end' | 'move'
   int? _lastMonth;
 
-  String _fmt(DateTime t) =>
-      '${monthsShort[t.month - 1]} ${t.day}${_at(widget.w0).year != _at(widget.w1).year ? ' ${t.year}' : ''}';
+  String _fmt(DateTime t) => context.isJapanese
+      ? '${_at(widget.w0).year != _at(widget.w1).year ? '${t.year}年' : ''}${t.month}月${t.day}日'
+      : '${monthsShort[t.month - 1]} ${t.day}${_at(widget.w0).year != _at(widget.w1).year ? ' ${t.year}' : ''}';
   DateTime _at(double n) => DateTime.fromMillisecondsSinceEpoch(
     (widget.t0.millisecondsSinceEpoch +
             n *
@@ -1804,7 +1806,7 @@ class _TimelineState extends State<_Timeline> {
             children: [
               Expanded(
                 child: Text(
-                  '${_fmt(_at(widget.w0))} – ${_fmt(_at(widget.w1))}${_at(widget.w0).year == _at(widget.w1).year ? '  ${_at(widget.w1).year}' : ''}',
+                  '${context.isJapanese && _at(widget.w0).year == _at(widget.w1).year ? '${_at(widget.w0).year}年 ' : ''}${_fmt(_at(widget.w0))} – ${_fmt(_at(widget.w1))}${!context.isJapanese && _at(widget.w0).year == _at(widget.w1).year ? '  ${_at(widget.w1).year}' : ''}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Txt.mono.copyWith(
@@ -1820,10 +1822,10 @@ class _TimelineState extends State<_Timeline> {
                 ),
               TextAction(
                 widget.playing
-                    ? 'Pause'
+                    ? context.tr('Pause', '一時停止')
                     : (widget.presenting && widget.w1 >= 1 - 1e-6
-                          ? 'Replay'
-                          : 'Play'),
+                          ? context.tr('Replay', 'もう一度')
+                          : context.tr('Play', '再生')),
                 onTap: widget.items.isEmpty ? null : widget.onPlay,
               ),
             ],

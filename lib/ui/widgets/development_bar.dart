@@ -2,7 +2,9 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../data/store.dart';
+import '../../l10n/strings.dart';
 import '../theme.dart';
+import '../cloud_ai_consent.dart';
 import 'common.dart';
 
 /// A continuation of the person's batch, beside the other photo actions.
@@ -19,15 +21,15 @@ class DevelopmentBar extends StatelessWidget {
       builder: (context, _) {
         final items = (scope ?? store.items).where((it) => store.byKey(it.key) == it && it.shown);
         final remaining = items.where((it) => it.isUndeveloped).toList();
-        final busy = items.where((it) => it.picked && it.asked &&
+        final busy = store.cloudAiBlocked ? 0 : items.where((it) => it.picked && it.asked &&
             (it.state == Develop.pending || it.state == Develop.developing)).length;
         final progress = store.developmentProgress(scope);
-        final automatic = scope == null ? store.items.where((it) => !it.picked &&
+        final automatic = !store.cloudAiBlocked && scope == null ? store.items.where((it) => !it.picked &&
           (it.state == Develop.pending || it.state == Develop.developing)).length : 0;
         final autoProgress = store.automaticProgress();
         final autoLabel = autoProgress.active > 0
-            ? 'Auto · ${autoProgress.done} / ${autoProgress.total} processed'
-            : 'Auto · $automatic queued';
+            ? context.tr('Auto · ${autoProgress.done} / ${autoProgress.total} processed', '自動 · ${autoProgress.done} / ${autoProgress.total}枚処理済み')
+            : context.tr('Auto · $automatic queued', '自動 · $automatic枚待機中');
         return AnimatedSize(
           duration: MediaQuery.disableAnimationsOf(context) ? Duration.zero : const Duration(milliseconds: 220),
           curve: Motion.settle,
@@ -40,19 +42,19 @@ class DevelopmentBar extends StatelessWidget {
               Expanded(
                 child: Semantics(
                   button: onReview != null && remaining.isNotEmpty,
-                  label: onReview != null && remaining.isNotEmpty ? 'Review ${remaining.length} undeveloped photos' : null,
+                  label: onReview != null && remaining.isNotEmpty ? context.tr('Review ${remaining.length} undeveloped photos', '未現像${remaining.length}枚を確認') : null,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: onReview == null || remaining.isEmpty ? null : () => onReview!(remaining),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
                       child: Row(children: [
-                        if (busy > 0 || autoProgress.active > 0) ...[
+                        if (busy > 0 || (!store.cloudAiBlocked && autoProgress.active > 0)) ...[
                           const CupertinoActivityIndicator(radius: 6, color: Colors.black),
                           const SizedBox(width: 8),
                         ],
                         Flexible(child: Text(
-                          busy > 0 ? '${progress.done} / ${progress.total} developed' : automatic > 0 ? autoLabel : '${remaining.length} undeveloped',
+                          busy > 0 ? context.tr('${progress.done} / ${progress.total} developed', '${progress.done} / ${progress.total}枚を現像済み') : automatic > 0 ? autoLabel : context.tr('${remaining.length} undeveloped', '未現像 ${remaining.length}枚'),
                           style: Txt.small.copyWith(color: Neutral.secondary),
                         )),
                         if (onReview != null && remaining.isNotEmpty) ...[
@@ -65,7 +67,9 @@ class DevelopmentBar extends StatelessWidget {
                 ),
               ),
               if (remaining.isNotEmpty)
-                TextAction(scope == null ? 'Auto all' : 'Auto remaining', onTap: () {
+                TextAction(scope == null ? context.tr('Auto all', 'すべて自動現像') : context.tr('Auto remaining', '残りを自動現像'), onTap: () async {
+                  if (store.cloudAiBlocked && !await requestCloudAiConsent(context)) return;
+                  if (!context.mounted) return;
                   Haptics.light();
                   store.autoDevelopUndeveloped(remaining);
                 }),

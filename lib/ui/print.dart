@@ -12,6 +12,7 @@ import 'package:share_plus/share_plus.dart';
 import '../core/print_layout.dart';
 import '../data/print_export.dart';
 import '../data/store.dart';
+import '../l10n/strings.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 
@@ -59,8 +60,8 @@ class _PrintScreenState extends State<PrintScreen> {
 
   PrintLayout get _previewLayout => !_editingDetails ? _layout : PrintLayout(
     style: _style, paper: _paper, landscape: _landscape, fill: _fill,
-    title: _title.text.trim().isEmpty ? 'Add a title' : _title.text,
-    place: _place.text.trim().isEmpty ? 'Add a place' : _place.text,
+    title: _title.text.trim().isEmpty ? context.tr('Add a title', 'タイトルを入力') : _title.text,
+    place: _place.text.trim().isEmpty ? context.tr('Add a place', '場所を入力') : _place.text,
     date: _layout.date, colors: _layout.colors, showColors: _colors,
   );
 
@@ -97,7 +98,7 @@ class _PrintScreenState extends State<PrintScreen> {
         if (!_orientationChosen) _landscape = photo.width > photo.height;
       });
     } catch (_) {
-      if (mounted) setState(() => _loadError = 'Could not load this photo. Check that the original is available and try again.');
+      if (mounted) setState(() => _loadError = context.tr('Could not load this photo. Check that the original is available and try again.', '写真を読み込めませんでした。元の写真を確認して、もう一度お試しください。'));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -135,7 +136,7 @@ class _PrintScreenState extends State<PrintScreen> {
         Store.instance.ignoreSavedExport(saved.id);
         if (mounted) {
           Haptics.success();
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved to Photos')));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.tr('Saved to Photos', '写真に保存しました'))));
         }
       } else {
         final directory = await getTemporaryDirectory();
@@ -150,8 +151,10 @@ class _PrintScreenState extends State<PrintScreen> {
     } catch (_) {
       if (mounted) {
         setState(() => _actionError = action == 'Save image'
-          ? 'Could not save. Check photo access in Settings, or use Share image.'
-          : 'Could not ${action == 'Print' ? 'open printing' : 'share the image'}. Please try again.');
+          ? context.tr('Could not save. Check photo access in Settings, or use Share image.', '保存できませんでした。設定で写真へのアクセスを確認するか、共有をお試しください。')
+          : action == 'Print'
+            ? context.tr('Could not open printing. Please try again.', '印刷画面を開けませんでした。もう一度お試しください。')
+            : context.tr('Could not share the image. Please try again.', '画像を共有できませんでした。もう一度お試しください。'));
       }
     } finally {
       if (mounted) setState(() => _busy = null);
@@ -176,10 +179,10 @@ class _PrintScreenState extends State<PrintScreen> {
     child: Column(mainAxisSize: MainAxisSize.min, children: [
       Row(children: [
         Expanded(child: Wrap(children: [
-          ModeChoice('Title', selected: !_editingPlace, onTap: () => _selectDetail(false)),
-          ModeChoice('Place', selected: _editingPlace, onTap: () => _selectDetail(true)),
+          ModeChoice(context.tr('Title', 'タイトル'), selected: !_editingPlace, onTap: () => _selectDetail(false)),
+          ModeChoice(context.tr('Place', '場所'), selected: _editingPlace, onTap: () => _selectDetail(true)),
         ])),
-        TextAction('Done', onTap: () {
+        TextAction(context.tr('Done', '完了'), onTap: () {
           _detailFocus.unfocus();
           setState(() => _editingDetails = false);
         }),
@@ -191,7 +194,7 @@ class _PrintScreenState extends State<PrintScreen> {
         textCapitalization: _editingPlace ? TextCapitalization.words : TextCapitalization.sentences,
         textInputAction: TextInputAction.done,
         decoration: InputDecoration(
-          hintText: _editingPlace ? 'Add a place' : 'Add a title', counterText: '', isDense: true,
+          hintText: _editingPlace ? context.tr('Add a place', '場所を入力') : context.tr('Add a title', 'タイトルを入力'), counterText: '', isDense: true,
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         ),
         onChanged: (_) => setState(() {}),
@@ -199,9 +202,9 @@ class _PrintScreenState extends State<PrintScreen> {
       ),
       const SizedBox(height: 4),
       Wrap(spacing: 4, alignment: WrapAlignment.center, children: [
-        _detailOption('Date', _date, () => setState(() => _date = !_date)),
+        _detailOption(context.tr('Date', '日付'), _date, () => setState(() => _date = !_date)),
         if (_palette.isNotEmpty)
-          _detailOption('Colors', _colors, () => setState(() => _colors = !_colors)),
+          _detailOption(context.tr('Colors', 'カラーバッジ'), _colors, () => setState(() => _colors = !_colors)),
       ]),
     ]),
   );
@@ -219,7 +222,7 @@ class _PrintScreenState extends State<PrintScreen> {
     if (_loadError != null) { return Center(child: Padding(
       padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
         Text(_loadError!, style: Txt.body, textAlign: TextAlign.center),
-        TextButton(onPressed: _load, child: const Text('Try again')),
+        TextButton(onPressed: _load, child: Text(context.tr('Try again', 'もう一度試す'))),
       ]),
     )); }
     final layout = _previewLayout;
@@ -237,7 +240,7 @@ class _PrintScreenState extends State<PrintScreen> {
           decoration: const BoxDecoration(color: Colors.white, boxShadow: [
             BoxShadow(color: Color(0x0C000000), offset: Offset(0, 3), blurRadius: 10),
           ]),
-          child: Semantics(label: 'Print preview', image: true,
+          child: Semantics(label: context.tr('Print preview', '印刷プレビュー'), image: true,
             child: LayoutBuilder(builder: (context, box) {
               final info = layout.informationRect(Size(_photo!.width.toDouble(), _photo!.height.toDouble()));
               return Stack(fit: StackFit.expand, children: [
@@ -248,10 +251,10 @@ class _PrintScreenState extends State<PrintScreen> {
                 top: info.top / layout.size.height * box.maxHeight,
                 height: info.height / layout.size.height * box.maxHeight,
                 child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  Expanded(flex: 8, child: Semantics(button: true, label: 'Edit title on paper',
+                  Expanded(flex: 8, child: Semantics(button: true, label: context.tr('Edit title on paper', '用紙上のタイトルを編集'),
                     child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => _selectDetail(false)))),
                   Expanded(flex: 5, child: FractionallySizedBox(alignment: Alignment.centerLeft, widthFactor: .6,
-                    child: Semantics(button: true, label: 'Edit place on paper',
+                    child: Semantics(button: true, label: context.tr('Edit place on paper', '用紙上の場所を編集'),
                       child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => _selectDetail(true))))),
                 ]),
               ),
@@ -264,14 +267,8 @@ class _PrintScreenState extends State<PrintScreen> {
   Widget _controls() => SingleChildScrollView(
     padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
     child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Wrap(alignment: WrapAlignment.center, children: [
-        for (final style in PrintStyle.values)
-          ModeChoice(style.label, selected: _style == style,
-            onTap: () => setState(() => _style = style)),
-      ]),
-      const Hairline(),
       Row(children: [
-        Text('Paper', style: Txt.label),
+        Text(context.tr('Paper', '用紙'), style: Txt.label),
         const SizedBox(width: 20),
         Expanded(child: DropdownButton<PrintPaper>(
           isExpanded: true, value: _paper, underline: const SizedBox.shrink(),
@@ -284,24 +281,32 @@ class _PrintScreenState extends State<PrintScreen> {
           }).toList(),
           onChanged: (p) { if (p != null) setState(() => _paper = p); },
         )),
-        IconButton(tooltip: _landscape ? 'Use portrait paper' : 'Use landscape paper',
+        IconButton(tooltip: _landscape ? context.tr('Use portrait paper', '用紙を縦向きにする') : context.tr('Use landscape paper', '用紙を横向きにする'),
           onPressed: () => setState(() {
             _orientationChosen = true;
             _landscape = !_landscape;
           }),
           icon: const Icon(Icons.crop_rotate, size: 22)),
       ]),
+      const Hairline(),
+      Wrap(alignment: WrapAlignment.center, children: [
+        for (final style in PrintStyle.values)
+          ModeChoice(context.tr(style.label, switch (style) {
+            PrintStyle.photo => '写真のみ', PrintStyle.instant => '余白あり', PrintStyle.fullPhoto => '写真いっぱい',
+          }), selected: _style == style,
+            onTap: () => setState(() => _style = style)),
+      ]),
       Row(children: [
-        if (!_layout.overlaysPhoto) ModeChoice('Fit', selected: !_fill, onTap: () => setState(() => _fill = false)),
-        if (!_layout.overlaysPhoto) ModeChoice('Fill', selected: _fill, onTap: () => setState(() => _fill = true)),
+        if (!_layout.overlaysPhoto) ModeChoice(context.tr('Fit', '全体を収める'), selected: !_fill, onTap: () => setState(() => _fill = false)),
+        if (!_layout.overlaysPhoto) ModeChoice(context.tr('Fill', '枠を埋める'), selected: _fill, onTap: () => setState(() => _fill = true)),
         if (_layout.supportsDetails) Expanded(child: Align(alignment: Alignment.centerRight,
           child: TextButton(onPressed: _details,
-            child: Text(_layout.hasDetails ? 'Edit details' : 'Add details', textAlign: TextAlign.end)))),
+            child: Text(_layout.hasDetails ? context.tr('Edit details', '文字・バッジを編集') : context.tr('Add details', '文字・バッジを追加'), textAlign: TextAlign.end)))),
       ]),
       if (_layout.cropsPhoto) Padding(padding: const EdgeInsets.only(top: 8),
-        child: Text('The photo is cropped to the area shown.', style: Txt.small))
+        child: Text(context.tr('The photo is cropped to the area shown.', '表示されている範囲で写真が切り取られます。'), style: Txt.small))
       else if (!_layout.supportsDetails) Padding(padding: const EdgeInsets.only(top: 8),
-        child: Text('Keeps your full photo. White space may remain to fit the paper.', style: Txt.small)),
+        child: Text(context.tr('Keeps your full photo. White space may remain to fit the paper.', '写真全体を収めます。用紙との比率によって余白ができます。'), style: Txt.small)),
       if (_actionError != null) Padding(padding: const EdgeInsets.only(top: 12),
         child: Semantics(liveRegion: true, child: Text(_actionError!, style: Txt.body))),
       const SizedBox(height: 16),
@@ -309,13 +314,13 @@ class _PrintScreenState extends State<PrintScreen> {
         style: FilledButton.styleFrom(backgroundColor: Neutral.primary, foregroundColor: Colors.white,
           minimumSize: const Size(44, 48), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
         onPressed: _photo == null || _busy != null ? null : () => _output('Print'),
-        child: Text(_busy == 'Print' ? 'Preparing print...' : 'Print'),
+        child: Text(_busy == 'Print' ? context.tr('Preparing print...', '印刷を準備中…') : context.tr('Print', '印刷')),
       ),
       Row(children: [
         Expanded(child: TextButton(onPressed: _photo == null || _busy != null ? null : () => _output('Save image'),
-          child: Text(_busy == 'Save image' ? 'Saving...' : 'Save image'))),
+          child: Text(_busy == 'Save image' ? context.tr('Saving...', '保存中…') : context.tr('Save image', '画像を保存')))),
         Expanded(child: TextButton(key: _shareKey, onPressed: _photo == null || _busy != null ? null : () => _output('Share image'),
-          child: Text(_busy == 'Share image' ? 'Preparing...' : 'Share image'))),
+          child: Text(_busy == 'Share image' ? context.tr('Preparing...', '準備中…') : context.tr('Share image', '画像を共有')))),
       ]),
     ]),
   );
@@ -325,10 +330,10 @@ class _PrintScreenState extends State<PrintScreen> {
     canPop: _busy == null,
     child: Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(title: Text('Print', style: Txt.title), centerTitle: true,
+      appBar: AppBar(title: Text(context.tr('Print', '印刷'), style: Txt.title), centerTitle: true,
         backgroundColor: Colors.white, surfaceTintColor: Colors.transparent,
         leadingWidth: 72,
-        leading: TextAction('Back', color: Neutral.secondary,
+        leading: TextAction(context.tr('Back', '戻る'), color: Neutral.secondary,
           onTap: _busy == null ? () => Navigator.pop(context) : null)),
       body: SafeArea(top: false, child: LayoutBuilder(builder: (context, constraints) {
         final controls = AbsorbPointer(absorbing: _busy != null, child: _editingDetails ? _detailControls() : _controls());

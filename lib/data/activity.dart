@@ -1,10 +1,35 @@
 enum ActivityKind { importBatch, autoImport, editRequest, developBatch, sourceUpdate }
 enum ActivityOutcome { added, developed, skipped, failed, removed, cancelled, updated, review }
 
+/// Only these known, non-sensitive errors may be persisted in activity history.
+enum ActivityFailureReason {
+  dailyLimit('Cloud AI has reached its daily service limit. Please try again after the daily reset.'),
+  userDailyLimit('You have reached your daily Cloud AI limit. Please try again after the daily reset.'),
+  rateLimited('Too many Cloud AI requests. Please wait a moment and try again.'),
+  quotaUnavailable('Cloud AI cannot check its usage limits. Please try again later; contact the developer if this continues.');
+
+  const ActivityFailureReason(this.message);
+  final String message;
+
+  static ActivityFailureReason? fromError(String? error) {
+    for (final reason in values) {
+      if (reason.message == error) return reason;
+    }
+    return null;
+  }
+
+  static ActivityFailureReason? fromName(Object? name) {
+    for (final reason in values) {
+      if (reason.name == name) return reason;
+    }
+    return null;
+  }
+}
+
 /// One user-visible operation, not one notification per photograph.
 class ActivityEntry {
   ActivityEntry({required this.id, required this.kind, required this.keys, required this.started,
-    this.request, Map<String, ActivityOutcome>? outcomes, this.finished, this.read = false})
+    this.request, Map<String, ActivityOutcome>? outcomes, this.finished, this.read = false, this.failureReason})
       : outcomes = outcomes ?? {};
   final String id;
   final ActivityKind kind;
@@ -12,6 +37,7 @@ class ActivityEntry {
   final DateTime started;
   final String? request;
   final Map<String, ActivityOutcome> outcomes;
+  ActivityFailureReason? failureReason;
   DateTime? finished;
   bool read;
   bool get complete => keys.every(outcomes.containsKey);
@@ -50,8 +76,9 @@ class ActivityEntry {
       ActivityKind.sourceUpdate => 'Originals updated',
     };
   }
-  void finish(String key, ActivityOutcome outcome) {
+  void finish(String key, ActivityOutcome outcome, {String? error}) {
     if (!keys.contains(key) || outcomes.containsKey(key)) return;
+    if (outcome == ActivityOutcome.failed) failureReason ??= ActivityFailureReason.fromError(error);
     outcomes[key] = outcome;
     if (complete) { finished = DateTime.now(); read = false; }
   }
@@ -59,11 +86,13 @@ class ActivityEntry {
     'id': id, 'kind': kind.name, 'keys': keys, 'started': started.millisecondsSinceEpoch,
     'request': request, 'outcomes': outcomes.map((k, v) => MapEntry(k, v.name)),
     'finished': finished?.millisecondsSinceEpoch, 'read': read,
+    if (failureReason != null) 'failureReason': failureReason!.name,
   };
   factory ActivityEntry.fromJson(Map<String, dynamic> j) => ActivityEntry(
     id: j['id'] as String, kind: ActivityKind.values.byName(j['kind'] as String),
     keys: (j['keys'] as List).cast<String>(), started: DateTime.fromMillisecondsSinceEpoch(j['started'] as int),
     request: j['request'] as String?,
+    failureReason: ActivityFailureReason.fromName(j['failureReason']),
     outcomes: Map<String, dynamic>.from(j['outcomes'] as Map).map((k, v) => MapEntry(k, ActivityOutcome.values.byName(v))),
     finished: j['finished'] == null ? null : DateTime.fromMillisecondsSinceEpoch(j['finished'] as int), read: j['read'] == true,
   );

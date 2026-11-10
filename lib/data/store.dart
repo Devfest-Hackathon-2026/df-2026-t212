@@ -12,7 +12,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../agent/agent.dart';
 import '../agent/apple_judge.dart';
-import '../agent/openai_agent.dart';
+import '../agent/gemini_agent.dart';
+import '../agent/cloud_auth.dart';
 import '../core/recipe.dart';
 import '../core/source_tracking.dart';
 import '../core/burst_similarity.dart';
@@ -75,7 +76,7 @@ class PhotoItem {
   String get key => copyOf == null ? id : '$id#$copyOf';
 
   final DateTime taken;
-  final double? lat, lng;
+  double? lat, lng;
   final int _width, _height;
   List<int>? sourceSize, pendingSize, previousSize;
   int get width => sourceSize?[0] ?? _width;
@@ -216,17 +217,69 @@ class Store extends ChangeNotifier {
   Store._();
   static final Store instance = Store._();
 
-  static const _apiKey = String.fromEnvironment('OPENAI_API_KEY');
-  static const _model = String.fromEnvironment('OPENAI_MODEL', defaultValue: 'gpt-6.1-terra');
-  static const _judgeModel = String.fromEnvironment('OPENAI_JUDGE_MODEL', defaultValue: 'gpt-6-luna');
+  static const _aiUrl = String.fromEnvironment('AFTER_HUE_AI_URL');
+  static const _firebaseKey = String.fromEnvironment('FIREBASE_WEB_API_KEY');
+  static const _firebaseProject = String.fromEnvironment('FIREBASE_PROJECT_ID');
+  static const _judgeModel = 'Gemini on Google Cloud';
+
+  bool get cloudAiConfigured => _aiUrl.isNotEmpty && _firebaseKey.isNotEmpty && _firebaseProject.isNotEmpty;
+  bool cloudAiConsent = false;
+  bool cloudAiConsentPromptSeen = false;
+  bool get cloudAiBlocked => cloudAiConfigured && !cloudAiConsent;
 
   DevelopAgent? _agent;
   @visibleForTesting
   set agentForTesting(DevelopAgent value) => _agent = value;
-  DevelopAgent get agent => _agent ??= _apiKey.isEmpty
-      ? LocalAgent()
-      : OpenAIAgent(apiKey: _apiKey, model: _model, judgeModel: _judgeModel,
-          subjectExtractor: (photo, x, y) => Subject.outline(photo, ui.Offset(x, y)));
+  DevelopAgent get agent {
+    if (cloudAiBlocked) return _consentRequired;
+    return _agent ??= !cloudAiConfigured
+        ? LocalAgent()
+        : GeminiAgent(baseUrl: _aiUrl, tokenProvider: CloudAuth(
+            apiKey: _firebaseKey, store: SecureCloudRefreshStore(_firebaseProject)).token,
+            allowed: () => cloudAiConsent,
+            subjectExtractor: (photo, x, y) => Subject.outline(photo, ui.Offset(x, y)));
+  }
+  final DevelopAgent _consentRequired = _ConsentRequiredAgent();
+
+  File get _consentFile => File('${_dir.path}/cloud-ai-consent.json');
+
+  // A revoked grant must not survive an app kill during the regular debounced
+  // state save. Remove the grant first; a missing or invalid file means off.
+  bool _writeCloudAiConsent(bool granted, bool seen) {
+    try {
+      if (!granted && _consentFile.existsSync()) _consentFile.deleteSync();
+      final temp = File('${_dir.path}/cloud-ai-consent.pending.json');
+      temp.writeAsStringSync(jsonEncode({'granted': granted, 'seen': seen}), flush: true);
+      temp.renameSync(_consentFile.path);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool setCloudAiConsent(bool value) {
+    // Reject enabling if the choice cannot be saved. Revocation takes effect
+    // in memory before touching disk, even if storage fails.
+    if (!value) cloudAiConsent = false;
+    final saved = _writeCloudAiConsent(value, true);
+    cloudAiConsent = value && saved;
+    cloudAiConsentPromptSeen = saved;
+    if (!cloudAiConsent) {
+      for (final entry in _runs.entries.toList()) {
+        final item = byKey(entry.key);
+        entry.value.cancel();
+        if (item != null && item.state == Develop.developing) item.state = Develop.pending;
+      }
+    }
+    _save(); notifyListeners();
+    if (cloudAiConsent) _pump();
+    return saved;
+  }
+
+  void dismissCloudAiConsent() {
+    cloudAiConsentPromptSeen = _writeCloudAiConsent(cloudAiConsent, true);
+    _save(); notifyListeners();
+  }
   final DevelopAgent fallback = LocalAgent();
 
   late Directory _dir;
@@ -298,9 +351,9 @@ class Store extends ChangeNotifier {
 
   void readActivity(ActivityEntry entry) { entry.read = true; _save(); notifyListeners(); }
 
-  void _finishActivity(PhotoItem item, ActivityOutcome outcome) {
+  void _finishActivity(PhotoItem item, ActivityOutcome outcome, {String? error}) {
     for (final entry in activity.where((entry) => entry.kind != ActivityKind.editRequest)) {
-      entry.finish(item.key, outcome);
+      entry.finish(item.key, outcome, error: error);
     }
   }
 
@@ -326,7 +379,7 @@ class Store extends ChangeNotifier {
     } else if (run.cancelled) {
       entry.finish(item.key, ActivityOutcome.cancelled);
     } else if (run.result == null) {
-      entry.finish(item.key, ActivityOutcome.failed);
+      entry.finish(item.key, ActivityOutcome.failed, error: run.error);
     } else {
       item.edit = run.result!.copy();
       item.state = item.hues.isEmpty ? Develop.manual : Develop.done;
@@ -373,6 +426,16 @@ class Store extends ChangeNotifier {
         debugPrint('state load failed: $e');
       }
     }
+    // Consent is separate from debounced app state: absence/corruption means off.
+    cloudAiConsent = false;
+    cloudAiConsentPromptSeen = false;
+    try {
+      if (_consentFile.existsSync()) {
+        final consent = jsonDecode(_consentFile.readAsStringSync()) as Map<String, dynamic>;
+        cloudAiConsent = consent['granted'] == true;
+        cloudAiConsentPromptSeen = consent['seen'] == true;
+      }
+    } catch (_) { /* Treat unreadable consent as not granted. */ }
     // Restore photos hidden by the older timestamp/grey-thumbnail heuristic.
     // Only an exact original-file hash may hide them again.
     for (final item in items.where((it) => it.note == _sameNote && it.originalSha256 == null)) {
@@ -419,6 +482,7 @@ class Store extends ChangeNotifier {
     _resetting = true;
     _sourceCheckTimer?.cancel();
     _generation++;
+    _checkedPhotoLocations.clear();
     _saveTimer?.cancel();
     try {
       await _saving;
@@ -454,6 +518,9 @@ class Store extends ChangeNotifier {
       _renders.clear();
       _patchCache = PhotoPatchCache(Directory('${_dir.path}/patches'));
       onboarded = false;
+      cloudAiConsent = false;
+      cloudAiConsentPromptSeen = false;
+      if (_consentFile.existsSync()) _consentFile.deleteSync();
       access = Access.unknown;
       months = 12;
       autoDevelop = true;
@@ -478,6 +545,8 @@ class Store extends ChangeNotifier {
         'explicitBatch': _explicitBatch.toList(),
         'automaticBatch': _automaticBatch.toList(),
         'onboarded': onboarded,
+        'cloudAiConsent': cloudAiConsent,
+        'cloudAiConsentPromptSeen': cloudAiConsentPromptSeen,
         'months': months,
         'autoDevelop': autoDevelop,
         'followSourceChanges': followSourceChanges,
@@ -522,10 +591,50 @@ class Store extends ChangeNotifier {
   Future<Access> updatePhotoAccess({bool request = false}) async {
     final current = await PhotoSource.access(request: request);
     if (current != access) {
+      _checkedPhotoLocations.clear();
       access = current;
       notifyListeners();
     }
     return access;
+  }
+
+  /// Repair metadata omitted before photo-EXIF permission was granted. Existing
+  /// coordinates and all edits remain unchanged; no image is redeveloped.
+  void updatePhotoLocations(Iterable<PhotoRef> refs) {
+    final locations = {for (final ref in refs)
+      if (PhotoSource.validLocation(ref.lat, ref.lng)) ref.id: ref};
+    var changed = false;
+    for (final item in items) {
+      final ref = locations[item.id];
+      if (ref == null || PhotoSource.validLocation(item.lat, item.lng)) continue;
+      item.lat = ref.lat;
+      item.lng = ref.lng;
+      changed = true;
+    }
+    if (changed) { _save(); notifyListeners(); }
+  }
+
+  final _checkedPhotoLocations = <String>{};
+  bool _checkingPhotoLocations = false;
+  Future<void> backfillPhotoLocations() async {
+    if (!Platform.isAndroid || _checkingPhotoLocations || _resetting || !ready) return;
+    _checkingPhotoLocations = true;
+    final generation = _generation;
+    try {
+      // A background refresh never opens a permission dialog.
+      if (!await PhotoSource.canReadMediaLocation()) return;
+      final ids = items.where((item) => !PhotoSource.validLocation(item.lat, item.lng) && !_checkedPhotoLocations.contains(item.id))
+          .map((item) => item.id).toSet();
+      final found = <PhotoRef>[];
+      for (final id in ids) {
+        if (_generation != generation || _resetting) return;
+        final ref = await PhotoSource.refById(id);
+        if (_generation != generation || _resetting) return;
+        if (ref != null) { _checkedPhotoLocations.add(id); found.add(ref); }
+        if (found.length >= 16) { updatePhotoLocations(found); found.clear(); }
+      }
+      updatePhotoLocations(found);
+    } finally { _checkingPhotoLocations = false; }
   }
 
   void setMonths(int m) {
@@ -574,6 +683,7 @@ class Store extends ChangeNotifier {
           : refs[math.min(firstBatch, refs.length) - 1].taken;
       _save();
     }
+    updatePhotoLocations(refs);
     bool auto(DateTime taken) => autoDevelop && !taken.isBefore(autoSince!);
     var changed = false;
     final automatic = <PhotoItem>[];
@@ -621,6 +731,8 @@ class Store extends ChangeNotifier {
 
   /// Photos picked by hand, from any date.
   Future<List<PhotoItem>> importRefs(List<PhotoRef> refs, {bool autoDevelop = false}) async {
+    updatePhotoLocations(refs);
+    unawaited(backfillPhotoLocations());
     await _indexOriginalHashes();
     if (autoDevelop) _beginExplicitBatch();
     final added = <PhotoItem>[], processed = <PhotoItem>[];
@@ -770,7 +882,7 @@ class Store extends ChangeNotifier {
 
   int get pendingCount => items.where((e) => e.state == Develop.pending || e.state == Develop.developing).length;
   int get doneCount => items.where((e) => e.state == Develop.done).length;
-  bool get developing => pendingCount > 0;
+  bool get developing => !cloudAiBlocked && pendingCount > 0;
 
   final Map<String, AgentRun> _runs = {};
   final Set<String> _held = {};
@@ -779,7 +891,7 @@ class Store extends ChangeNotifier {
   AgentRun? runFor(PhotoItem it) => _runs[it.key];
 
   void _pump() {
-    if (_resetting) return;
+    if (_resetting || cloudAiBlocked) return;
     _syncAutomaticBatch();
     while (_running < _parallel) {
       final budget = _running + developedToday < dailyLimit;
@@ -850,6 +962,11 @@ class Store extends ChangeNotifier {
 
   /// Run the agent on [it] now, outside the queue (Auto in Edit).
   AgentRun developNow(PhotoItem it) {
+    if (cloudAiBlocked) {
+      final run = AgentRun()..error = 'Enable Cloud AI in Settings to use Auto.';
+      scheduleMicrotask(run.close);
+      return run;
+    }
     final existing = _runs[it.key];
     if (existing != null) return existing;
     _held.remove(it.key);
@@ -866,6 +983,11 @@ class Store extends ChangeNotifier {
   /// The run streams its recipe as it works; [AgentRun.result] holds the
   /// settled one, nothing is saved until the person keeps it.
   AgentRun reviseNow(PhotoItem it, Recipe current, Revision request) {
+    if (cloudAiBlocked) {
+      final run = AgentRun()..error = 'Enable Cloud AI in Settings to use Ask.';
+      scheduleMicrotask(run.close);
+      return run;
+    }
     _runs.remove(it.key)?.cancel();
     final run = AgentRun()..recipe = current.copy()..requestText = request.text..revision = request;
     _runs[it.key] = run;
@@ -977,16 +1099,8 @@ class Store extends ChangeNotifier {
           throw _Skipped();
         }
       }
-      Recipe recipe;
-      try {
-        recipe = await agent.develop(px, originalSize: (width: it.width, height: it.height), log: (s) => _log('${it.id.substring(0, math.min(6, it.id.length))} $s'), run: run);
-      } on AgentCancelled {
-        rethrow;
-      } catch (e) {
-        _log('${agent.name} failed: $e');
-        if (agent is LocalAgent) rethrow;
-        recipe = await fallback.develop(px, run: run);
-      }
+      Recipe recipe = await agent.develop(px, originalSize: (width: it.width, height: it.height),
+          log: (s) => _log('${it.id.substring(0, math.min(6, it.id.length))} $s'), run: run);
       if (run.cancelled) throw AgentCancelled();
       final chosen = recipe;
       recipe = await run.guard(withColorReferencesAsync(px, chosen));
@@ -1020,7 +1134,7 @@ class Store extends ChangeNotifier {
         _finishActivity(it, byKey(it.key) == it ? ActivityOutcome.cancelled : ActivityOutcome.removed);
       } else if (it.state != Develop.pending) {
         _finishActivity(it, it.state == Develop.done ? ActivityOutcome.developed :
-          it.state == Develop.failed || run.error != null ? ActivityOutcome.failed : ActivityOutcome.skipped);
+          it.state == Develop.failed || run.error != null ? ActivityOutcome.failed : ActivityOutcome.skipped, error: run.error);
       }
       if (!run.cancelled && it.edit != null && it.state == Develop.done) run.result ??= it.edit!.copy();
       _finishBackgroundEdit(it, run);
@@ -1414,6 +1528,7 @@ class Store extends ChangeNotifier {
   void scheduleSourceCheck() {
     _sourceCheckTimer?.cancel();
     _sourceCheckTimer = Timer(const Duration(seconds: 3), () {
+      unawaited(backfillPhotoLocations());
       unawaited(checkSourceChanges(background: true));
     });
   }
@@ -1618,3 +1733,14 @@ class Store extends ChangeNotifier {
 class _Skipped implements Exception {}
 
 const _sameNote = 'Same as another photo';
+
+/// Explicit requests made before consent cannot silently turn into local AI.
+class _ConsentRequiredAgent implements DevelopAgent {
+  @override String get name => 'Cloud AI off';
+  AgentError get _error => AgentError('Enable Cloud AI in Settings to use this feature.');
+  @override Future<Recipe> develop(Rgba photo, {void Function(String)? log, AgentRun? run,
+      ({int width, int height})? originalSize}) => Future.error(_error);
+  @override Future<Verdict> judge(Rgba photo, {AgentRun? run}) => Future.error(_error);
+  @override Future<Recipe> revise(Rgba photo, Recipe current, Revision request,
+      {void Function(String)? log, AgentRun? run, ({int width, int height})? originalSize}) => Future.error(_error);
+}

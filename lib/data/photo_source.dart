@@ -9,6 +9,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../core/renderer.dart';
 import 'android_source_snapshot.dart';
+import 'android_photo_location.dart';
 
 enum Access { unknown, denied, limited, full }
 
@@ -82,6 +83,22 @@ class PhotoSource {
     }
   }
 
+  /// Called after a person chooses Import, including when photo access was
+  /// granted by an older build. Android 13/14's library authorization result
+  /// does not establish whether ACCESS_MEDIA_LOCATION was granted.
+  static Future<bool> requestMediaLocationAccess() => Platform.isAndroid
+      ? AndroidPhotoLocation.request() : Future.value(true);
+
+  static Future<bool> canReadMediaLocation() => Platform.isAndroid
+      ? AndroidPhotoLocation.granted() : Future.value(true);
+
+  static Future<PhotoRef?> refById(String id) async {
+    try {
+      final asset = await AssetEntity.fromId(id);
+      return asset == null ? null : await refOf(asset);
+    } catch (_) { return null; }
+  }
+
   static Future<void> presentLimitedPicker() => PhotoManager.presentLimited(type: RequestType.image);
 
   /// Deletes photos from the library. iOS asks the person first, and the
@@ -122,12 +139,21 @@ class PhotoSource {
 
   static Future<PhotoRef> refOf(AssetEntity a) async {
     double? lat = a.latitude, lng = a.longitude;
-    if (lat == null || lng == null || (lat == 0 && lng == 0)) {
-      final ll = await a.latlngAsync();
-      lat = ll?.latitude;
-      lng = ll?.longitude;
+    // On Android 10+ the indexed latitude/longitude is redacted. Read the
+    // original's EXIF asynchronously; never replace it with device GPS.
+    if (Platform.isAndroid || !validLocation(lat, lng)) {
+      try {
+        final ll = await a.latlngAsync();
+        if (validLocation(ll?.latitude, ll?.longitude)) {
+          lat = ll!.latitude;
+          lng = ll.longitude;
+        }
+      } catch (_) {
+        // Missing EXIF, denied metadata permission or an unavailable original
+        // must not prevent the person from importing the photo itself.
+      }
     }
-    final hasLoc = lat != null && lng != null && !(lat == 0 && lng == 0);
+    final hasLoc = validLocation(lat, lng);
     return PhotoRef(
       id: a.id,
       taken: a.createDateTime,
@@ -137,6 +163,10 @@ class PhotoSource {
       height: a.orientatedHeight,
     );
   }
+
+  static bool validLocation(double? lat, double? lng) => lat != null && lng != null &&
+      lat.isFinite && lng.isFinite && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 &&
+      !(lat == 0 && lng == 0);
 
   /// The whole library, newest first, for picking photos by hand.
   static Future<List<AssetEntity>> library({int page = 0, int size = 120}) async {

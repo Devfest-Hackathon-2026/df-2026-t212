@@ -3,9 +3,27 @@ import 'package:flutter/material.dart';
 
 import '../../agent/agent.dart';
 import '../../core/recipe.dart';
+import '../../l10n/strings.dart';
 import '../theme.dart';
 
-String agentWorkLabel(String? status) => switch (status) {
+String agentWorkLabel(String? status, {bool japanese = false}) {
+  if (japanese) {
+    return switch (status) {
+      'add_color' || 'remove_color' => '色を選択中',
+      'exclude_color' || 'set_excluded_color' || 'remove_excluded_color' => '除外する色を調整中',
+      'set_width' || 'set_softness' || 'set_gate' => '色の範囲を調整中',
+      'set_area' => '範囲を指定中',
+      'select_subject' => '被写体を選択中',
+      'adjust_area' => '境界を調整中',
+      'set_mono_tone' => 'トーンを調整中',
+      'set_saturation' => '彩度を調整中',
+      'set_crop' => '切り抜きを調整中',
+      'render' => '仕上がりを確認中',
+      'finish' => '仕上げ中',
+      _ => '写真を確認中',
+    };
+  }
+  return switch (status) {
   'probe' || 'hue_histogram' => 'looking',
   'add_color' || 'remove_color' => 'choosing colors',
   'exclude_color' ||
@@ -21,7 +39,8 @@ String agentWorkLabel(String? status) => switch (status) {
   'render' => 'checking',
   'finish' => 'finishing',
   _ => 'looking',
-};
+  };
+}
 
 /// Follows the run itself, so tool progress remains visible outside Edit.
 class AgentWorkStatus extends StatelessWidget {
@@ -33,14 +52,14 @@ class AgentWorkStatus extends StatelessWidget {
   Widget build(BuildContext context) => StreamBuilder<Recipe>(
     stream: run.changes,
     builder: (context, _) {
-      final label = 'Agent is ${agentWorkLabel(run.status)}…';
+      final label = context.isJapanese ? 'AIが${agentWorkLabel(run.status, japanese: true)}…' : 'Agent is ${agentWorkLabel(run.status)}…';
       return Semantics(
         label: label,
         excludeSemantics: true,
         child: LayoutBuilder(
           builder: (context, size) {
             final text = compact
-                ? (size.maxWidth < 88 ? 'Agent' : 'Agent editing')
+                ? (size.maxWidth < 88 ? context.tr('Agent', 'AI') : context.tr('Agent editing', 'AIが編集中'))
                 : label;
             final color = compact ? Colors.white : Neutral.primary;
             final row = Row(

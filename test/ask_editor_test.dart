@@ -127,8 +127,9 @@ void main() {
     expect(find.text('You can tap Done. Find the result in Activity.'), findsOneWidget);
     agent.runs.first.emit(item.edit!.copy()..saturation = .7, 'set_saturation'); await tester.pump();
     expect(find.text('Agent is adjusting saturation…'), findsOneWidget);
-    agent.results.first.completeError(AgentError('offline'));
+    agent.results.first.completeError(AgentError('Too many Cloud AI requests. Please wait a moment and try again.'));
     await until(tester, () => find.text('Couldn’t finish this edit').evaluate().isNotEmpty);
+    expect(find.text('Too many Cloud AI requests. Please wait a moment and try again.'), findsOneWidget);
     await tester.tap(find.text('Edit request')); await tester.pump(); await tester.pump();
     expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, 'Keep only the flowers');
     await tester.tap(find.byTooltip('View photo')); await tester.pump();

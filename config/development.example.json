@@ -1,6 +1,5 @@
 {
-  "OPENAI_API_KEY": "",
-  "OPENAI_MODEL": "gpt-6.1-terra",
-  "OPENAI_JUDGE_MODEL": "gpt-6-luna",
-  "AFTER_HUE_DEMO_TOOLS": "true"
+  "AFTER_HUE_AI_URL": "",
+  "FIREBASE_WEB_API_KEY": "",
+  "FIREBASE_PROJECT_ID": ""
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../l10n/strings.dart';
 import '../data/store.dart';
 import 'edit.dart';
 import 'print.dart';
@@ -158,32 +159,32 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
       context,
       from: from,
       items: [
-        PopItem('Print', () => Navigator.push(context,
+        PopItem(context.tr('Print', 'プリント'), () => Navigator.push(context,
           MaterialPageRoute(builder: (_) => PrintScreen.forPhoto(item)))),
         if (widget.groupId != null && s.groupFor(item) != null) ...[
-          PopItem('Use as group cover', () { s.setGroupCover(item); _toast('Group cover updated'); }),
-          PopItem('Remove from group', () {
+          PopItem(context.tr('Use as group cover', 'グループの代表にする'), () { s.setGroupCover(item); _toast(context.tr('Group cover updated', '代表写真を変更しました')); }),
+          PopItem(context.tr('Remove from group', 'グループから外す'), () {
             s.removeFromGroup(item);
             _leave();
           }),
-          PopItem('Ungroup photos', () {
+          PopItem(context.tr('Ungroup photos', 'グループを解除'), () {
             final group = s.groupFor(item);
             if (group != null) s.ungroupPhotos(group);
             Navigator.pop(context);
           }),
         ],
-        PopItem('Duplicate', () {
+        PopItem(context.tr('Duplicate', '複製'), () {
           s.duplicate(item);
-          _toast('Duplicated');
+          _toast(context.tr('Duplicated', '複製しました'));
         }),
-        PopItem('Copy Edit', () {
+        PopItem(context.tr('Copy Edit', '編集をコピー'), () {
           s.copyEdit(item);
-          _toast('Edit copied');
+          _toast(context.tr('Edit copied', '編集をコピーしました'));
         }),
-        PopItem('Paste Edit', s.clipboard == null ? null : () => s.pasteEdit([item])),
-        PopItem('Why this color?', _why),
+        PopItem(context.tr('Paste Edit', '編集をペースト'), s.clipboard == null ? null : () => s.pasteEdit([item])),
+        PopItem(context.tr('Why this color?', 'この色を選んだ理由'), _why),
         if (!widget.review)
-          PopItem('Remove from After Hue', () async {
+          PopItem(context.tr('Remove from After Hue', 'After Hueから削除'), () async {
             final removing = item;
             if (!await confirmRemovePhotos(context, 1) || !mounted) return;
             s.remove(removing);
@@ -219,7 +220,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
               ),
               const SizedBox(height: 14),
               Text(
-                r?.why ?? 'No reason was recorded for this photo.',
+                r?.why ?? context.tr('No reason was recorded for this photo.', 'この写真の理由は記録されていません。'),
                 style: Txt.body.copyWith(color: Neutral.secondary),
               ),
             ],
@@ -331,7 +332,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                     padding: EdgeInsets.fromLTRB(8, pad.top + 4, 8, 0),
                     child: Row(
                       children: [
-                        IconAction(G.close, label: 'Close', onTap: () => Navigator.pop(context)),
+                        IconAction(G.close, label: context.tr('Close', '閉じる'), onTap: () => Navigator.pop(context)),
                         Expanded(
                           child: Text(
                             '${_index + 1} / ${_items.length}${widget.groupId == null ? '' : ' · Group'}',
@@ -341,7 +342,7 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                         ),
                         KeyedSubtree(
                           key: _moreKey,
-                          child: IconAction(G.more, label: 'More', onTap: _more),
+                          child: IconAction(G.more, label: context.tr('More', 'その他'), onTap: _more),
                         ),
                       ],
                     ),
@@ -377,12 +378,12 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                                   : _hint
                                   ? [
                                       Text(
-                                        'Press and hold to see the original',
+                                        context.tr('Press and hold to see the original', '長押しで元の写真を表示'),
                                         style: Txt.mono.copyWith(color: Neutral.primary),
                                       ),
                                     ]
                                   : _showOriginal
-                                  ? [Text('Original', style: Txt.mono.copyWith(color: Neutral.primary))]
+                                  ? [Text(context.tr('Original', '元の写真'), style: Txt.mono.copyWith(color: Neutral.primary))]
                                   : [
                                       Expanded(
                                         child: Text(metaLine(item), style: Txt.mono, overflow: TextOverflow.ellipsis),
@@ -404,15 +405,15 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              IconAction(G.share, label: 'Share', busy: _sharing, onTap: _share),
+                              IconAction(G.share, label: context.tr('Share', '共有'), busy: _sharing, onTap: _share),
                               _EditButton(onTap: () => Navigator.of(context).push(EditRoute(item))),
                               widget.review
-                                  ? IconAction(G.trash, label: 'Delete', onTap: _delete)
+                                  ? IconAction(G.trash, label: context.tr('Delete', '削除'), onTap: _delete)
                                   : IconAction(
                                       G.heart,
                                       activeIcon: G.heartFill,
                                       active: item.favorite,
-                                      label: 'Favorite',
+                                      label: context.tr('Favorite', 'お気に入り'),
                                       onTap: () {
                                         Haptics.light();
                                         s.toggleFavorite(item);
@@ -512,7 +513,7 @@ class _EditButtonState extends State<_EditButton> {
   @override
   Widget build(BuildContext context) => Semantics(
         button: true,
-        label: 'Edit',
+        label: context.tr('Edit', '編集'),
         child: GestureDetector(
           onTapDown: (_) => setState(() => _down = true),
           onTapCancel: () => setState(() => _down = false),

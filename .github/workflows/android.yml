@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       with_ai:
-        description: 'Build a private tester APK with the owner’s AI configuration'
+        description: 'Build a private tester APK with the cloud AI test configuration'
         type: boolean
         default: false
 permissions:
@@ -47,15 +47,14 @@ jobs:
           export config_path
           trap 'rm -f "$config_path"' EXIT
           python3 - <<'PY'
-          import base64, json, os
-          data = json.loads(os.environ['TEST_DEFINES'])
-          if not data.get('OPENAI_API_KEY'):
-              raise SystemExit('AFTER_HUE_TEST_DEFINES needs OPENAI_API_KEY')
+          import json, os
+          supplied = json.loads(os.environ['TEST_DEFINES'])
+          fields = ('AFTER_HUE_AI_URL', 'FIREBASE_WEB_API_KEY', 'FIREBASE_PROJECT_ID')
+          if any(not supplied.get(field) for field in fields):
+              raise SystemExit('AFTER_HUE_TEST_DEFINES needs the three cloud client settings')
+          # Only public client configuration goes into the APK, never legacy AI secrets.
+          data = {field: supplied[field] for field in fields}
           data['AFTER_HUE_DEMO_TOOLS'] = 'true'
-          # Gradle failures may echo encoded Dart defines. Mask both forms.
-          key = data['OPENAI_API_KEY']
-          print('::add-mask::' + key)
-          print('::add-mask::' + base64.b64encode(('OPENAI_API_KEY=' + key).encode()).decode())
           with open(os.open(os.environ['config_path'], os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600), 'w') as f:
               json.dump(data, f)
           PY

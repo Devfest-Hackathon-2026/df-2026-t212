@@ -22,7 +22,7 @@ abstract class DevelopAgent {
 
   /// Change [current] the way the person asks, and nothing else.
   Future<Recipe> revise(Rgba photo, Recipe current, Revision request, {void Function(String)? log, AgentRun? run, ({int width, int height})? originalSize}) =>
-      Future.error(AgentError('Asking needs the cloud agent'));
+      Future.error(AgentError('Ask is not configured. Connect the Google Cloud agent to use it.'));
 }
 
 class AgentError implements Exception {

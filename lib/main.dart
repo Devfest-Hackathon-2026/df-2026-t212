@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 
 import 'data/store.dart';
 import 'ui/onboarding.dart';
+import 'ui/cloud_ai_consent.dart';
 import 'ui/shell.dart';
 import 'ui/theme.dart';
 
@@ -20,6 +22,8 @@ class AfterHue extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'After Hue',
+      supportedLocales: const [Locale('en'), Locale('ja')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
       home: ListenableBuilder(
@@ -30,7 +34,7 @@ class AfterHue extends StatelessWidget {
             duration: const Duration(milliseconds: 500),
             switchInCurve: Motion.settle,
             switchOutCurve: Curves.easeInCubic,
-            child: s.onboarded ? const Shell(key: ValueKey('shell')) : const Onboarding(key: ValueKey('onboarding')),
+            child: s.onboarded ? const CloudAiConsentGate(key: ValueKey('shell'), child: Shell()) : const Onboarding(key: ValueKey('onboarding')),
           );
         },
       ),

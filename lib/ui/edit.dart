@@ -12,10 +12,13 @@ import '../agent/agent.dart';
 import '../core/recipe.dart';
 import '../core/crop.dart';
 import '../core/renderer.dart';
+import '../l10n/strings.dart';
+import '../l10n/cloud_ai_errors.dart';
 import '../data/store.dart';
 import '../data/subject.dart';
 import 'edit_preview.dart';
 import 'crop_editor.dart';
+import 'cloud_ai_consent.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 import 'widgets/controls.dart';
@@ -146,6 +149,7 @@ class _EditScreenState extends State<EditScreen> {
   final _askText = TextEditingController();
   final _askFocus = FocusNode();
   String? _note; // what the agent changed, until the next change
+  String? _agentError;
   ({Offset at, KeptColor color})? _offer; // a pick that landed outside the area
   bool _byHand = false;
 
@@ -379,7 +383,7 @@ class _EditScreenState extends State<EditScreen> {
     setState(() => _finding = false);
     if (polys == null || polys.isEmpty) {
       Haptics.warning();
-      setState(() => _note = polys == null ? 'This phone cannot pick things out. Paint instead' : 'Nothing stands out there. Paint it instead');
+      setState(() => _note = polys == null ? context.tr('This phone cannot pick things out. Paint instead', 'この端末では被写体を抽出できません。なぞって選択してください。') : context.tr('Nothing stands out there. Paint it instead', '被写体が見つかりませんでした。なぞって選択してください。'));
       return;
     }
     Haptics.light();
@@ -426,6 +430,7 @@ class _EditScreenState extends State<EditScreen> {
         // Finished on its own: show what it settled on.
         setState(() {
           _run = null;
+          _agentError = run.error;
           if (_lastRequest != null) {
             final ok = run.result != null;
             _askOutcome = ok ? _AskOutcome.done : _AskOutcome.failed;
@@ -446,13 +451,15 @@ class _EditScreenState extends State<EditScreen> {
     );
   }
 
-  void _auto() {
+  Future<void> _auto() async {
     if (_it.auto != null) {
       _change(() => _r = _it.auto!.copy());
       return;
     }
+    if (Store.instance.cloudAiBlocked && !await requestCloudAiConsent(context)) return;
+    if (!mounted) return;
     Haptics.light();
-    setState(() => _attach(Store.instance.developNow(_it)));
+    setState(() { _agentError = null; _attach(Store.instance.developNow(_it)); });
   }
 
   /// The person's first change: stop the agent, keep its work so far.
@@ -480,6 +487,7 @@ class _EditScreenState extends State<EditScreen> {
     setState(() {
       _offer = null;
       _note = null;
+      _agentError = null;
       _lastRequest = null;
       _askOutcome = null;
       _compareRequest = false;
@@ -557,10 +565,6 @@ class _EditScreenState extends State<EditScreen> {
     if (_run != null || ((t == null || t.isEmpty) && _marks.isEmpty)) return;
     FocusScope.of(context).unfocus();
     _ask(Revision(text: t, marks: List.of(_marks)));
-    setState(() {
-      _asking = false;
-      _marking = false;
-    });
   }
 
   void _fit() {
@@ -577,8 +581,10 @@ class _EditScreenState extends State<EditScreen> {
 
   /// The agent changes the current edit as asked. Its work shows live; one
   /// Undo takes the whole change back.
-  void _ask(Revision req) {
+  Future<void> _ask(Revision req) async {
     if (_run != null) return;
+    if (Store.instance.cloudAiBlocked && !await requestCloudAiConsent(context)) return;
+    if (!mounted || _run != null) return;
     _takeOver();
     final before = _r.copy();
     _push(before.copy());
@@ -588,6 +594,7 @@ class _EditScreenState extends State<EditScreen> {
     Haptics.light();
     setState(() {
       _run = run;
+      _agentError = null;
       _lastRequest = req;
       _leaveRunActive = false;
       _askOutcome = null;
@@ -612,6 +619,7 @@ class _EditScreenState extends State<EditScreen> {
         final ok = run.result != null;
         setState(() {
           _run = null;
+          _agentError = ok ? null : run.error;
           _r = ok ? run.result!.copy() : before;
           if (!ok && _undo.isNotEmpty) _undo.removeLast();
           _askOutcome = ok ? _AskOutcome.done : _AskOutcome.failed;
@@ -690,16 +698,16 @@ class _EditScreenState extends State<EditScreen> {
             SizedBox(height: pad.top),
             if (!(_asking && keyboard > 0)) Row(
               children: [
-                TextAction('Cancel', color: Neutral.secondary, onTap: () => Navigator.pop(context)),
+                TextAction(context.tr('Cancel', 'キャンセル'), color: Neutral.secondary, onTap: () => Navigator.pop(context)),
                 _HistoryButton(redo: false, onTap: _undo.isEmpty ? null : _stepBack),
                 _HistoryButton(redo: true, onTap: _redo.isEmpty ? null : _stepForward),
                 const Spacer(),
                 if (running && _lastRequest == null) ...[
                   const CupertinoActivityIndicator(radius: 8, color: Neutral.primary),
-                  TextAction('Stop', onTap: () => setState(_takeOver)),
+                  TextAction(context.tr('Stop', '停止'), onTap: () => setState(_takeOver)),
                 ] else if (!running)
-                  TextAction('Auto', onTap: _auto),
-                TextAction('Done', onTap: _done),
+                  TextAction(context.tr('Auto', '自動'), onTap: _auto),
+                TextAction(context.tr('Done', '完了'), onTap: _done),
                 const SizedBox(width: 6),
               ],
             ),
@@ -939,15 +947,17 @@ class _EditScreenState extends State<EditScreen> {
     final running = _run != null;
     final offer = _offer != null && !running && !_before && !showMask;
     final status = _finding
-        ? 'Looking for the thing there…'
+        ? context.tr('Looking for the thing there…', '被写体を探しています…')
         : _before
-        ? 'Before'
+        ? context.tr('Before', '編集前')
         : showMask
-        ? 'Showing where color is kept'
+        ? context.tr('Showing where color is kept', '色を残す範囲を表示中')
         : running
-        ? 'Agent is ${agentWorkLabel(_run!.status)}… Edit anything to take over'
+        ? context.tr('Agent is ${agentWorkLabel(_run!.status)}… Edit anything to take over', 'AIが${agentWorkLabel(_run!.status, japanese: true)}…操作すると編集を引き継げます')
         : offer
-        ? 'This spot is outside the area'
+        ? context.tr('This spot is outside the area', 'この場所は範囲外です')
+        : cloudAiErrorText(context, _agentError) != null
+        ? cloudAiErrorText(context, _agentError)!
         : _note != null
         ? _note!
         : _it.state == Develop.manual && _it.note != null && _r.colors.isEmpty
@@ -983,8 +993,8 @@ class _EditScreenState extends State<EditScreen> {
               ),
             ),
             if (offer) ...[
-              _ViewButton(label: 'Let the agent fit it', on: true, onTap: _fit),
-              _ViewButton(label: 'Ignore', on: false, onTap: () => setState(() => _offer = null)),
+              _ViewButton(label: context.tr('Let the agent fit it', 'AIに合わせてもらう'), on: true, onTap: _fit),
+              _ViewButton(label: context.tr('Ignore', 'そのまま'), on: false, onTap: () => setState(() => _offer = null)),
             ] else ...[
               _ViewButton(
                 label: 'Ask',
@@ -992,7 +1002,7 @@ class _EditScreenState extends State<EditScreen> {
                 onTap: running ? null : _openAsk,
               ),
               _ViewButton(
-                label: 'Mask',
+                label: context.tr('Mask', 'マスク'),
                 on: _mask,
                 onTap: () {
                   Haptics.tick();
@@ -1000,7 +1010,7 @@ class _EditScreenState extends State<EditScreen> {
                   _request();
                 },
               ),
-              _ViewButton(label: 'Before', on: _before, onHold: (on) => setState(() => _before = on)),
+              _ViewButton(label: context.tr('Before', '編集前'), on: _before, onHold: (on) => setState(() => _before = on)),
             ],
           ],
         ),
@@ -1106,10 +1116,10 @@ class _EditScreenState extends State<EditScreen> {
         if (!typing) Row(children: [
           Expanded(child: Align(alignment: Alignment.centerLeft, child: TextButton(
             onPressed: _toggleMarking,
-            child: Text(_marking ? 'Write instead' : _marks.isEmpty ? 'Mark photo' : '${_marks.length} marks', style: Txt.small.copyWith(color: Neutral.primary)),
+            child: Text(_marking ? context.tr('Write instead', '文章で指定') : _marks.isEmpty ? context.tr('Mark photo', '写真に印をつける') : context.tr('${_marks.length} marks', '${_marks.length}か所'), style: Txt.small.copyWith(color: Neutral.primary)),
           ))),
-          SizedBox(height: 44, child: _ViewButton(label: 'Before', on: _before, onHold: (on) => setState(() => _before = on))),
-          IconButton(tooltip: 'Close Ask', onPressed: _closeAsk,
+          SizedBox(height: 44, child: _ViewButton(label: context.tr('Before', '編集前'), on: _before, onHold: (on) => setState(() => _before = on))),
+          IconButton(tooltip: context.tr('Close Ask', 'Askを閉じる'), onPressed: _closeAsk,
             constraints: const BoxConstraints.tightFor(width: 44, height: 44),
             padding: EdgeInsets.zero, icon: const Glyph(G.close, size: 16, color: Neutral.secondary)),
         ]),
@@ -1118,19 +1128,19 @@ class _EditScreenState extends State<EditScreen> {
           child: Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
             for (final intent in [MarkIntent.keep, MarkIntent.remove])
               ChoiceChip(
-                label: Text(intent == MarkIntent.keep ? 'Keep color' : 'Remove color'),
+                label: Text(intent == MarkIntent.keep ? context.tr('Keep color', '色を残す') : context.tr('Remove color', '色を除く')),
                 selected: _markIntent == intent, showCheckmark: true,
                 selectedColor: const Color(0x14000000), backgroundColor: Colors.transparent,
                 labelStyle: Txt.small.copyWith(color: Neutral.primary),
                 side: const BorderSide(color: Color(0x24000000), width: .8),
                 onSelected: (_) => setState(() => _markIntent = intent),
               ),
-            if (_marks.isNotEmpty) TextButton(onPressed: () => setState(_marks.clear), child: const Text('Clear marks')),
+            if (_marks.isNotEmpty) TextButton(onPressed: () => setState(_marks.clear), child: Text(context.tr('Clear marks', '印を消す'))),
           ]),
         ),
         Row(key: const ValueKey('ask-input-row'), crossAxisAlignment: CrossAxisAlignment.end, children: [
           if (typing) IconButton(
-            tooltip: 'View photo', onPressed: _askFocus.unfocus,
+            tooltip: context.tr('View photo', '写真を見る'), onPressed: _askFocus.unfocus,
             constraints: const BoxConstraints.tightFor(width: 44, height: 44),
             padding: EdgeInsets.zero,
             icon: const Icon(Icons.keyboard_hide_outlined, size: 22, color: Neutral.primary),
@@ -1148,7 +1158,7 @@ class _EditScreenState extends State<EditScreen> {
             textCapitalization: TextCapitalization.sentences,
             style: Txt.body.copyWith(height: 1.35), cursorColor: Neutral.primary,
             decoration: InputDecoration(
-              hintText: _marks.isEmpty ? 'Describe an edit…' : 'Add a note…',
+              hintText: _marks.isEmpty ? context.tr('Describe an edit…', '編集内容を入力…') : context.tr('Add a note…', '補足を入力…'),
               hintMaxLines: 1,
               hintStyle: Txt.body.copyWith(height: 1.35, color: Neutral.secondary),
               filled: true, fillColor: const Color(0x80FFFFFF),
@@ -1164,7 +1174,7 @@ class _EditScreenState extends State<EditScreen> {
             onPressed: canSend && _run == null ? () => _send(_askText.text) : null,
             style: FilledButton.styleFrom(minimumSize: const Size(56, 44), padding: const EdgeInsets.symmetric(horizontal: 12),
               backgroundColor: Neutral.primary, foregroundColor: Neutral.surface, textStyle: Txt.label),
-            child: const Text('Send'),
+            child: Text(context.tr('Send', '送信')),
           ),
         ]),
       ]),
@@ -1174,42 +1184,46 @@ class _EditScreenState extends State<EditScreen> {
   Widget _askProgress() {
     final running = _run != null;
     final done = _askOutcome == _AskOutcome.done;
-    final title = running ? 'Editing your photo' : done ? 'Edit ready' :
-      _askOutcome == _AskOutcome.stopped ? 'Editing stopped' : 'Couldn’t finish this edit';
+    final title = running ? context.tr('Editing your photo', '写真を編集中') : done ? context.tr('Edit ready', '編集が完了しました') :
+      _askOutcome == _AskOutcome.stopped ? context.tr('Editing stopped', '編集を停止しました') : context.tr('Couldn’t finish this edit', '編集を完了できませんでした');
     final request = _lastRequest;
     final description = request?.text?.trim();
     return Glass(dock: true, radius: 22, padding: const EdgeInsets.fromLTRB(16, 8, 12, 12),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Expanded(child: Semantics(liveRegion: true, child: Text(title, style: Txt.label))),
-          if (running) TextButton(onPressed: _stopAsk, child: const Text('Stop'))
-          else IconButton(tooltip: 'Back to tools', onPressed: () => setState(() { _lastRequest = null; _askOutcome = null; }),
+          if (running) TextButton(onPressed: _stopAsk, child: Text(context.tr('Stop', '停止')))
+          else IconButton(tooltip: context.tr('Back to tools', 'ツールに戻る'), onPressed: () => setState(() { _lastRequest = null; _askOutcome = null; }),
             icon: const Glyph(G.close, size: 16), constraints: const BoxConstraints.tightFor(width: 44, height: 44)),
         ]),
         if (description != null && description.isNotEmpty)
           Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(description, style: Txt.body, maxLines: 3, overflow: TextOverflow.ellipsis)),
         if (request != null && request.marks.isNotEmpty)
-          Padding(padding: const EdgeInsets.only(bottom: 8), child: Text('${request.marks.length} marked ${request.marks.length == 1 ? 'object' : 'objects'}', style: Txt.small)),
+          Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(context.tr('${request.marks.length} marked ${request.marks.length == 1 ? 'object' : 'objects'}', '${request.marks.length}か所を指定'), style: Txt.small)),
         if (running) ...[
           AgentWorkStatus(run: _run!),
           const SizedBox(height: 10),
-          Text('You can tap Done. Find the result in Activity.', style: Txt.small.copyWith(height: 1.4)),
+          Text(context.tr('You can tap Done. Find the result in Activity.', '完了を押しても処理は続きます。結果はアクティビティで確認できます。'), style: Txt.small.copyWith(height: 1.4)),
         ] else if (done) ...[
           if (_note != null && _note!.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(_note!, style: Txt.small.copyWith(height: 1.4))),
           Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            SizedBox(height: 44, child: _ViewButton(label: 'Hold to compare', on: _compareRequest, onHold: (on) {
+            SizedBox(height: 44, child: _ViewButton(label: context.tr('Hold to compare', '長押しで比較'), on: _compareRequest, onHold: (on) {
               setState(() => _compareRequest = on); _request();
             })),
-            TextButton(onPressed: _undo.isEmpty ? null : _stepBack, child: const Text('Undo edit')),
-            TextButton(onPressed: _openAsk, child: const Text('Ask again')),
+            TextButton(onPressed: _undo.isEmpty ? null : _stepBack, child: Text(context.tr('Undo edit', '編集を元に戻す'))),
+            TextButton(onPressed: _openAsk, child: Text(context.tr('Ask again', 'もう一度依頼'))),
           ]),
         ] else ...[
-          Text('Your photo is unchanged. Your request is still here.', style: Txt.small.copyWith(height: 1.4)),
+          if (cloudAiErrorText(context, _agentError) case final error?) ...[
+            Text(error, style: Txt.small.copyWith(height: 1.4)),
+            const SizedBox(height: 6),
+          ],
+          Text(context.tr('Your photo is unchanged. Your request is still here.', '写真は変更されていません。依頼内容は残っています。'), style: Txt.small.copyWith(height: 1.4)),
           const SizedBox(height: 6),
           Row(children: [
-            TextButton(onPressed: _openAsk, child: const Text('Edit request')),
+            TextButton(onPressed: _openAsk, child: Text(context.tr('Edit request', '依頼を編集'))),
             const Spacer(),
-            FilledButton(onPressed: request == null ? null : () => _ask(request), child: const Text('Retry')),
+            FilledButton(onPressed: request == null ? null : () => _ask(request), child: Text(context.tr('Retry', '再試行'))),
           ]),
         ],
       ]),
@@ -1253,7 +1267,7 @@ class _EditScreenState extends State<EditScreen> {
                 },
                 child: Row(
                   children: [
-                    Text(_tool == _Tool.accent ? 'Advanced' : 'Values', style: Txt.small.copyWith(color: _advanced ? Neutral.primary : Neutral.tertiary)),
+                    Text(_tool == _Tool.accent ? context.tr('Advanced', '詳細') : context.tr('Values', '調整'), style: Txt.small.copyWith(color: _advanced ? Neutral.primary : Neutral.tertiary)),
                     const SizedBox(width: 8),
                     _MiniToggle(on: _advanced),
                   ],
@@ -1313,7 +1327,7 @@ class _EditScreenState extends State<EditScreen> {
                 ),
               Expanded(child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _openCrop,
                 child: Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Column(children: [
-                  Text('Crop', style: Txt.label.copyWith(color: Neutral.secondary)),
+                  Text(context.tr('Crop', '切り抜き'), style: Txt.label.copyWith(color: Neutral.secondary)),
                   const SizedBox(height: 7),
                 ])))),
             ],
@@ -1324,17 +1338,17 @@ class _EditScreenState extends State<EditScreen> {
   }
 
   String _label(_Tool t) => switch (t) {
-    _Tool.accent => 'Color',
-    _Tool.area => 'Area',
-    _Tool.mono => 'Tone',
+    _Tool.accent => context.tr('Color', '色'),
+    _Tool.area => context.tr('Area', '範囲'),
+    _Tool.mono => context.tr('Tone', 'トーン'),
   };
 
   String get _toolTitle => switch (_tool) {
     _Tool.accent => _excluding
-        ? (_adding ? 'Tap a color to exclude' : 'Adjust the color to exclude')
-        : (_adding ? 'Tap the photo to add a color' : 'Tap the photo to change this color'),
-    _Tool.area => _erase ? 'Paint to take color away' : 'Tap a thing, or paint over it',
-    _Tool.mono => 'Color and atmosphere',
+        ? (_adding ? context.tr('Tap a color to exclude', '除外する色をタップ') : context.tr('Adjust the color to exclude', '除外する色を調整'))
+        : (_adding ? context.tr('Tap the photo to add a color', '写真をタップして色を追加') : context.tr('Tap the photo to change this color', '写真をタップして色を変更')),
+    _Tool.area => _erase ? context.tr('Paint to take color away', 'なぞって色を消す') : context.tr('Tap a thing, or paint over it', '被写体をタップ、またはなぞる'),
+    _Tool.mono => context.tr('Color and atmosphere', '色と雰囲気'),
   };
 
   Widget _colorMode(String label, int count, bool exclude) {
@@ -1366,9 +1380,9 @@ class _EditScreenState extends State<EditScreen> {
               SizedBox(
                 height: 36,
                 child: Row(children: [
-                  _colorMode('Keep', _r.colors.length, false),
+                  _colorMode(context.tr('Keep', '残す'), _r.colors.length, false),
                   const SizedBox(width: 22),
-                  _colorMode('Exclude', _r.excludedColors.length, true),
+                  _colorMode(context.tr('Exclude', '除外'), _r.excludedColors.length, true),
                 ]),
               ),
             SizedBox(
@@ -1401,17 +1415,17 @@ class _EditScreenState extends State<EditScreen> {
               height: 40,
               child: Row(
                 children: [
-                  _modeChip('Add', !_erase, () => setState(() => _erase = false)),
+                  _modeChip(context.tr('Add', '追加'), !_erase, () => setState(() => _erase = false)),
                   const SizedBox(width: 4),
-                  _modeChip('Erase', _erase, () => setState(() => _erase = true)),
+                  _modeChip(context.tr('Erase', '消去'), _erase, () => setState(() => _erase = true)),
                   const Spacer(),
-                  TextAction('Clear', onTap: _r.area == null ? null : () => _change(() => _r.area = null)),
+                  TextAction(context.tr('Clear', 'クリア'), onTap: _r.area == null ? null : () => _change(() => _r.area = null)),
                 ],
               ),
             ),
             SliderRow(
               height: 44,
-              label: 'Brush',
+              label: context.tr('Brush', 'ブラシ'),
               value: _brush * 100,
               min: 1,
               max: 15,
@@ -1430,14 +1444,14 @@ class _EditScreenState extends State<EditScreen> {
           children: [
             SliderRow(
               height: 34,
-              label: 'Saturation',
+              label: context.tr('Saturation', '彩度'),
               value: _r.saturation * 100, min: 0, max: 200, defaultValue: 100,
               advanced: _advanced, onStart: () => _push(_r.copy()), onEnd: () {},
               onChanged: (v) => _change(() => _r.saturation = v / 100, record: false),
             ),
             SliderRow(
               height: 34,
-              label: 'Contrast',
+              label: context.tr('Contrast', 'コントラスト'),
               value: _r.contrast * 100,
               min: -30,
               max: 40,
@@ -1449,7 +1463,7 @@ class _EditScreenState extends State<EditScreen> {
             ),
             SliderRow(
               height: 34,
-              label: 'Mood',
+              label: context.tr('Mood', 'ムード'),
               value: _r.ambience * 100,
               min: 0,
               max: 100,
@@ -1461,7 +1475,7 @@ class _EditScreenState extends State<EditScreen> {
             ),
             SliderRow(
               height: 34,
-              label: 'Vignette',
+              label: context.tr('Vignette', '周辺減光'),
               value: _r.vignette * 100,
               min: 0,
               max: 100,
@@ -1483,7 +1497,7 @@ class _EditScreenState extends State<EditScreen> {
                   ? const SizedBox(width: double.infinity)
                   : SliderRow(
                       height: 34,
-                      label: 'Radius',
+                      label: context.tr('Radius', '範囲'),
                       value: _r.vignetteRadius * 100,
                       min: 30,
                       max: 130,
@@ -1526,7 +1540,7 @@ class _EditScreenState extends State<EditScreen> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('From this photo', style: Txt.mono),
+        Text(context.tr('From this photo', 'この写真の色'), style: Txt.mono),
         const SizedBox(height: 10),
         SizedBox(
           height: 28,
@@ -1537,7 +1551,7 @@ class _EditScreenState extends State<EditScreen> {
                   padding: const EdgeInsets.only(right: 10),
                   child: Swatch(c, size: 28, from: _it, onTap: () => _pick(c.copy())),
                 ),
-              if (_candidates.isEmpty) Text(_lab == null ? '' : 'No strong colors.', style: Txt.small),
+              if (_candidates.isEmpty) Text(_lab == null ? '' : context.tr('No strong colors.', '目立つ色はありません。'), style: Txt.small),
             ],
           ),
         ),
@@ -1570,7 +1584,7 @@ class _EditScreenState extends State<EditScreen> {
     final span = math.max(_sourceShort * 0.1, value.abs());
     return SliderRow(
       height: 44,
-      label: feather ? 'Feather' : 'Boundary',
+      label: feather ? context.tr('Feather', 'ぼかし') : context.tr('Boundary', '境界'),
       value: value,
       min: feather ? 0 : -span,
       max: span,
@@ -1590,7 +1604,7 @@ class _EditScreenState extends State<EditScreen> {
     children: [
       SliderRow(
         height: 44,
-        label: 'Width',
+        label: context.tr('Width', '色幅'),
         value: c.width,
         min: 0,
         max: 60,
@@ -1606,7 +1620,7 @@ class _EditScreenState extends State<EditScreen> {
       ),
       SliderRow(
         height: 44,
-        label: 'Edge',
+        label: context.tr('Edge', '境界のぼかし'),
         value: c.softness,
         min: 0,
         max: 60,
@@ -1969,7 +1983,7 @@ class _HistoryButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
-      label: redo ? 'Redo' : 'Undo',
+      label: redo ? context.tr('Redo', 'やり直す') : context.tr('Undo', '元に戻す'),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap == null
@@ -2083,10 +2097,10 @@ class _AreaValueDialogState extends State<_AreaValueDialog> {
 
   @override
   Widget build(BuildContext context) => CupertinoAlertDialog(
-    title: Text(widget.feather ? 'Feather' : 'Boundary'),
+    title: Text(widget.feather ? context.tr('Feather', 'ぼかし') : context.tr('Boundary', '境界')),
     content: Column(children: [
-      Text(widget.feather ? 'Fade width outside the full-opacity boundary, in original-photo pixels.'
-          : '0 px keeps the drawn area fully opaque. Positive expands; negative contracts. Values use original-photo pixels.'),
+      Text(widget.feather ? context.tr('Fade width outside the full-opacity boundary, in original-photo pixels.', '不透明な範囲の外側をぼかす幅です。元の写真のピクセル数で指定します。')
+          : context.tr('0 px keeps the drawn area fully opaque. Positive expands; negative contracts. Values use original-photo pixels.', '0 pxでは描いた範囲が不透明になります。正の値で広がり、負の値で縮みます。単位は元の写真のピクセルです。')),
       const SizedBox(height: 12),
       CupertinoTextField(
         controller: _controller,
@@ -2097,16 +2111,16 @@ class _AreaValueDialogState extends State<_AreaValueDialog> {
       if (_error != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_error!)),
     ]),
     actions: [
-      CupertinoDialogAction(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-      CupertinoDialogAction(onPressed: () => Navigator.pop(context, widget.feather ? Area.defaultFeatherPixels : 0.0), child: const Text('Reset')),
+      CupertinoDialogAction(onPressed: () => Navigator.pop(context), child: Text(context.tr('Cancel', 'キャンセル'))),
+      CupertinoDialogAction(onPressed: () => Navigator.pop(context, widget.feather ? Area.defaultFeatherPixels : 0.0), child: Text(context.tr('Reset', 'リセット'))),
       CupertinoDialogAction(isDefaultAction: true, onPressed: () {
         final n = double.tryParse(_controller.text.trim());
         if (n == null || !n.isFinite || n < (widget.feather ? 0 : -widget.shortSide) || n > widget.shortSide) {
-          setState(() => _error = 'Enter a value from ${widget.feather ? 0 : -widget.shortSide.round()} to ${widget.shortSide.round()} px.');
+          setState(() => _error = context.tr('Enter a value from ${widget.feather ? 0 : -widget.shortSide.round()} to ${widget.shortSide.round()} px.', '${widget.feather ? 0 : -widget.shortSide.round()}〜${widget.shortSide.round()} pxの値を入力してください。'));
           return;
         }
         Navigator.pop(context, n);
-      }, child: const Text('Apply')),
+      }, child: Text(context.tr('Apply', '適用'))),
     ],
   );
 }

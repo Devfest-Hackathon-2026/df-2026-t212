@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import '../l10n/strings.dart';
 import '../data/photo_source.dart';
 import '../data/store.dart';
 import 'detail.dart';
+import 'cloud_ai_consent.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 import 'widgets/sweep_selection.dart';
@@ -109,7 +111,7 @@ class _ImportSheetState extends State<ImportSheet> with WidgetsBindingObserver {
       _returningFromSettings = false;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Open After Hue in Settings to allow photo access.')),
+        SnackBar(content: Text(context.tr('Open After Hue in Settings to allow photo access.', '設定で After Hue の写真アクセスを許可してください。'))),
       );
     }
   }
@@ -143,30 +145,33 @@ class _ImportSheetState extends State<ImportSheet> with WidgetsBindingObserver {
   Widget _emptyLibrary() {
     if (_checkingAccess || _loading) return const SizedBox.shrink();
     final message = _loadFailed
-        ? 'Could not load your photos.'
+        ? context.tr('Could not load your photos.', '写真を読み込めませんでした。')
         : _canRead
-            ? 'No photos in your library.'
-            : 'Allow photo access to choose photos to import.';
+            ? context.tr('No photos in your library.', 'ライブラリに写真がありません。')
+            : context.tr('Allow photo access to choose photos to import.', '写真を選ぶにはアクセスを許可してください。');
     return Center(child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Text(message, textAlign: TextAlign.center, style: Txt.body.copyWith(color: Neutral.secondary)),
         if (_loadFailed)
-          TextAction('Try again', onTap: () => _checkAccess(requestIfNeeded: true))
+          TextAction(context.tr('Try again', '再試行'), onTap: () => _checkAccess(requestIfNeeded: true))
         else if (!_canRead)
-          TextAction('Open Settings', onTap: _openPhotoSettings),
+          TextAction(context.tr('Open Settings', '設定を開く'), onTap: _openPhotoSettings),
       ]),
     ));
   }
 
   Future<void> _import({required bool autoDevelop}) async {
     if (_picked.isEmpty || _importing) return;
+    if (autoDevelop && Store.instance.cloudAiBlocked && !await requestCloudAiConsent(context)) return;
+    if (!mounted || _importing) return;
     _sweep.end();
     setState(() => _importing = true);
     Haptics.firm();
     final picked = _assets.where((a) => _picked.contains(a.id)).toList();
     late final List<PhotoItem> added;
     try {
+      await PhotoSource.requestMediaLocationAccess();
       final refs = [for (final a in picked) await PhotoSource.refOf(a)];
       if (!mounted) return;
       added = await Store.instance.importRefs(refs, autoDevelop: autoDevelop);
@@ -174,7 +179,7 @@ class _ImportSheetState extends State<ImportSheet> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() => _importing = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not import the selected photos.')),
+        SnackBar(content: Text(context.tr('Could not import the selected photos.', '選択した写真を取り込めませんでした。'))),
       );
       return;
     }
@@ -195,9 +200,9 @@ class _ImportSheetState extends State<ImportSheet> with WidgetsBindingObserver {
         Padding(
           padding: const EdgeInsets.fromLTRB(10, 6, 20, 12),
           child: Row(children: [
-            TextAction('Cancel', color: Neutral.secondary, onTap: _importing ? null : () => Navigator.of(context).pop()),
-            Expanded(child: Text('Choose photos', textAlign: TextAlign.center, style: Txt.label)),
-            TextAction('Deselect all', color: Neutral.secondary, onTap: n == 0 || _importing ? null : () {
+            TextAction(context.tr('Cancel', 'キャンセル'), color: Neutral.secondary, onTap: _importing ? null : () => Navigator.of(context).pop()),
+            Expanded(child: Text(context.tr('Choose photos', '写真を選ぶ'), textAlign: TextAlign.center, style: Txt.label)),
+            TextAction(context.tr('Deselect all', '選択解除'), color: Neutral.secondary, onTap: n == 0 || _importing ? null : () {
               _sweep.end();
               setState(_picked.clear);
             }),
@@ -261,14 +266,14 @@ class _ImportSheetState extends State<ImportSheet> with WidgetsBindingObserver {
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               if (_loadFailed && _assets.isNotEmpty)
-                TextAction('Retry loading more photos', onTap: () => _checkAccess())
+                TextAction(context.tr('Retry loading more photos', '写真の読み込みを再試行'), onTap: () => _checkAccess())
               else
-                Text(_importing ? 'Importing $n photos…' : n == 0 ? 'Select photos to develop' : '$n selected', style: Txt.small),
+                Text(_importing ? context.tr('Importing $n photos…', '$n枚を取り込み中…') : n == 0 ? context.tr('Select photos to develop', '現像する写真を選択') : context.tr('$n selected', '$n枚を選択中'), style: Txt.small),
               const SizedBox(height: 6),
               Wrap(alignment: WrapAlignment.spaceBetween, children: [
-                TextAction('Edit manually', color: Neutral.secondary,
+                TextAction(context.tr('Edit manually', '手動で編集'), color: Neutral.secondary,
                   onTap: n == 0 || _importing ? null : () => _import(autoDevelop: false)),
-                TextAction(n == 0 ? 'Auto develop' : 'Auto develop $n',
+                TextAction(n == 0 ? context.tr('Auto develop', '自動現像') : context.tr('Auto develop $n', '$n枚を自動現像'),
                   onTap: n == 0 || _importing ? null : () => _import(autoDevelop: true)),
               ]),
             ]),
@@ -316,7 +321,7 @@ class _ThumbState extends State<_Thumb> {
                 Positioned(
                   left: 6,
                   bottom: 5,
-                  child: Text('Added', style: Txt.small.copyWith(color: Neutral.secondary, fontSize: 10.5)),
+                  child: Text(context.tr('Added', '追加済み'), style: Txt.small.copyWith(color: Neutral.secondary, fontSize: 10.5)),
                 ),
               if (widget.picked)
                 Positioned(

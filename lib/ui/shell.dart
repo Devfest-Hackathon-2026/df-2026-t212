@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 
+import '../l10n/strings.dart';
 import '../data/store.dart';
 import 'camera.dart';
 import 'import_sheet.dart';
@@ -39,8 +40,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     Haptics.light();
     if (Platform.isAndroid) {
       showDialog<void>(context: context, builder: (context) => AlertDialog(
-        title: const Text('Camera is not ready on Android'),
-        content: const Text('Take a photo with your phone’s camera, then use + to import it into After Hue.'),
+        title: Text(context.tr('Camera is not ready on Android', 'Android版ではカメラを利用できません')),
+        content: Text(context.tr('Take a photo with your phone’s camera, then use + to import it into After Hue.', '端末のカメラで撮影し、＋から After Hue に取り込んでください。')),
         actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
       ));
       return;
@@ -114,7 +115,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                     radius: 28,
                     padding: const EdgeInsets.all(5),
                     child: _TabSwitch(
-                      labels: const ['Photos', 'Map'],
+                      labels: [context.tr('Photos', '写真'), context.tr('Map', '地図')],
                       index: _tab,
                       onChanged: (i) => setState(() => _tab = i),
                     ),

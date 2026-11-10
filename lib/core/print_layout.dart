@@ -83,7 +83,12 @@ class PrintLayout {
     }
     final photo = visiblePhotoRect(source);
     if (!supportsDetails) return Rect.fromLTWH(photo.left, photo.bottom, photo.width, 0);
-    return Rect.fromLTWH(photo.left, photoRect.bottom + 5.5 * scale, photo.width, detailsHeight);
+    // A narrow photo must not squeeze away the place
+    // or badges. The photo stays fitted; only its caption gets room to read.
+    final width = style == PrintStyle.instant && (landscape || photo.width < 60 * scale)
+        ? math.max(photo.width, math.min(photoRect.width, 80 * scale))
+        : photo.width;
+    return Rect.fromLTWH(photo.center.dx - width / 2, photo.bottom + 5.5 * scale, width, detailsHeight);
   }
 
 }

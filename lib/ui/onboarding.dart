@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/strings.dart';
 import '../data/photo_source.dart';
 import '../data/store.dart';
 import 'theme.dart';
@@ -56,50 +57,47 @@ class _OnboardingState extends State<Onboarding> {
             children: [
               _Page(
                 image: _samples[0],
-                text: 'After Hue finds the subject of each photo and keeps only its color. '
-                    'Everything else turns black and white.',
-                actions: [PrimaryButton('Continue', onTap: _next)],
+                text: context.tr('After Hue finds the subject of each photo and keeps only its color. Everything else turns black and white.', 'After Hue は写真の被写体を見つけ、その色だけを残します。ほかの部分はモノクロになります。'),
+                actions: [PrimaryButton(context.tr('Continue', '続ける'), onTap: _next)],
               ),
               _Page(
                 image: _samples[1],
-                text: 'To do this automatically, After Hue needs access to your photos. '
-                    'You can also choose specific photos instead.',
+                text: context.tr('To do this automatically, After Hue needs access to your photos. You can also choose specific photos instead.', '自動で現像するには、写真へのアクセスが必要です。写真を選んで取り込むこともできます。'),
                 actions: [
-                  PrimaryButton('Allow Access', onTap: _allow),
+                  PrimaryButton(context.tr('Allow Access', 'アクセスを許可'), onTap: _allow),
                   const SizedBox(height: 10),
-                  PrimaryButton('Choose Photos', onTap: _choose, secondary: true),
+                  PrimaryButton(context.tr('Choose Photos', '写真を選ぶ'), onTap: _choose, secondary: true),
                 ],
               ),
               _Page(
                 image: _samples[2],
-                text: 'Photos are resized and sent to an AI model for analysis. '
-                    'Location and time stay on this device.',
+                text: context.tr('Photos are resized and sent to an AI model for analysis. Location and time stay on this device.', '写真は縮小して AI モデルに送信し、解析します。撮影場所と日時はこの端末内に残ります。'),
                 footer: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   GestureDetector(
                     onTap: _changeRange,
                     child: Text.rich(
                       TextSpan(children: [
-                        TextSpan(text: Store.instance.months >= 1200 ? 'All photos' : 'Last ${Store.instance.months} months'),
+                        TextSpan(text: Store.instance.months >= 1200 ? context.tr('All photos', 'すべての写真') : context.tr('Last ${Store.instance.months} months', '過去${Store.instance.months}か月')),
                         const TextSpan(text: '  ·  '),
-                        TextSpan(text: 'Change', style: Txt.mono.copyWith(color: Neutral.primary, decoration: TextDecoration.underline)),
+                        TextSpan(text: context.tr('Change', '変更'), style: Txt.mono.copyWith(color: Neutral.primary, decoration: TextDecoration.underline)),
                       ]),
                       style: Txt.mono,
                     ),
                   ),
                   const SizedBox(height: 10),
                   _Check(
-                    label: 'Develop automatically',
-                    hint: 'Newest ${Store.firstBatch}, then new photos. Up to ${Store.dailyLimit} a day.',
+                    label: context.tr('Develop automatically', '自動で現像'),
+                    hint: context.tr('Newest ${Store.firstBatch}, then new photos. Up to ${Store.dailyLimit} a day.', '最新の${Store.firstBatch}枚と、その後の新しい写真を現像します。1日最大${Store.dailyLimit}枚。'),
                     value: Store.instance.autoDevelop,
                     onChanged: (v) => setState(() => Store.instance.autoDevelop = v),
                   ),
                   _Check(
-                    label: 'Skip screenshots',
+                    label: context.tr('Skip screenshots', 'スクリーンショットを除く'),
                     value: Store.instance.skipScreenshots,
                     onChanged: (v) => setState(() => Store.instance.skipScreenshots = v),
                   ),
                 ]),
-                actions: [PrimaryButton('Start', onTap: () => Store.instance.finishOnboarding())],
+                actions: [PrimaryButton(context.tr('Start', 'はじめる'), onTap: () => Store.instance.finishOnboarding())],
               ),
             ],
           ),
@@ -171,7 +169,7 @@ class RangeSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final options = {3: 'Last 3 months', 12: 'Last 12 months', 36: 'Last 3 years', 1200: 'All photos'};
+    final options = {3: context.tr('Last 3 months', '過去3か月'), 12: context.tr('Last 12 months', '過去12か月'), 36: context.tr('Last 3 years', '過去3年'), 1200: context.tr('All photos', 'すべての写真')};
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
@@ -179,9 +177,9 @@ class RangeSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Photos to show', style: Txt.title),
+            Text(context.tr('Photos to show', '表示する写真'), style: Txt.title),
             const SizedBox(height: 6),
-            Text('Newest photos come first, so a longer range does not slow down the first ones.', style: Txt.small),
+            Text(context.tr('Newest photos come first, so a longer range does not slow down the first ones.', '新しい写真から順に表示します。対象期間を長くしても、最初の表示は遅くなりません。'), style: Txt.small),
             const SizedBox(height: 12),
             for (final e in options.entries)
               GestureDetector(

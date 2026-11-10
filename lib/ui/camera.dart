@@ -8,6 +8,7 @@ import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../l10n/strings.dart';
 import '../core/recipe.dart';
 import '../core/camera_palette.dart';
 import '../core/renderer.dart';
@@ -236,8 +237,8 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
     if (!mounted) return;
     setState(
       () => _error = code == 'denied'
-          ? 'Camera access is off.\nTurn it on in Settings to take photos here.'
-          : 'The camera is not available on this device.',
+          ? context.tr('Camera access is off.\nTurn it on in Settings to take photos here.', 'カメラへのアクセスが無効です。\n撮影するには設定で許可してください。')
+          : context.tr('The camera is not available on this device.', 'この端末ではカメラを利用できません。'),
     );
   }
 
@@ -637,10 +638,10 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
           behavior: SnackBarBehavior.floating,
           backgroundColor: Neutral.primary,
           content: Text(switch (e.code) {
-            'library' => 'Saving to Photos is not allowed.',
-            'busy' => 'Still saving the last photos.',
-            'unavailable' => 'There is no camera on this device.',
-            _ => 'The photo could not be taken.',
+            'library' => context.tr('Saving to Photos is not allowed.', '写真への保存が許可されていません。'),
+            'busy' => context.tr('Still saving the last photos.', '前の写真を保存中です。'),
+            'unavailable' => context.tr('There is no camera on this device.', 'この端末にカメラがありません。'),
+            _ => context.tr('The photo could not be taken.', '撮影できませんでした。'),
           }, style: Txt.small.copyWith(color: Neutral.surface)),
         ),
       );
@@ -1193,7 +1194,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
   Widget _dock({bool sideways = false}) {
     final show = _feed != null && _addSlot >= 0 && _active == _addSlot &&
         !_options && _loupe == null && _error == null;
-    final label = Text('Touch and hold a color in the preview to keep it',
+    final label = Text(context.tr('Touch and hold a color in the preview to keep it', '残したい色をプレビュー上で長押し'),
       textAlign: TextAlign.center, style: Txt.small.copyWith(color: sideways ? _ink : _dim));
     return IgnorePointer(
       child: AnimatedOpacity(
@@ -1671,7 +1672,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                       child: Align(
                         widthFactor: 1,
-                        child: Text('No distinct colors', style: Txt.small.copyWith(color: _dim)),
+                        child: Text(context.tr('No distinct colors', '目立つ色はありません'), style: Txt.small.copyWith(color: _dim)),
                       ),
                     )
                   : _swatchRow(38, 26),
@@ -1690,7 +1691,7 @@ class _CameraScreenState extends State<CameraScreen> with TickerProviderStateMix
         height: 44,
         child: Align(
           alignment: Alignment.centerLeft,
-          child: Text('No distinct colors.', style: Txt.small.copyWith(color: _dim)),
+          child: Text(context.tr('No distinct colors.', '目立つ色はありません。'), style: Txt.small.copyWith(color: _dim)),
         ),
       );
     }
@@ -2569,6 +2570,7 @@ class _ReachWheelState extends State<_ReachWheel> with TickerProviderStateMixin 
                               pos: _pos.value,
                               turns: turns,
                               base: widget.base,
+                              names: [context.tr('Width', '色幅'), context.tr('Edge', '境界')],
                             ),
                           ),
                         ),
@@ -2613,13 +2615,14 @@ class _ReachWheelPainter extends CustomPainter {
     required this.pos,
     required this.turns,
     required this.base,
+    required this.names,
   });
   final double t, pos, turns, base;
+  final List<String> names;
   final List<double> values, defaults;
   final int active;
 
   static const ink = _ZoomWheelPainter.ink;
-  static const names = ['Width', 'Edge'];
 
   /// Points of rim a unit, and as far under the finger.
   static const unit = 6.0;
@@ -2784,6 +2787,8 @@ class _ReachWheelPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ReachWheelPainter o) =>
+      o.names[0] != names[0] ||
+      o.names[1] != names[1] ||
       o.t != t ||
       o.pos != pos ||
       o.turns != turns ||

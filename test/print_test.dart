@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:image/image.dart' as img;
 import 'package:pdf/pdf.dart';
 
@@ -76,6 +77,18 @@ void main() {
     }
   });
 
+  test('very narrow crops retain a readable caption on portrait paper', () {
+    const layout = PrintLayout(style: PrintStyle.instant, title: 'A narrow detail',
+      place: 'Asakusa', date: '2026.11.10', colors: [Colors.red, Colors.black], showColors: true);
+    final photo = layout.visiblePhotoRect(const Size(40, 1200));
+    final info = layout.informationRect(const Size(40, 1200));
+    expect(info.width, greaterThan(photo.width));
+    expect(info.width, greaterThanOrEqualTo(70));
+    expect(info.left, greaterThanOrEqualTo(layout.inset));
+    expect(info.right, lessThanOrEqualTo(layout.size.width - layout.inset));
+    expect(info.top - photo.bottom, closeTo(5.5 * layout.scale, .001));
+  });
+
   testWidgets('export preserves all image edges by default and fill deliberately crops', (tester) async {
     await tester.runAsync(() async {
       final source = img.Image(width: 300, height: 100);
@@ -128,6 +141,72 @@ void main() {
       }
       for (final texture in textures) { texture?.dispose(); }
       photo.dispose();
+    });
+  });
+
+  testWidgets('real cropped photos fit portrait and landscape paper across all styles', (tester) async {
+    await tester.runAsync(() async {
+      final content = await sampleContent();
+      final decoded = img.decodeImage(content.photo)!.convert(numChannels: 4);
+      final source = renderer.Rgba(decoded.width, decoded.height, decoded.getBytes());
+      final textures = await Future.wait(content.textures.map((b) async => b == null ? null : await decode(b)));
+      for (final shape in {
+        'portrait': const PhotoCrop(),
+        'landscape': const PhotoCrop(top: .25, bottom: .65),
+        'square': const PhotoCrop(top: 1 / 6, bottom: 5 / 6),
+      }.entries) {
+        final cropped = renderer.cropImage(source, shape.value);
+        final photo = await decode(Uint8List.fromList(img.encodePng(img.Image.fromBytes(
+          width: cropped.width, height: cropped.height, bytes: cropped.pixels.buffer, numChannels: 4))));
+        for (final landscape in [false, true]) {
+          for (final style in PrintStyle.values) {
+            final layout = PrintLayout(style: style, landscape: landscape,
+              title: 'Everything in Tokyo', place: 'Asakusa', date: '2026.11.10',
+              colors: content.colors, showColors: true);
+            expect(layout.size, landscape ? const Size(127, 89) : const Size(89, 127));
+            final info = layout.informationRect(Size(cropped.width.toDouble(), cropped.height.toDouble()));
+            expect(info.bottom, lessThanOrEqualTo(layout.size.height));
+            expect(info.left, greaterThanOrEqualTo(0));
+            expect(info.right, lessThanOrEqualTo(layout.size.width));
+            final bytes = await exportPrintImage(photo, layout, textures: textures, fontFamily: uiFamily, dpi: 120);
+            final rendered = img.decodeJpg(bytes)!;
+            expect(rendered.width, (layout.size.width / 25.4 * 120).round());
+            expect(rendered.height, (layout.size.height / 25.4 * 120).round());
+            if (Platform.environment['AFTER_HUE_REVIEW_FONT'] != null) {
+              final folder = Directory('/tmp/afterhue-print-review/matrix')..createSync(recursive: true);
+              File('${folder.path}/${shape.key}-${landscape ? 'landscape' : 'portrait'}-${style.name}.jpg').writeAsBytesSync(bytes);
+            }
+          }
+        }
+        if (shape.key == 'portrait' && Platform.environment['AFTER_HUE_REVIEW_FONT'] != null) {
+          final narrow = renderer.cropImage(source, const PhotoCrop(left: .4, right: .6));
+          final narrowPhoto = await decode(Uint8List.fromList(img.encodePng(img.Image.fromBytes(
+            width: narrow.width, height: narrow.height, bytes: narrow.pixels.buffer, numChannels: 4))));
+          final narrowBytes = await exportPrintImage(narrowPhoto, PrintLayout(style: PrintStyle.instant,
+            title: 'Everything in Tokyo', place: 'Asakusa', date: '2026.11.10', colors: [...content.colors, ...content.colors.take(2)], showColors: true),
+            textures: [...textures, ...textures.take(2)], fontFamily: uiFamily, dpi: 150);
+          final narrowFolder = Directory('/tmp/afterhue-print-review/matrix')..createSync(recursive: true);
+          File('${narrowFolder.path}/edge-instant-narrow-portrait.jpg').writeAsBytesSync(narrowBytes);
+          narrowPhoto.dispose();
+          final folder = Directory('/tmp/afterhue-print-review/matrix')..createSync(recursive: true);
+          for (final style in [PrintStyle.instant, PrintStyle.fullPhoto]) {
+            for (final variant in ['six-badges', 'long-title', 'long-place', 'no-badges', 'title-only', 'metadata-only']) {
+              final layout = PrintLayout(style: style, landscape: true,
+                title: variant == 'metadata-only' ? '' : variant == 'long-title'
+                  ? 'A very long title about an afternoon walking through old Tokyo' : 'Everything in Tokyo',
+                place: variant == 'title-only' ? '' : variant == 'long-place'
+                  ? 'Tokyo, Taito City, Asakusa, around the temple and narrow streets' : 'Asakusa',
+                date: variant == 'title-only' ? '' : '2026.11.10',
+                colors: [...content.colors, ...content.colors.take(2)],
+                showColors: variant != 'no-badges' && variant != 'title-only');
+              final bytes = await exportPrintImage(photo, layout, textures: [...textures, ...textures.take(2)], fontFamily: uiFamily, dpi: 150);
+              File('${folder.path}/edge-${style.name}-$variant.jpg').writeAsBytesSync(bytes);
+            }
+          }
+        }
+        photo.dispose();
+      }
+      for (final texture in textures) { texture?.dispose(); }
     });
   });
 
@@ -214,6 +293,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(find.text('Edit details'), findsOneWidget);
+      expect(tester.getTopLeft(find.text('Paper')).dy, lessThan(tester.getTopLeft(find.text('Instant')).dy));
       if (capture) { await tester.runAsync(() async {
         final image = await (boundary.currentContext!.findRenderObject() as RenderRepaintBoundary).toImage(pixelRatio: 2);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -256,6 +336,47 @@ void main() {
       debugDisableShadows = true;
     });
   }
+
+  testWidgets('Japanese print controls remain usable on a small phone', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final boundary = GlobalKey();
+    late PrintContent content;
+    await tester.runAsync(() async { content = await sampleContent(); });
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(), locale: const Locale('ja'),
+      supportedLocales: const [Locale('en'), Locale('ja')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      home: RepaintBoundary(key: boundary, child: PrintScreen(loadContent: () async => content, taken: DateTime(2026, 11, 10)))));
+    for (var i = 0; i < 20 && find.byType(CircularProgressIndicator).evaluate().isNotEmpty; i++) {
+      await tester.runAsync(() async { await Future<void>.delayed(const Duration(milliseconds: 50)); });
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(find.text('用紙'), findsOneWidget);
+    await tester.tap(find.text('文字・バッジを追加'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '浅草の午後');
+    await tester.tap(find.text('場所'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '東京・浅草');
+    await tester.tap(find.text('完了'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('写真のみ'));
+    await tester.pumpAndSettle();
+    expect(find.text('文字・バッジを編集'), findsNothing);
+    expect(tester.takeException(), isNull);
+    if (Platform.environment['AFTER_HUE_REVIEW_FONT'] != null) {
+      await tester.runAsync(() async {
+        final image = await (boundary.currentContext!.findRenderObject() as RenderRepaintBoundary).toImage(pixelRatio: 2);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        final folder = Directory('/tmp/afterhue-print-review')..createSync(recursive: true);
+        File('${folder.path}/japanese-small-phone.png').writeAsBytesSync(bytes!.buffer.asUint8List());
+        image.dispose();
+      });
+    }
+  });
 
   testWidgets('Photo exports contain only the photo even after adding details in another style', (tester) async {
     await tester.runAsync(() async {

@@ -7,10 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../core/recipe.dart';
+import '../l10n/strings.dart';
 import '../data/photo_source.dart';
 import '../data/store.dart';
 import 'detail.dart';
 import 'activity.dart';
+import 'cloud_ai_consent.dart';
 import 'settings.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
@@ -76,7 +78,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
   );
 
   Widget _clearSelection() => TextAction(
-    'Deselect all',
+    context.tr('Deselect all', '選択を解除'),
     onTap: _selected.isEmpty ? null : () {
       _sweep.end();
       setState(_selected.clear);
@@ -243,18 +245,18 @@ class _PhotosScreenState extends State<PhotosScreen> {
       padding: const EdgeInsets.fromLTRB(20, 8, 10, 4),
       child: Column(children: [
         SizedBox(height: 48, child: Row(children: [
-          Expanded(child: Text(_selecting ? '${_selected.length} selected' : 'Photos', style: _selecting ? Txt.label : Txt.display)),
+          Expanded(child: Text(_selecting ? context.tr('${_selected.length} selected', '${_selected.length}枚を選択中') : context.tr('Photos', '写真'), style: _selecting ? Txt.label : Txt.display)),
           if (_selecting) ...[
             _clearSelection(),
-            TextAction('Done', onTap: () => _setSelecting(false)),
+            TextAction(context.tr('Done', '完了'), onTap: () => _setSelecting(false)),
           ] else ...[
-            TextAction('Select', color: Neutral.secondary, onTap: () => _setSelecting(true)),
+            TextAction(context.tr('Select', '選択'), color: Neutral.secondary, onTap: () => _setSelecting(true)),
             Semantics(excludeSemantics: true, label: 'Activity${s.unreadActivity > 0 ? ', ${s.unreadActivity} unread' : ''}', button: true,
-              child: IconButton(tooltip: 'Activity', onPressed: () => Navigator.push(context,
+              child: IconButton(tooltip: context.tr('Activity', 'アクティビティ'), onPressed: () => Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const ActivityScreen())),
                 icon: Badge(isLabelVisible: s.unreadActivity > 0, backgroundColor: Neutral.primary,
                   child: const Glyph(G.bell, size: 21, color: Neutral.secondary)))),
-            IconButton(tooltip: 'Settings', icon: const Glyph(G.settings, size: 21, color: Neutral.secondary),
+            IconButton(tooltip: context.tr('Settings', '設定'), icon: const Glyph(G.settings, size: 21, color: Neutral.secondary),
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen()))),
           ],
         ])),
@@ -264,7 +266,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
 
   Widget _status() {
     String? text;
-    if (s.access == Access.limited) text = 'Showing selected photos only';
+    if (s.access == Access.limited) text = context.tr('Showing selected photos only', '選択した写真のみ表示中');
 
     return AnimatedSize(
       duration: const Duration(milliseconds: 300),
@@ -283,7 +285,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                         await PhotoSource.presentLimitedPicker();
                         s.refresh();
                       },
-                      child: Text('Add photos', style: Txt.mono.copyWith(color: Neutral.primary)),
+                      child: Text(context.tr('Add photos', '写真を追加'), style: Txt.mono.copyWith(color: Neutral.primary)),
                     ),
                   ],
                 ],
@@ -343,7 +345,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
                     },
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(6, 0, 20, 6),
-                      child: Text('Clear', style: Txt.label.copyWith(color: Neutral.secondary)),
+                      child: Text(context.tr('Clear', '解除'), style: Txt.label.copyWith(color: Neutral.secondary)),
                     ),
                   )
                 : const SizedBox(height: 1),
@@ -367,9 +369,9 @@ class _PhotosScreenState extends State<PhotosScreen> {
             child: Row(
               children: [
                 Text(
-                  g.first.taken.year == now.year
-                      ? months[g.first.taken.month - 1]
-                      : '${months[g.first.taken.month - 1]} ${g.first.taken.year}',
+                  context.isJapanese
+                      ? (g.first.taken.year == now.year ? '${g.first.taken.month}月' : '${g.first.taken.year}年${g.first.taken.month}月')
+                      : (g.first.taken.year == now.year ? months[g.first.taken.month - 1] : '${months[g.first.taken.month - 1]} ${g.first.taken.year}'),
                   style: Txt.label,
                 ),
                 const SizedBox(width: 12),
@@ -448,14 +450,16 @@ class _PhotosScreenState extends State<PhotosScreen> {
       child: Column(
         children: [
           TextAction(
-            batch == 1 ? 'Develop 1 older photo' : 'Develop $batch older photos',
-            onTap: () {
+            batch == 1 ? context.tr('Develop 1 older photo', '古い写真を1枚現像') : context.tr('Develop $batch older photos', '古い写真を$batch枚現像'),
+            onTap: () async {
+              if (s.cloudAiBlocked && !await requestCloudAiConsent(context)) return;
+              if (!mounted) return;
               Haptics.tick();
               s.developMore();
             },
           ),
           const SizedBox(height: 6),
-          Text('$n not looked at yet', style: Txt.mono),
+          Text(context.tr('$n not looked at yet', '未確認 $n枚'), style: Txt.mono),
         ],
       ),
     );
@@ -470,15 +474,15 @@ class _PhotosScreenState extends State<PhotosScreen> {
         children: [
           Text(
             s.paletteFilter.isNotEmpty
-                ? 'No photos with these colors.'
-                : (s.developing || (!none && s.doneCount == 0) ? 'Developing your first photo.' : 'No photos yet.'),
+                ? context.tr('No photos with these colors.', 'この色の写真はありません。')
+                : (s.developing || (!none && s.doneCount == 0) ? context.tr('Developing your first photo.', '最初の写真を現像しています。') : context.tr('No photos yet.', '写真はまだありません。')),
             style: Txt.body.copyWith(color: Neutral.secondary),
           ),
           if (!none && s.paletteFilter.isEmpty) _more(),
           if (none && !s.developing) ...[
             const SizedBox(height: 18),
             TextAction(
-              'Choose Photos',
+              context.tr('Choose Photos', '写真を選ぶ'),
               onTap: () async {
                 await s.requestAccess();
                 await PhotoSource.presentLimitedPicker();
@@ -504,11 +508,13 @@ class _PhotosScreenState extends State<PhotosScreen> {
         radius: 28,
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
         child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-          TextAction('Auto', onTap: !canAuto ? null : () {
+          TextAction(context.tr('Auto', '自動現像'), onTap: !canAuto ? null : () async {
+            if (s.cloudAiBlocked && !await requestCloudAiConsent(context)) return;
+            if (!mounted) return;
             s.autoDevelopUndeveloped(sel);
             _setSelecting(false);
           }),
-          TextAction('Share', onTap: !canShare ? null : () async {
+          TextAction(context.tr('Share', '共有'), onTap: !canShare ? null : () async {
             final files = <XFile>[];
             for (final it in sel) {
               final f = await s.rendered(it, 2048);
@@ -517,18 +523,18 @@ class _PhotosScreenState extends State<PhotosScreen> {
             if (files.isNotEmpty) await SharePlus.instance.share(ShareParams(files: files));
           }),
           if (s.clipboard == null)
-            TextAction('Group', onTap: sel.length < 2 ? null : () {
+            TextAction(context.tr('Group', 'グループ'), onTap: sel.length < 2 ? null : () {
               s.groupPhotos(sel); Haptics.light(); _setSelecting(false);
             })
           else
-            KeyedSubtree(key: _selectionMoreKey, child: TextAction('More', onTap: () {
+            KeyedSubtree(key: _selectionMoreKey, child: TextAction(context.tr('More', 'その他'), onTap: () {
               final box = _selectionMoreKey.currentContext!.findRenderObject() as RenderBox;
               showPopMenu(context, from: box.localToGlobal(Offset.zero) & box.size, items: [
-                PopItem('Group photos', sel.length < 2 ? null : () { s.groupPhotos(sel); _setSelecting(false); }),
-                PopItem('Paste Edit', sel.isEmpty ? null : () { s.pasteEdit(sel); _setSelecting(false); }),
+                PopItem(context.tr('Group photos', '写真をまとめる'), sel.length < 2 ? null : () { s.groupPhotos(sel); _setSelecting(false); }),
+                PopItem(context.tr('Paste Edit', '編集をペースト'), sel.isEmpty ? null : () { s.pasteEdit(sel); _setSelecting(false); }),
               ]);
             })),
-          TextAction('Remove', onTap: sel.isEmpty ? null : () async {
+          TextAction(context.tr('Remove', '削除'), onTap: sel.isEmpty ? null : () async {
             if (!await confirmRemovePhotos(context, sel.length) || !mounted) return;
             for (final it in sel) { s.remove(it); }
             _setSelecting(false);
@@ -588,12 +594,12 @@ class _GroupSelectionScreenState extends State<_GroupSelectionScreen> {
         _sweep.retainKeys(keys);
         return Column(children: [
           Padding(padding: const EdgeInsets.fromLTRB(20, 8, 10, 0), child: Row(children: [
-            Expanded(child: Text('Group', style: Txt.display)),
-            TextAction('Done', onTap: () => Navigator.pop(context)),
+            Expanded(child: Text(context.tr('Group', 'グループ'), style: Txt.display)),
+            TextAction(context.tr('Done', '完了'), onTap: () => Navigator.pop(context)),
           ])),
           Padding(padding: const EdgeInsets.fromLTRB(20, 4, 10, 8), child: Row(children: [
-            Expanded(child: Text('${_selected.length} of ${members.length} selected', style: Txt.small)),
-            TextAction(_selected.length == members.length ? 'Deselect all' : 'Select all', onTap: members.isEmpty ? null : () {
+            Expanded(child: Text(context.tr('${_selected.length} of ${members.length} selected', '${members.length}枚中${_selected.length}枚を選択中'), style: Txt.small)),
+            TextAction(_selected.length == members.length ? context.tr('Deselect all', '選択を解除') : context.tr('Select all', 'すべて選択'), onTap: members.isEmpty ? null : () {
               _sweep.end(); Haptics.tick();
               _change(_selected.length == members.length ? {} : keys);
             }),
@@ -726,7 +732,7 @@ class _Tile extends StatelessWidget {
                         ),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-                          child: Text(item.state == Develop.pending ? 'Queued' : item.state == Develop.developing ? 'Developing' : 'Undeveloped', maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.mono.copyWith(fontSize: 9, color: Colors.white)),
+                          child: Text(item.state == Develop.pending ? (Store.instance.cloudAiBlocked ? context.tr('Undeveloped', '未現像') : context.tr('Queued', '待機中')) : item.state == Develop.developing ? context.tr('Developing', '現像中') : context.tr('Undeveloped', '未現像'), maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.mono.copyWith(fontSize: 9, color: Colors.white)),
                         ),
                       ),
                     ),

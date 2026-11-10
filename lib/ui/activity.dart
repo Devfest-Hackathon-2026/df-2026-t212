@@ -4,6 +4,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../data/activity.dart';
+import '../l10n/strings.dart';
+import '../l10n/cloud_ai_errors.dart';
 import '../data/store.dart';
 import 'detail.dart';
 import 'source_updates.dart';
@@ -13,14 +15,45 @@ import 'widgets/common.dart';
 class ActivityScreen extends StatelessWidget {
   const ActivityScreen({super.key});
 
-  String _summary(ActivityEntry entry) {
+  String _title(BuildContext context, ActivityEntry entry) {
+    if (!context.isJapanese) return entry.title;
+    final action = switch (entry.kind) {
+      ActivityKind.importBatch => '取り込み',
+      ActivityKind.autoImport => '自動取り込み',
+      ActivityKind.editRequest => 'AI編集',
+      ActivityKind.developBatch => '自動現像',
+      ActivityKind.sourceUpdate => '元の写真の更新',
+    };
+    if (!entry.complete) return '$action中…';
+    if (entry.kind == ActivityKind.sourceUpdate) {
+      return entry.count(ActivityOutcome.review) > 0 ? '$action · 要確認' : '$action済み';
+    }
+    final succeeded = entry.count(ActivityOutcome.added) + entry.count(ActivityOutcome.developed);
+    final failed = entry.count(ActivityOutcome.failed);
+    final cancelled = entry.count(ActivityOutcome.cancelled) + entry.count(ActivityOutcome.removed);
+    if (failed > 0 || cancelled > 0) {
+      if (succeeded > 0) return '$action · 一部完了';
+      return failed > 0 ? '$actionに失敗' : '$actionを中止';
+    }
+    return succeeded == 0 ? '$actionをスキップ' : '$action完了';
+  }
+
+  String _summary(BuildContext context, ActivityEntry entry) {
     if (!entry.complete) {
-      return '${entry.outcomes.length} / ${entry.keys.length} processed';
+      return context.tr('${entry.outcomes.length} / ${entry.keys.length} processed', '${entry.outcomes.length} / ${entry.keys.length}枚を処理済み');
     }
     final pieces = <String>[];
     for (final outcome in ActivityOutcome.values) {
       final count = entry.count(outcome);
-      if (count > 0) pieces.add('$count ${outcome.name}');
+      if (count > 0) {
+        final name = context.isJapanese ? switch (outcome) {
+          ActivityOutcome.added => '追加', ActivityOutcome.developed => '現像',
+          ActivityOutcome.skipped => 'スキップ', ActivityOutcome.failed => '失敗',
+          ActivityOutcome.removed => '削除', ActivityOutcome.cancelled => '中止',
+          ActivityOutcome.updated => '更新', ActivityOutcome.review => '要確認',
+        } : outcome.name;
+        pieces.add(context.isJapanese ? '$name $count枚' : '$count $name');
+      }
     }
     return pieces.join(' · ');
   }
@@ -41,13 +74,13 @@ class ActivityScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       TextAction(
-                        'Back',
+                        context.tr('Back', '戻る'),
                         color: Neutral.secondary,
                         onTap: () => Navigator.pop(context),
                       ),
                       Padding(
                         padding: const EdgeInsets.only(left: 10, top: 8),
-                        child: Text('Activity', style: Txt.display),
+                        child: Text(context.tr('Activity', 'アクティビティ'), style: Txt.display),
                       ),
                     ],
                   ),
@@ -59,7 +92,7 @@ class ActivityScreen extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.all(28),
                     child: Text(
-                      'Imports and agent edits will appear here. Open an activity to find its photos.',
+                      context.tr('Imports and agent edits will appear here. Open an activity to find its photos.', '取り込みやAI編集の履歴がここに表示されます。履歴を開くと対象の写真を確認できます。'),
                       style: Txt.body.copyWith(color: Neutral.secondary),
                     ),
                   ),
@@ -131,7 +164,7 @@ class ActivityScreen extends StatelessWidget {
                                             ],
                                             Expanded(
                                               child: Text(
-                                                entry.title,
+                                                _title(context, entry),
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: Txt.label,
@@ -141,11 +174,16 @@ class ActivityScreen extends StatelessWidget {
                                         ),
                                         const SizedBox(height: 8),
                                         Text(
-                                          _summary(entry),
+                                          _summary(context, entry),
                                           style: Txt.body.copyWith(
                                             fontSize: 14,
                                           ),
                                         ),
+                                        if (cloudAiErrorText(context, entry.failureReason?.message) case final error?)
+                                          Padding(
+                                            padding: const EdgeInsets.only(top: 6),
+                                            child: Text(error, style: Txt.small),
+                                          ),
                                         if (entry.request?.isNotEmpty == true)
                                           Padding(
                                             padding: const EdgeInsets.only(
@@ -171,8 +209,8 @@ class ActivityScreen extends StatelessWidget {
                                             Expanded(
                                               child: Text(
                                                 photos.isEmpty
-                                                    ? 'Photos are no longer in After Hue'
-                                                    : 'View ${photos.length} ${photos.length == 1 ? 'photo' : 'photos'}',
+                                                    ? context.tr('Photos are no longer in After Hue', '写真はAfter Hueにありません')
+                                                    : context.tr('View ${photos.length} ${photos.length == 1 ? 'photo' : 'photos'}', '${photos.length}枚の写真を見る'),
                                                 style: Txt.small,
                                               ),
                                             ),
@@ -293,7 +331,7 @@ class ActivityThumbnail extends StatelessWidget {
       );
     }
     return Semantics(
-      label: '${photos.length} ${photos.length == 1 ? 'photo' : 'photos'} in this activity',
+      label: context.tr('${photos.length} ${photos.length == 1 ? 'photo' : 'photos'} in this activity', 'この履歴の写真 ${photos.length}枚'),
       image: true,
       excludeSemantics: true,
       child: SizedBox.square(

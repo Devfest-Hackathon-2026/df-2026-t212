@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import '../l10n/strings.dart';
 import '../core/crop.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
@@ -61,8 +62,8 @@ class _CropEditorState extends State<CropEditor> {
   @override
   Widget build(BuildContext context) => Scaffold(body: SafeArea(child: Column(children: [
     Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: Row(children: [
-      TextAction('Cancel', onTap: () => Navigator.pop(context)), const Spacer(), Text('Crop', style: Txt.label),
-      const Spacer(), TextAction('Done', onTap: () => Navigator.pop(context, crop)),
+      TextAction(context.tr('Cancel', 'キャンセル'), onTap: () => Navigator.pop(context)), const Spacer(), Text(context.tr('Crop', '切り抜き'), style: Txt.label),
+      const Spacer(), TextAction(context.tr('Done', '完了'), onTap: () => Navigator.pop(context, crop)),
     ])),
     Expanded(child: LayoutBuilder(builder: (context, bounds) {
       final full = PhotoCrop(turns: crop.turns, angle: crop.angle);
@@ -85,7 +86,7 @@ class _CropEditorState extends State<CropEditor> {
         for (final corner in [const Offset(0, 0), const Offset(1, 0), const Offset(0, 1), const Offset(1, 1)])
           Positioned(left: (corner.dx == 0 ? selection.left : selection.right) - 22,
             top: (corner.dy == 0 ? selection.top : selection.bottom) - 22,
-            child: Semantics(label: 'Resize crop corner', child: GestureDetector(behavior: HitTestBehavior.opaque,
+            child: Semantics(label: context.tr('Resize crop corner', '切り抜きの角を調整'), child: GestureDetector(behavior: HitTestBehavior.opaque,
               onPanUpdate: (d) {
                 var left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
                 if (corner.dx == 0) { left = (left + d.delta.dx / w).clamp(0, right - .05); }
@@ -106,20 +107,20 @@ class _CropEditorState extends State<CropEditor> {
               }, child: const SizedBox(width: 44, height: 44)))),
       ])));
     })),
-    Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: SliderRow(label: 'Straighten', value: crop.angle,
+    Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: SliderRow(label: context.tr('Straighten', '傾き'), value: crop.angle,
       min: -45, max: 45, defaultValue: 0, advanced: true, onStart: () {}, onEnd: () {},
       onChanged: (v) => setState(() => crop = PhotoCrop(left: crop.left, top: crop.top, right: crop.right,
         bottom: crop.bottom, turns: crop.turns, angle: v)))),
     SingleChildScrollView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 10), child: Row(children: [
-      for (final option in <String, double?>{'Free': null, 'Original': source.aspectRatio, '1:1': 1, '4:3': 4 / 3, '3:2': 1.5, '16:9': 16 / 9}.entries)
+      for (final option in <String, double?>{context.tr('Free', '自由'): null, context.tr('Original', '元の比率'): source.aspectRatio, '1:1': 1, '4:3': 4 / 3, '3:2': 1.5, '16:9': 16 / 9}.entries)
         TextAction(option.key, color: ratio == option.value ? Neutral.primary : Neutral.secondary, onTap: () => _ratio(option.value)),
     ])),
     Padding(padding: const EdgeInsets.fromLTRB(10, 4, 10, 16), child: Row(children: [
-      TextAction('Rotate 90°', onTap: () => setState(() {
+      TextAction(context.tr('Rotate 90°', '90°回転'), onTap: () => setState(() {
         ratio = ratio == null ? null : 1 / ratio!;
         crop = PhotoCrop(left: 1 - crop.bottom, top: crop.left, right: 1 - crop.top,
           bottom: crop.right, turns: (crop.turns + 1) % 4, angle: crop.angle);
-      })), const Spacer(), TextAction('Reset', onTap: () => setState(() { crop = const PhotoCrop(); ratio = null; })),
+      })), const Spacer(), TextAction(context.tr('Reset', 'リセット'), onTap: () => setState(() { crop = const PhotoCrop(); ratio = null; })),
     ])),
   ])));
 }
