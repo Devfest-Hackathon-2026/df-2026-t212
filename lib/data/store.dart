@@ -1113,6 +1113,16 @@ class Store extends ChangeNotifier {
     _save();
   }
 
+  /// A print saved to Photos is an output, not a new photo to auto-develop.
+  /// Explicit import can still bring it back, just like a removed library item.
+  void ignoreSavedExport(String id) {
+    if (!ready) return;
+    final imported = items.where((it) => it.id == id).toList();
+    for (final item in imported) { remove(item); }
+    _removed.add(id);
+    _save();
+  }
+
   void remove(PhotoItem it) {
     _finishActivity(it, ActivityOutcome.removed);
     removeFromGroup(it, remember: false);

@@ -577,6 +577,34 @@ class PrimaryButton extends StatelessWidget {
   }
 }
 
+/// A small in-place mode choice; the dark action surface is reserved for doing.
+class ModeChoice extends StatelessWidget {
+  const ModeChoice(this.label, {super.key, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true, selected: selected,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () { Haptics.tick(); onTap(); },
+      child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(label, style: Txt.label.copyWith(color: selected ? Neutral.primary : Neutral.secondary)),
+            const SizedBox(height: 5),
+            AnimatedContainer(duration: const Duration(milliseconds: 180), curve: Motion.settle,
+              height: 2, width: selected ? 16 : 0,
+              decoration: BoxDecoration(color: Neutral.primary, borderRadius: BorderRadius.circular(2))),
+          ]),
+        ),
+      ),
+    ),
+  );
+}
+
 /// Shrinks a little under the finger, springs back.
 class _Pressable extends StatefulWidget {
   const _Pressable({required this.child, required this.onTap});

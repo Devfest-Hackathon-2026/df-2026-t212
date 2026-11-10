@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/store.dart';
 import 'edit.dart';
+import 'print.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 import 'widgets/development_bar.dart';
@@ -157,6 +158,8 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
       context,
       from: from,
       items: [
+        PopItem('Print', () => Navigator.push(context,
+          MaterialPageRoute(builder: (_) => PrintScreen.forPhoto(item)))),
         if (widget.groupId != null && s.groupFor(item) != null) ...[
           PopItem('Use as group cover', () { s.setGroupCover(item); _toast('Group cover updated'); }),
           PopItem('Remove from group', () {
@@ -381,15 +384,14 @@ class _DetailScreenState extends State<DetailScreen> with TickerProviderStateMix
                                   : _showOriginal
                                   ? [Text('Original', style: Txt.mono.copyWith(color: Neutral.primary))]
                                   : [
-                                      for (final c in item.hues)
-                                        Padding(
-                                          padding: const EdgeInsets.only(right: 8),
-                                          child: Swatch(c, size: 24, from: item, onTap: () => _similar(c)),
-                                        ),
-                                      const SizedBox(width: 6),
                                       Expanded(
                                         child: Text(metaLine(item), style: Txt.mono, overflow: TextOverflow.ellipsis),
                                       ),
+                                      for (final c in item.hues)
+                                        Padding(
+                                          padding: const EdgeInsets.only(left: 8),
+                                          child: Swatch(c, size: 24, from: item, onTap: () => _similar(c)),
+                                        ),
                                     ],
                             ),
                           ),
