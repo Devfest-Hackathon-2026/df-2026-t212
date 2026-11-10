@@ -10,9 +10,11 @@ After Hueは、写真の中で残したい色を選び、それ以外をモノ�
 
 Androidでは、用意したAI入りのAPKをインストールして試せます。APIキーは設定済みなので、自分で用意する必要はありません。[Androidの案内](docs/testing/android.md)に入手方法と確認してほしい操作をまとめています。Android対応はまだ初期段階で、アプリ内カメラと物体の自動抽出には未対応です。
 
-iPhone側は、今回はMac上のiPhone Simulatorで試す方法を用意しています。TestFlightでの配布はしていません。MacにはXcodeが必要です。手元で起動するためのセットアップは、このREADMEをLLMに渡して任せられます。AIを使う場合は、ご本人のOpenAI APIキーを使ってください。AI用に他サービスのキーを用意する必要はありません。
+iPhoneでは、ご本人のMacから手元のiPhoneにインストールして試します。MacにXcodeを入れ、ご本人の無料のAppleアカウントで署名する方法です。有料のApple Developer Programへの登録は不要ですが、無料署名は7日で期限が切れるので、その後も使う場合はMacから再ビルド・再インストールします。この仕組みは[Appleの無料アカウントの案内](https://developer.apple.com/help/account/basics/about-your-developer-account)に説明されています。
 
-MacはここではiOS版を動かすためのPCを指します。macOSネイティブ版はテスト対象ではありません。また、Simulatorでは実際のカメラや指での操作感を確かめられないため、iPhone実機のテストとは分けて扱います。
+セットアップはこのREADMEをLLMに渡して任せられます。AIを使う場合は、ご本人のOpenAI APIキーを使ってください。AI用に他サービスのキーを用意する必要はありません。
+
+今回はカメラでの撮影も試していただきたいので、iPhone実機を使います。TestFlightでの配布はしていません。Macはインストールに使うPCで、macOSネイティブ版はテスト対象ではありません。
 
 ## セットアップをLLMに任せる
 
@@ -24,7 +26,8 @@ After Hueのユーザーテストをしたいので、セットアップと起�
 ブランチ: first-build
 
 READMEの「セットアップを担当するLLMへ」を読み、私のPCと端末を確認してから、
-アプリを使えるところまで進めてください。開発やコードの変更は依頼していません。
+アプリを使えるところまで進めてください。iPhoneではカメラも試すので、
+Simulatorではなく手元の実機に入れてください。開発やコードの変更は依頼していません。
 APIキーやAppleの認証など、本人の操作が必要なところだけ案内してください。
 ```
 
@@ -58,31 +61,40 @@ flutter run -d <Androidのdevice-id>
 
 このコマンドはキーなしで起動します。ソースからAIを使う場合は、下の「AIの設定」を続けてください。GitHub Secretの値を読み出そうとしたり、APKからキーを抽出したりしてはいけません。
 
-### MacでiOS版を試す場合
+### MacからiPhone実機にインストールする場合
 
-開発元で使っているのはFlutter 3.47.9、Dart 3.13.7、Xcode 27.2です。iOS 26.4.1のSimulatorとiOS 27.2のiPhone実機で起動を確認しています。iOS 27向けのFoundationModels APIを含むため、古いXcodeでもビルドできるとは限りません。まず同じ構成での起動を目指してください。
+開発元で使っているのはFlutter 3.47.9、Dart 3.13.7、Xcode 27.2です。iOS 27.2のiPhone実機で起動を確認しています。iOS 27向けのFoundationModels APIを含むため、古いXcodeでもビルドできるとは限りません。MacのOS、Xcode、接続するiPhoneのOSを確認し、ビルドと端末接続に対応する環境を用意してください。
 
-必要なツールがすでに入っていれば、その環境を使います。Flutterのバージョンが合わない場合も、他のプロジェクトの環境を壊す更新はせず、このアプリ用に分けてください。Xcodeの初回起動、利用規約、追加コンポーネントのインストール、Appleアカウントの認証が必要な場面では本人に操作を案内します。
+必要なツールがすでに入っていれば、その環境を使います。Flutterのバージョンが合わない場合も、他のプロジェクトの環境を壊す更新はせず、このアプリ用に分けてください。Xcodeの初回起動、利用規約、追加コンポーネントのインストール、Appleアカウントの認証は本人に操作を案内します。
 
 ```sh
 flutter pub get
 flutter doctor -v
+open ios/Runner.xcworkspace
+```
+
+実機用の署名と接続は、次の順で設定します。
+
+1. XcodeのSettings → Apple Accountsで、本人のAppleアカウントにサインインします。有料登録をしていないアカウントはPersonal Teamとして使えます。
+2. iPhoneをケーブルでMacに接続し、ロックを解除します。「このコンピュータを信頼しますか？」が出たら本人に確認してもらいます。XcodeのDevice Hubなどの端末管理画面で、接続したiPhoneが認識されることを確認してください。
+3. iPhoneの設定 → プライバシーとセキュリティ → デベロッパモードを有効にします。再起動後の確認とパスコード入力も本人にお願いします。項目がまだ出ない場合は、先にXcodeとのペアリングを開始します。
+4. XcodeでRunnerターゲットのSigning & Capabilitiesを開き、Automatically manage signingを有効にします。Teamを本人のPersonal Teamに変更し、Bundle Identifierも本人用の一意な値にします。例えば `com.yourname.afterhue.usertest` の `yourname` を本人の識別名に置き換えます。開発元のTeamやBundle Identifierをそのまま使わないでください。
+5. 実行先に接続したiPhoneを選び、署名エラーが解消したことを確認します。署名用の設定変更はローカルにとどめ、コミットやPushはしません。アプリ本体のコードを変更する必要はありません。
+
+詳細は[Appleの実機実行ガイド](https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices)と[デベロッパモードの有効化手順](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)を参照してください。
+
+続けて、下の「AIの設定」で本人のキーを用意します。その後、次のコマンドで実機にインストールします。`flutter devices` に表示された実機のIDを指定し、Simulatorや `macos` を選ばないでください。普段のテストではMacのデバッガーに接続せず使えるよう、Releaseモードで起動します。初回はSwift Package Managerの依存解決に時間がかかります。
+
+```sh
 flutter devices
+flutter run --release -d <iPhone実機のdevice-id> --dart-define-from-file=config/development.local.json
 ```
 
-XcodeのDevice HubまたはSimulatorでiPhoneを起動し、`flutter devices` に表示されたSimulatorのIDを指定します。`macos` を選ぶと別の対象になるため、選ばないでください。初回はSwift Package Managerの依存解決に時間がかかります。
+キーなしで手動編集と撮影だけを試す場合は、`--dart-define-from-file=...` を省いて起動できます。iPhoneに開発元の信頼を求める表示が出たら、設定 → 一般 → VPNとデバイス管理で本人の開発者アカウントを確認・信頼してもらいます。
 
-```sh
-flutter run -d <iPhone-Simulatorのdevice-id>
-```
+インストール後はMacとの接続を外し、iPhoneのホーム画面から起動してカメラが使えるところまで確認してください。無料署名が7日で切れたときは、同じTeam・Bundle Identifier・AI設定で上のコマンドを再実行します。アプリを先に削除する必要はありません。削除するとアプリ内のデータも失われるので、期限切れの対処としてアンインストールを案内しないでください。
 
-Simulatorへのインストールに実機用の署名は必要ありません。写真ライブラリが空なら、本人が選んだテスト用の写真を追加してください。たとえば、次のコマンドで起動中のSimulatorに写真を入れられます。
-
-```sh
-xcrun simctl addmedia booted /absolute/path/to/photo.jpg
-```
-
-実機での起動を本人が希望する場合は、`ios/Runner.xcworkspace` を開き、本人のTeamと利用できるBundle Identifierでローカル署名を設定します。開発元のTeamを使えるとは限りません。個人用の署名変更はコミットしないでください。署名が通らない場合はアプリのコードを変えて回避せず、Simulatorで続けられることと実機側の制約を伝えてください。
+署名で止まった場合は、選択したTeam、Bundle Identifier、端末の接続状態とXcodeのエラーを確認します。カメラを試す目的なので、本人の了承なくSimulatorに切り替えて完了扱いにしないでください。Simulatorは、本人が別途希望する場合の画面確認にだけ使います。
 
 ### AIの設定
 
@@ -102,13 +114,13 @@ cp config/development.example.json config/development.local.json
 flutter run -d <対象のdevice-id> --dart-define-from-file=config/development.local.json
 ```
 
-キーやモデルの変更はビルド時に読み込まれるため、変更後はホットリロードではなく停止して起動し直します。所有者用の `scripts/run.sh` は1Passwordの個別設定を前提にしているため、テスターの初回セットアップには使わないでください。
+iPhone実機では、上の実機手順と同じく `--release` を付けて起動してください。キーやモデルの変更はビルド時に読み込まれるため、変更後はホットリロードではなく停止して起動し直します。所有者用の `scripts/run.sh` は1Passwordの個別設定を前提にしているため、テスターの初回セットアップには使わないでください。
 
 AIを使うと写真の縮小版と編集依頼がOpenAIに送られます。最初は本人が選んだ数枚のテスト写真を使い、ライブラリ全体をまとめて処理しないでください。
 
 ### 起動したあと
 
-ビルド成功だけで完了にせず、端末やSimulatorでアプリが表示されるところまで確認してください。写真へのアクセス許可は本人に操作してもらい、取り込み、写真の表示、編集、保存、開き直しの流れを確認します。AIの動作確認には、本人が選んだ写真と依頼を使ってください。
+ビルド成功だけで完了にせず、実機でアプリが表示されるところまで確認してください。写真とカメラへのアクセス許可は本人に操作してもらい、取り込み、写真の表示、編集、保存、開き直しの流れを確認します。iPhoneではアプリ内カメラで撮影し、その写真を開けることも確認します。AIの動作確認には、本人が選んだ写真と依頼を使ってください。
 
 Askのレイアウトを見るときは、ソフトウェアキーボードを実際に表示してください。Macのハードウェアキーボードだけでは、入力欄やSendが画面に収まるかを確認できません。
 
