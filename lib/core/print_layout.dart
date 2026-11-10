@@ -53,7 +53,7 @@ class PrintLayout {
   double get inset => overlaysPhoto ? 0 : (style == PrintStyle.instant ? 6.5 : (hasDetails ? 4 : 0)) * scale;
   double get titleSize => 4.8 * scale;
   double get metadataSize => 3.1 * scale;
-  double get titleAdvance => 8.5 * scale;
+  double get titleAdvance => 8 * scale;
   double get rowHeight => 6 * scale;
   double get badgeSize => (badgeCount > 4 ? 4.4 : 5.6) * scale;
   double get badgeGap => 1.8 * scale;
@@ -136,6 +136,8 @@ class PrintPainter extends CustomPainter {
       titlePainter.dispose();
       y += layout.titleAdvance;
     }
+    // A small optical inset: about one logical pixel on a phone preview.
+    canvas.translate(-0.3 * layout.scale, 0);
     // Metadata and texture badges share one calm baseline beneath the title.
     // On extremely narrow prints, scale the badge row within its own space.
     final badgeScale = layout.hasColors ? math.min(1.0, width * (layout.caption.isEmpty ? 1 : .46) / layout.badgesWidth) : 1.0;

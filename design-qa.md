@@ -50,3 +50,7 @@ Final test and simulator results are recorded after the last build below.
 - Physical printer output remains unverified. No print job was submitted.
 
 final result: passed
+
+## Spacing follow-up
+
+The title-to-metadata advance was reduced from 8.5 to 8 scaled millimetres (about 2 logical pixels in a phone preview). The complete second row moves left by 0.3 scaled millimetres (about 1 logical pixel). Both Instant and Full photo use the adjustment. The eight print tests passed; the complete-paper comparison was inspected at `/Users/yohaku/Documents/Codex/2026-11-08/devfest-2026/artifacts/print-spacing-2026-11-10/comparison.png`.
