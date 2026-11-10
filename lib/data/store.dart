@@ -517,9 +517,14 @@ class Store extends ChangeNotifier {
     await refresh();
   }
 
-  Future<Access> requestAccess() async {
-    access = await PhotoSource.access(request: true);
-    notifyListeners();
+  Future<Access> requestAccess() => updatePhotoAccess(request: true);
+
+  Future<Access> updatePhotoAccess({bool request = false}) async {
+    final current = await PhotoSource.access(request: request);
+    if (current != access) {
+      access = current;
+      notifyListeners();
+    }
     return access;
   }
 

@@ -30,12 +30,14 @@ class ImportSheet extends StatefulWidget {
   State<ImportSheet> createState() => _ImportSheetState();
 }
 
-class _ImportSheetState extends State<ImportSheet> {
+class _ImportSheetState extends State<ImportSheet> with WidgetsBindingObserver {
   static const _pageSize = 120;
   final List<AssetEntity> _assets = [];
   final Set<String> _picked = {};
   int _page = 0;
   bool _loading = false, _end = false, _importing = false;
+  Access _access = Access.unknown;
+  bool _checkingAccess = true, _returningFromSettings = false, _loadFailed = false;
   Set<String>? _shots;
   final _scroll = ScrollController();
   late final _sweep = SweepSelection(
@@ -50,6 +52,7 @@ class _ImportSheetState extends State<ImportSheet> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sweep.dispose();
     _scroll.dispose();
     super.dispose();
@@ -58,25 +61,102 @@ class _ImportSheetState extends State<ImportSheet> {
   @override
   void initState() {
     super.initState();
-    _more();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_checkAccess(requestIfNeeded: true));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !_returningFromSettings) return;
+    _returningFromSettings = false;
+    unawaited(_checkAccess());
+  }
+
+  bool get _canRead => _access == Access.full || _access == Access.limited;
+
+  Future<void> _checkAccess({bool requestIfNeeded = false}) async {
+    setState(() {
+      _checkingAccess = true;
+      _loadFailed = false;
+    });
+    try {
+      final store = Store.instance;
+      var access = await store.updatePhotoAccess();
+      if (!mounted) return;
+      if (requestIfNeeded && (access == Access.unknown || access == Access.denied)) {
+        access = await store.requestAccess();
+      }
+      if (!mounted) return;
+      setState(() {
+        _access = access;
+        _checkingAccess = false;
+      });
+      if (_canRead) await _more();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _checkingAccess = false;
+        _loadFailed = true;
+      });
+    }
+  }
+
+  Future<void> _openPhotoSettings() async {
+    _returningFromSettings = true;
+    try {
+      await PhotoManager.openSetting();
+    } catch (_) {
+      _returningFromSettings = false;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Open After Hue in Settings to allow photo access.')),
+      );
+    }
   }
 
   Future<void> _more() async {
-    if (_loading || _end) return;
+    if (!_canRead || _loading || _end || _loadFailed) return;
     _loading = true;
-    final next = await PhotoSource.library(page: _page, size: _pageSize);
-    if (!mounted) return;
-    final skip = Store.instance.skipScreenshots;
-    final shots = _shots ??= skip ? await PhotoSource.screenshotIds() : const <String>{};
-    if (!mounted) return;
-    setState(() {
-      _assets.addAll(skip ? next.where((a) => !shots.contains(a.id) && !PhotoSource.isScreenshot(a)) : next);
-      _page++;
-      _end = next.length < _pageSize;
-      _loading = false;
-    });
-    // A page of nothing but screenshots: keep going.
-    if (skip && !_end && _assets.length < 40) unawaited(_more());
+    try {
+      final next = await PhotoSource.library(page: _page, size: _pageSize);
+      if (!mounted) return;
+      final skip = Store.instance.skipScreenshots;
+      final shots = _shots ??= skip ? await PhotoSource.screenshotIds() : const <String>{};
+      if (!mounted) return;
+      setState(() {
+        _assets.addAll(skip ? next.where((a) => !shots.contains(a.id) && !PhotoSource.isScreenshot(a)) : next);
+        _page++;
+        _end = next.length < _pageSize;
+        _loading = false;
+      });
+      // A page of nothing but screenshots: keep going.
+      if (skip && !_end && _assets.length < 40) unawaited(_more());
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadFailed = true;
+      });
+    }
+  }
+
+  Widget _emptyLibrary() {
+    if (_checkingAccess || _loading) return const SizedBox.shrink();
+    final message = _loadFailed
+        ? 'Could not load your photos.'
+        : _canRead
+            ? 'No photos in your library.'
+            : 'Allow photo access to choose photos to import.';
+    return Center(child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Text(message, textAlign: TextAlign.center, style: Txt.body.copyWith(color: Neutral.secondary)),
+        if (_loadFailed)
+          TextAction('Try again', onTap: () => _checkAccess(requestIfNeeded: true))
+        else if (!_canRead)
+          TextAction('Open Settings', onTap: _openPhotoSettings),
+      ]),
+    ));
   }
 
   Future<void> _import({required bool autoDevelop}) async {
@@ -125,7 +205,7 @@ class _ImportSheetState extends State<ImportSheet> {
         ),
         Expanded(
           child: _assets.isEmpty
-              ? Center(child: Text(_loading ? '' : 'No photos in your library.', style: Txt.body.copyWith(color: Neutral.secondary)))
+              ? _emptyLibrary()
               : NotificationListener<ScrollNotification>(
                   onNotification: (n) {
                     if (n.metrics.extentAfter < 600) _more();
@@ -180,7 +260,10 @@ class _ImportSheetState extends State<ImportSheet> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Text(_importing ? 'Importing $n photos…' : n == 0 ? 'Select photos to develop' : '$n selected', style: Txt.small),
+              if (_loadFailed && _assets.isNotEmpty)
+                TextAction('Retry loading more photos', onTap: () => _checkAccess())
+              else
+                Text(_importing ? 'Importing $n photos…' : n == 0 ? 'Select photos to develop' : '$n selected', style: Txt.small),
               const SizedBox(height: 6),
               Wrap(alignment: WrapAlignment.spaceBetween, children: [
                 TextAction('Edit manually', color: Neutral.secondary,

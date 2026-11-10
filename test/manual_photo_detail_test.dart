@@ -8,6 +8,7 @@ import 'package:afterhue/ui/photos.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 void main() {
   testWidgets('the viewer shows a manual import before editing', (
@@ -85,6 +86,7 @@ void main() {
       messenger.setMockMethodCallHandler(photos, (call) async {
         final args = call.arguments as Map;
         return switch (call.method) {
+          'getPermissionState' => PermissionState.authorized.index,
           'getAssetPathList' => {
             'data': args['onlyAll'] == true
                 ? [

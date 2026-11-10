@@ -6,8 +6,53 @@ import 'package:afterhue/ui/import_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 void main() {
+  testWidgets('import requests access and reloads after selected photos are allowed in Settings', (tester) async {
+    const photos = MethodChannel('com.fluttercandies/photo_manager');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    var access = PermissionState.denied;
+    final requests = <MethodCall>[];
+    var libraryReads = 0;
+    var settingsOpened = false;
+    messenger.setMockMethodCallHandler(photos, (call) async {
+      switch (call.method) {
+        case 'getPermissionState':
+          return access.index;
+        case 'requestPermissionExtend':
+          requests.add(call);
+          return access.index;
+        case 'openSetting':
+          settingsOpened = true;
+          return 1;
+        case 'getAssetPathList':
+          libraryReads++;
+          return {'data': []};
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(photos, null));
+    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: ImportSheet())));
+    await tester.pumpAndSettle();
+    expect(requests, hasLength(1));
+    expect(requests.single.arguments['androidPermission']['type'], RequestType.image.value);
+    expect(libraryReads, 0);
+    expect(find.text('Allow photo access to choose photos to import.'), findsOneWidget);
+    await tester.tap(find.text('Open Settings'));
+    await tester.pumpAndSettle();
+    expect(settingsOpened, isTrue);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    access = PermissionState.limited;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(libraryReads, greaterThan(0));
+    expect(requests, hasLength(1));
+    expect(find.text('Open Settings'), findsNothing);
+    expect(find.text('No photos in your library.'), findsOneWidget);
+  });
+
   testWidgets('import sweep skips Added, reverses and continues into the next page', (tester) async {
     tester.view.physicalSize = const Size(402, 874);
     tester.view.devicePixelRatio = 1;
@@ -34,6 +79,7 @@ void main() {
         return {'data': page == 0 ? assets.take(120).toList() : assets.skip(120).toList()};
       }
       return switch (call.method) {
+        'getPermissionState' => PermissionState.authorized.index,
         'getAssetPathList' => {'data': args['onlyAll'] == true ? [{'id': 'all', 'name': 'All', 'isAll': true, 'assetCount': 124}] : []},
         'getThumb' => bytes,
         _ => null,
