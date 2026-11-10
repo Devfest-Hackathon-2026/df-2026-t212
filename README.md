@@ -4,7 +4,7 @@ After Hueは、写真の中で残したい色を選び、それ以外をモノ�
 
 今回はハッカソンに向けたユーザーテストをお願いしています。コードを書いたり、機能を開発したりしていただく必要はありません。アプリを使ってみて、分かりにくかったところ、期待と違った動き、気に入ったところを教えていただけると助かります。
 
-現在のテスト対象は `first-build` ブランチです。GitHubで読むときも、ソースを取得するときも、このブランチを選んでください。
+審査用のソースは、運営リポジトリの提出版を使います。既存テスター向けの開発リポジトリを使う場合は、配布時に案内されたブランチを選んでください。
 
 ## どうやって試すか
 
@@ -12,27 +12,27 @@ Androidでは、用意したAI入りのAPKをインストールして試せま�
 
 iPhoneでは、ご本人のMacから手元のiPhoneにインストールして試します。MacにXcodeを入れ、ご本人の無料のAppleアカウントで署名する方法です。有料のApple Developer Programへの登録は不要ですが、無料署名は7日で期限が切れるので、その後も使う場合はMacから再ビルド・再インストールします。この仕組みは[Appleの無料アカウントの案内](https://developer.apple.com/help/account/basics/about-your-developer-account)に説明されています。
 
-セットアップはこのREADMEをLLMに渡して任せられます。iPhoneでも、自分のAI APIキーや課金アカウントは不要です。ソースからビルドする場合は、開発者から受け取ったGoogle Cloudへの公開接続設定を使います。
+セットアップはこのREADMEをLLMに渡して任せられます。iPhoneでも、自分のAI APIキーや課金アカウントは不要です。ソースからビルドする場合は、同梱の `config/cloud.public.json` をそのまま使います。
 
 今回はカメラでの撮影も試していただきたいので、iPhone実機を使います。TestFlightでの配布はしていません。Macはインストールに使うPCで、macOSネイティブ版はテスト対象ではありません。
 
 ## セットアップをLLMに任せる
 
-このリポジトリを読み、手元のターミナルを操作できるLLMに、次の文章を渡してください。リポジトリはPrivateなので、先にGitHubの招待を受け入れ、手元のGitHubアカウントでアクセスできる状態にしておきます。
+このリポジトリを読み、手元のターミナルを操作できるLLMに、次の文章を渡してください。運営の提出リポジトリは公開です。既存テスター向けのPrivateリポジトリから取得する場合だけ、先にGitHubの招待を受け入れてください。
 
 ```text
 After Hueのユーザーテストをしたいので、セットアップと起動をお願いします。
-リポジトリ: https://github.com/pdHaku0/afterhue
-ブランチ: first-build
+リポジトリ: https://github.com/Devfest-Hackathon-2026/df-2026-t212
+ブランチ: main
 
 READMEの「セットアップを担当するLLMへ」を読み、私のPCと端末を確認してから、
 アプリを使えるところまで進めてください。iPhoneではカメラも試すので、
 Simulatorではなく手元の実機に入れてください。開発やコードの変更は依頼していません。
-AIの秘密キーは用意しません。配布された接続設定を使い、Appleの認証など、
+AIの秘密キーは用意しません。同梱のconfig/cloud.public.jsonを使い、Appleの認証など、
 本人の操作が必要なところだけ案内してください。
 ```
 
-AIの接続先が未配布の場合は、開発者から設定ファイルを受け取ってください。ご自身でGoogle CloudやAIサービスの課金設定をする必要はありません。
+AIの接続設定はリポジトリに同梱しています。ご自身でGoogle CloudやAIサービスの課金設定をする必要はありません。
 
 ## セットアップを担当するLLMへ
 
@@ -41,15 +41,13 @@ AIの接続先が未配布の場合は、開発者から設定ファイルを受
 既存の作業フォルダがある場合は、最初にGitの状態を確認します。本人の変更を消したり、作業中のブランチを強制的に切り替えたりしないでください。新しく取得する場合のコマンドは次のとおりです。
 
 ```sh
-git clone --branch first-build https://github.com/pdHaku0/afterhue.git
-cd afterhue
+git clone https://github.com/Devfest-Hackathon-2026/df-2026-t212.git
+cd df-2026-t212
 ```
 
 ### Android端末で試す場合
 
-まず完成済みのAPKを使う経路を選んでください。[Android test build](https://github.com/pdHaku0/afterhue/actions/workflows/android.yml)の成功した手動実行に、`after-hue-android-ai-debug` というartifactがあります。ダウンロードしてZIPを展開し、中のAPKを端末にインストールします。この方法ならFlutterやAndroid SDKのセットアップは不要です。
-
-`after-hue-android-local-debug` はクラウドAI未設定版です。手動編集と簡易Autoには使えますが、自然言語のAskは使えません。ユーザーテスト用には、原則として名前に `ai` が入った方を案内してください。artifactは3日で期限切れになります。その場合は所有者に再ビルドを依頼し、テスターに別のAI APIキーを用意させないでください。
+APKが配布されている場合は、[提出リポジトリのReleases](https://github.com/Devfest-Hackathon-2026/df-2026-t212/releases)に添付されたAPKを使います。端末へコピーして開くとインストールできます。この方法ならFlutterやAndroid SDKのセットアップは不要です。APKが未掲載の場合も、以下の手順でソースから実行できます。
 
 ソースから起動する必要がある場合に限り、Flutter 3.47.9、Dart 3.13.7、JDK 17とAndroid SDKを使います。プロジェクトの設定はSDK Platform 36、NDK 28.2.13676358、最低OSはAndroid 7.0（API 24）です。[Flutter公式の手順](https://docs.flutter.dev/platform-integration/android/setup)に沿って環境を確認し、SDKライセンスや端末の接続許可は本人に確認・操作してもらってください。
 
@@ -57,10 +55,10 @@ cd afterhue
 flutter pub get
 flutter doctor -v
 flutter devices
-flutter run -d <Androidのdevice-id>
+flutter run --release -d <Androidのdevice-id> --dart-define-from-file=config/cloud.public.json
 ```
 
-このコマンドはクラウドAI未設定で起動します。Askも試す場合は、下の「AIの接続設定」を続けてください。AIモデルの認証情報はサーバー側にあり、端末へコピーする必要はありません。
+このコマンドは同梱の公開接続設定で起動します。AIモデルの認証情報はサーバー側にあり、端末へコピーする必要はありません。
 
 ### MacからiPhone実機にインストールする場合
 
@@ -84,11 +82,11 @@ open ios/Runner.xcworkspace
 
 詳細は[Appleの実機実行ガイド](https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices)と[デベロッパモードの有効化手順](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)を参照してください。
 
-続けて、下の「AIの接続設定」で配布された接続情報を設定します。その後、次のコマンドで実機にインストールします。`flutter devices` に表示された実機のIDを指定し、Simulatorや `macos` を選ばないでください。普段のテストではMacのデバッガーに接続せず使えるよう、Releaseモードで起動します。初回はSwift Package Managerの依存解決に時間がかかります。
+同梱の公開接続設定を使い、次のコマンドで実機にインストールします。`flutter devices` に表示された実機のIDを指定し、Simulatorや `macos` を選ばないでください。普段のテストではMacのデバッガーに接続せず使えるよう、Releaseモードで起動します。初回はSwift Package Managerの依存解決に時間がかかります。
 
 ```sh
 flutter devices
-flutter run --release -d <iPhone実機のdevice-id> --dart-define-from-file=config/development.local.json
+flutter run --release -d <iPhone実機のdevice-id> --dart-define-from-file=config/cloud.public.json
 ```
 
 クラウドAIを設定せず手動編集と撮影だけを試す場合は、`--dart-define-from-file=...` を省いて起動できます。iPhoneに開発元の信頼を求める表示が出たら、設定 → 一般 → VPNとデバイス管理で本人の開発者アカウントを確認・信頼してもらいます。
@@ -101,10 +99,10 @@ flutter run --release -d <iPhone実機のdevice-id> --dart-define-from-file=conf
 
 クラウドAIは、After HueのGoogle Cloud Runサービスを経由してVertex AIのGeminiを使います。テスターがOpenAIやGeminiの秘密キーを用意する必要はありません。認証にはFirebaseの匿名アカウントを使い、氏名やメールアドレスでの登録も不要です。
 
-ソースからビルドする場合は、開発者から受け取った3項目を `config/development.local.json` に設定します。設定ファイルがなければ、雛形をコピーしてください。すでにファイルがある場合は上書きせず、古い設定が残っていないかを確認します。
+通常は同梱の `config/cloud.public.json` を変更せずに使います。接続情報を別途受け取る手順は不要です。独自の接続先を使う場合だけ、次のようにローカル設定へコピーして変更してください。既存ファイルは上書きしません。
 
 ```sh
-cp config/development.example.json config/development.local.json
+cp -n config/cloud.public.json config/development.local.json
 ```
 
 | 項目 | 設定するもの |
@@ -113,13 +111,15 @@ cp config/development.example.json config/development.local.json
 | `FIREBASE_WEB_API_KEY` | 配布されたFirebase認証用の公開APIキー |
 | `FIREBASE_PROJECT_ID` | 配布されたFirebaseプロジェクトID |
 
-雛形の値は空欄です。接続先や最新ビルドの識別情報は、配布時に案内されたものを使ってください。ここには未確認のURLやビルドSHAを記載していません。3項目が揃わないビルドではクラウドAIに接続せず、手動編集と端末内の簡易Autoを使います。自然言語のAskにはクラウドAIの設定が必要です。
+同梱の公開設定には、この3項目だけが入っています。独自設定用の `config/development.example.json` は空欄の雛形です。3項目が揃わないビルドではクラウドAIに接続せず、手動編集と端末内の簡易Autoを使います。自然言語のAskにはクラウドAIの設定が必要です。
 
 Firebase認証用APIキーは接続するプロジェクトを識別する公開設定で、AIモデルを呼ぶ秘密キーではありません。Firebase関連APIだけに制限された配布用の値を使います。サービスアカウントのJSON、Vertex AIのアクセストークン、個人のAI APIキーをこのファイルへ入れないでください。この区別は[Firebaseの公式説明](https://firebase.google.com/docs/projects/api-keys)にも示されています。
 
 ```sh
-flutter run --release -d <実機のdevice-id> --dart-define-from-file=config/development.local.json
+flutter run --release -d <実機のdevice-id> --dart-define-from-file=config/cloud.public.json
 ```
+
+独自の接続設定を作った場合だけ、上の `config/cloud.public.json` を `config/development.local.json` に置き換えます。
 
 接続設定はビルド時に読み込むため、変更後はホットリロードではなく停止して起動し直します。`AFTER_HUE_DEMO_TOOLS` は開発者向けの任意項目で、通常のユーザーテストには不要です。`scripts/run.sh` でも起動できます。このスクリプトは接続設定の3項目と開発用フラグだけをビルドに渡します。
 
@@ -130,6 +130,8 @@ flutter run --release -d <実機のdevice-id> --dart-define-from-file=config/dev
 今回のアルファ版ではAIを無料で試せます。利用者ごととサービス全体に上限があり、上限に達するとAIが一時的に利用できない場合があります。時間を置いても解消しなければ、配布時の連絡先へお知らせください。利用者へ自動で料金を請求することはありません。[プライバシーの説明](docs/privacy.md)と[テスト版の利用について](docs/terms.md)は、アプリの設定画面からも読めます。
 
 ### 起動したあと
+
+初回案内に出る写真は説明用です。編集用ギャラリーには追加されないので、手元の写真を数枚許可し、画面下の `+` から取り込んで試してください。自動取り込みは、起動時などに写真ライブラリを読み込む際に新しい写真を検出します。アプリが終了している間も常時監視・現像する機能ではありません。
 
 ビルド成功だけで完了にせず、実機でアプリが表示されるところまで確認してください。アプリの表示は端末の言語にかかわらず英語です。Askへの依頼文は日本語でも入力できます。日本語の入力・変換を試す場合は、日本語キーボードを使ってください。写真とカメラへのアクセス許可は本人に操作してもらい、取り込み、写真の表示、編集、保存、開き直しの流れを確認します。iPhoneではアプリ内カメラで撮影し、その写真を開けることも確認します。AIの動作確認には、本人が選んだ写真と依頼を使ってください。
 
