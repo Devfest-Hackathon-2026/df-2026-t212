@@ -61,6 +61,18 @@ class Txt {
       TextStyle(fontFamily: monoFamily, fontSize: 11, letterSpacing: 0.2, color: Neutral.secondary, height: 1.4);
 }
 
+/// Quiet when idle, with a modest emphasis for the active input.
+class InputFrames {
+  static const idle = OutlineInputBorder(
+    borderRadius: BorderRadius.all(Radius.circular(14)),
+    borderSide: BorderSide(color: Color(0x1E000000), width: .72),
+  );
+  static const focused = OutlineInputBorder(
+    borderRadius: BorderRadius.all(Radius.circular(14)),
+    borderSide: BorderSide(color: Color(0x5A000000), width: .9),
+  );
+}
+
 ThemeData buildTheme() {
   final base = ThemeData(
     useMaterial3: true,
@@ -84,6 +96,10 @@ ThemeData buildTheme() {
     ),
   );
   return base.copyWith(
+    inputDecorationTheme: const InputDecorationThemeData(
+      border: InputFrames.idle, enabledBorder: InputFrames.idle,
+      focusedBorder: InputFrames.focused,
+    ),
     textSelectionTheme: const TextSelectionThemeData(cursorColor: Neutral.primary),
     switchTheme: SwitchThemeData(
       trackColor: WidgetStateProperty.resolveWith(
